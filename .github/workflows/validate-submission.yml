@@ -1,0 +1,87 @@
+name: Validate submission
+
+# WP-51 -- Tier-2 submission gate. Runs on every PR that touches a leaderboard
+# result JSON: validates each CHANGED result against result.schema.json via
+# `rfbench submit --check`, then re-runs the no-raw-data hygiene guard. A malformed
+# PR (bad schema, undeclared/inferred regime, placeholder split checksum, or a raw
+# dataset/weights file slipped in) fails with a clear, per-file message.
+"on":
+  pull_request:
+    paths:
+      - "leaderboard/results/**"
+
+concurrency:
+  group: validate-submission-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: schema + regime + no-raw-data
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with PR history for a diff)
+        uses: actions/checkout@v4
+        with:
+          # Need the merge base to diff the PR against its target branch.
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package (dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Collect changed result JSONs
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Added/Copied/Modified/Renamed JSON files under leaderboard/results/.
+          # Deletions are excluded (nothing left to validate).
+          git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" \
+            -- 'leaderboard/results/**/*.json' > changed.txt || true
+          echo "----- changed result JSON(s) -----"
+          cat changed.txt
+          if [ ! -s changed.txt ]; then
+            echo "No result JSON changed under leaderboard/results/; nothing to validate."
+          fi
+
+      - name: rfbench submit --check on each changed result
+        run: |
+          set -euo pipefail
+          status=0
+          if [ ! -s changed.txt ]; then
+            echo "::notice::No changed result JSON to check."
+            exit 0
+          fi
+          while IFS= read -r result; do
+            [ -z "$result" ] && continue
+            echo "::group::rfbench submit --check $result"
+            if rfbench submit --check "$result"; then
+              echo "OK: $result is PR-ready (schema-valid + manifest complete)."
+            else
+              echo "::error file=$result::Submission is NOT PR-ready. Fix schema/regime/split-checksum errors above (see docs/SUBMISSION.md)."
+              status=1
+            fi
+            echo "::endgroup::"
+          done < changed.txt
+          if [ "$status" -ne 0 ]; then
+            echo "::error::One or more result JSONs failed validation. See the grouped logs above."
+          fi
+          exit "$status"
+
+      - name: No raw data in git
+        run: |
+          if ! python tools/check_no_raw_data.py; then
+            echo "::error::A raw dataset or weights file was committed. Only split indices + checksums are versioned (leaderboard/splits/); see CLAUDE.md and docs/SUBMISSION.md."
+            exit 1
+          fi

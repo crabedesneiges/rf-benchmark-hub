@@ -1,0 +1,68 @@
+name: Build leaderboard
+
+# WP-52 -- Publication. On every push to main (and on manual dispatch) the static
+# leaderboard site is regenerated from leaderboard/results/**.json and deployed to
+# GitHub Pages. Source of truth stays the versioned result JSONs; the site is a
+# derived artifact, never committed back to the repo.
+"on":
+  push:
+    branches:
+      - main
+    paths:
+      - "leaderboard/results/**"
+      - "leaderboard/site/**"
+      - "schemas/**"
+      - ".github/workflows/build-leaderboard.yml"
+  workflow_dispatch:
+
+concurrency:
+  # One in-flight Pages deploy at a time; do NOT cancel a running deploy.
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: render static site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package (dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Build the leaderboard site
+        run: rfbench leaderboard build --results leaderboard/results --out _site
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

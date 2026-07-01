@@ -1,0 +1,105 @@
+name: Task proposal
+description: Propose a new benchmark task (dataset + metric + canonical split + licence).
+title: "[task] <task name>"
+labels: ["task-proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Propose a new task for RF-Benchmark-Hub. The value of the hub is a **frozen,
+        reproducible protocol per task** (docs/IMPLEMENTATION_PLAN.md §2), so a proposal
+        must pin the dataset(s), the primary metric, the canonical split policy, and the
+        dataset licence. Reminder: **no dataset is ever redistributed** — only download +
+        prepare scripts and split indices/checksums are versioned (D3).
+
+  - type: input
+    id: task_name
+    attributes:
+      label: Task name
+      description: Short identifier (lowercase_with_underscores), e.g. `spectrum_sensing`.
+      placeholder: spectrum_sensing
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What downstream RF capability does this task measure, and why is it comparable?
+    validations:
+      required: true
+
+  - type: textarea
+    id: datasets
+    attributes:
+      label: Datasets
+      description: |
+        Source dataset(s), one per line, with an access/download URL. These are downloaded on
+        demand (D3), never committed.
+      placeholder: |
+        DeepSense (OTA 802.11 a/g + LTE-M) — https://...
+      render: markdown
+    validations:
+      required: true
+
+  - type: input
+    id: metric
+    attributes:
+      label: Primary metric
+      description: The metric that ranks the board, defined formally (e.g. `pd@pfa=0.1`, `mAP`).
+      placeholder: pd@pfa=0.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: secondary_metrics
+    attributes:
+      label: Secondary metrics
+      description: Additional reported metrics, one per line (e.g. inference latency (ms)).
+      placeholder: |
+        inference_latency_ms
+    validations:
+      required: false
+
+  - type: textarea
+    id: split
+    attributes:
+      label: Canonical split
+      description: |
+        Split policy: adopt the dataset's literature split verbatim (record provenance) if one
+        exists, else a deterministic 80/10/10 stratified by the label structure, seed 42
+        (docs/EVALUATION_PROTOCOL.md "Common rules"). Give the canonical split id form.
+      placeholder: |
+        Official DeepSense split if provided; else 80/10/10 seed 42 -> sensing-deepsense-<split>-v1
+      render: markdown
+    validations:
+      required: true
+
+  - type: input
+    id: licence
+    attributes:
+      label: Dataset licence
+      description: Licence of the source dataset (stays with the source; never redistributed here).
+      placeholder: CC BY-NC 4.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: baselines
+    attributes:
+      label: Candidate baselines
+      description: Known reproducible baselines to seed the board (with published numbers if any).
+      placeholder: |
+        DeepSense (wineslab) — ~98%/97%
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Pre-flight
+      options:
+        - label: The dataset licence permits benchmark use, and no raw data will be committed (only scripts + indices).
+          required: true
+        - label: The primary metric and split policy are defined formally enough to be reproducible.
+          required: true

@@ -1,0 +1,159 @@
+name: Leaderboard submission
+description: Propose a result for the leaderboard (self-reported, or Tier-2 with a repro manifest).
+title: "[submission] <task>/<model> (<regime>)"
+labels: ["submission"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for submitting a result. The authoritative artifact is a
+        `result.json` under `leaderboard/results/<task>/` (validated against
+        `schemas/result.schema.json`) opened as a PR — this issue is a summary and
+        a place to discuss verification. See `docs/SUBMISSION.md`.
+
+        - Tier 1 (self-serve): your number, marked `self_reported`.
+        - Tier 2 (verified): add a reproduction manifest (`schemas/submission.schema.json`)
+          so a maintainer can re-run and flip the row to `verified`.
+
+  - type: dropdown
+    id: task
+    attributes:
+      label: Task
+      description: Which benchmark task (docs/EVALUATION_PROTOCOL.md).
+      options:
+        - amc
+        - sei
+        - wideband_detection
+        - spectrum_sensing
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model name
+      description: Short model identifier, e.g. `mcldnn`, `xcit-nano`, `iqfm`.
+      placeholder: mcldnn
+    validations:
+      required: true
+
+  - type: input
+    id: dataset
+    attributes:
+      label: Dataset
+      description: Concrete dataset variant, e.g. `radioml_2018_01a`, `sig53`, `wisig`, `wbsig53`.
+      placeholder: radioml_2016_10a
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regime
+    attributes:
+      label: Regime
+      description: Always declared, never inferred (D5). The board never mixes regimes in one column.
+      options:
+        - from_scratch
+        - full_finetune
+        - linear_probe
+        - few_shot
+    validations:
+      required: true
+
+  - type: input
+    id: k_shot
+    attributes:
+      label: k (few-shot only)
+      description: Examples per class. REQUIRED iff regime is `few_shot`, otherwise leave blank.
+      placeholder: "5"
+    validations:
+      required: false
+
+  - type: input
+    id: canonical_split_id
+    attributes:
+      label: Canonical split id
+      description: The split your result references, e.g. `amc-radioml2018-strat-snr-8010-seed42-v1`.
+      placeholder: amc-radioml2016-strat-snr-8010-seed42-v1
+    validations:
+      required: true
+
+  - type: input
+    id: primary_metric
+    attributes:
+      label: Primary metric
+      description: The task's primary metric key, e.g. `accuracy_overall`, `rank1_accuracy`, `mAP`, `pd@pfa=0.1`.
+      placeholder: accuracy_overall
+    validations:
+      required: true
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Metrics
+      description: |
+        The full metric set (`metrics.values`), one per line as `key: value`. Include the
+        primary metric AND the full-protocol conditions (e.g. AMC over the complete SNR range;
+        SEI closed_set / cross_receiver / cross_day reported separately).
+      placeholder: |
+        accuracy_overall: 0.6123
+        macro_f1: 0.5987
+      render: yaml
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Tier
+      description: Self-reported, or Tier-2 with a reproduction manifest for maintainer verification.
+      options:
+        - self_reported
+        - verified (Tier-2, manifest attached)
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro_manifest
+    attributes:
+      label: Reproduction manifest (Tier-2)
+      description: |
+        For a `verified` submission, provide the `submission.schema.json` fields so a
+        maintainer can re-run: `code_commit`, exact `command`, `weights_url` and/or
+        `docker_image`, `hardware`, `expected_metrics`, `tolerance`. Without these the
+        result can only stay `self_reported` (docs/SUBMISSION.md).
+      placeholder: |
+        code_commit: git@1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+        command: rfbench eval amc --model mcldnn --regime full_finetune --dataset radioml_2016_10a --seed 42
+        weights_url: https://.../mcldnn.pt
+        docker_image: ghcr.io/.../mcldnn@sha256:...
+        hardware: 1x NVIDIA A100 80GB
+        expected_metrics:
+          accuracy_overall: 0.6123
+        tolerance:
+          absolute: 0.01
+      render: yaml
+    validations:
+      required: false
+
+  - type: input
+    id: result_pr
+    attributes:
+      label: Result PR / path
+      description: Link to the PR adding `leaderboard/results/<task>/<model>.json`, or the intended path.
+      placeholder: "leaderboard/results/amc/mcldnn.json"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Pre-flight
+      options:
+        - label: My `result.json` validates against `schemas/result.schema.json` (`rfbench submit --check`).
+          required: true
+        - label: The regime is declared explicitly and not mixed with another regime in a comparison column.
+          required: true
+        - label: No raw dataset or weights file is committed — only split indices + checksums (`tools/check_no_raw_data.py` passes).
+          required: true
+        - label: Full-protocol conditions are reported (e.g. complete SNR range; SEI conditions separated).
+          required: true

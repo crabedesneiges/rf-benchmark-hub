@@ -671,6 +671,8 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 _MODEL_MODULES: dict[str, str] = {
     # Baseline models register on explicit import of their (torch) module; map name -> module.
     "mcldnn": "rfbench.models.baselines.mcldnn",
+    "resnet_amc": "rfbench.models.baselines.resnet_amc",
+    "cldnn": "rfbench.models.baselines.cldnn",
 }
 
 

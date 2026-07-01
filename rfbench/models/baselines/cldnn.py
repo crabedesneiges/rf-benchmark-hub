@@ -1,0 +1,235 @@
+"""CLDNN AMC baseline (WP-30) -- the Convolutional-LSTM-DNN modulation classifier.
+
+CLDNN ("Convolutional, Long Short-Term Memory, Fully Connected Deep Neural Networks",
+Sainath et al., ICASSP 2015; adapted to RF AMC by West & O'Shea, "Deep Architectures for
+Modulation Recognition", IEEE DySPAN 2017) is a single-stream complement to the three-branch
+MCLDNN on RadioML 2016.10a. Unlike MCLDNN's spatiotemporal multi-channel fusion, CLDNN runs
+ONE view of the IQ window through a short stack of 1-D convolutions (extracting local
+time-frequency structure across both channels), feeds the resulting feature sequence to an
+LSTM (modelling temporal dependencies), and classifies the LSTM's last hidden state with two
+dense layers into the 11 RML2016.10a modulation classes. Like MCLDNN it is deliberately small
+(a few hundred k params), which is why it seeds the AMC board rather than a heavy backbone.
+
+Contract bridge (read ``rfbench/core/model.py``). ``forward`` / ``embed`` receive the
+COLLATED batch dict that :func:`rfbench.core.evaluate.evaluate` builds -- ``x["iq"]`` is a
+*list* of per-sample IQ payloads, one per sample. :class:`~rfbench.tasks.amc.dataset.AmcDataset`
+yields RML2016.10a windows of shape ``(2, 128)`` (I on row 0, Q on row 1; see
+``rfbench/data/prepare/amc.py`` ``[N, 2, 128]``), so the collated ``x["iq"]`` is
+``list[ (2, 128) ]`` and :func:`_iq_to_tensor` stacks it into a ``(B, 2, 128)`` float tensor.
+``forward`` returns ``(B, 11)`` class logits; iterating that tensor yields one per-class score
+vector per sample, exactly what the AMC metrics' ``argmax`` decoder consumes. ``embed`` returns
+the ``(B, 128)`` penultimate feature vector for the ``linear_probe`` / ``few_shot`` regimes.
+
+HARD CONSTRAINT: ``import rfbench`` / ``import rfbench.core`` stay dependency-free. This module
+is a torch baseline and is therefore NOT imported by ``rfbench`` or by
+``rfbench.models.baselines.__init__``; ``torch`` is imported at THIS module's top. The
+``@register_model("cldnn")`` entry in :data:`rfbench.core.registry.MODELS` is created only on
+an explicit ``import rfbench.models.baselines.cldnn``.
+"""
+
+from __future__ import annotations
+
+from typing import Literal, cast
+
+import torch
+from torch import Tensor, nn
+
+from rfbench.core.model import Model
+from rfbench.core.registry import register_model
+from rfbench.core.types import Batch
+
+#: RadioML 2016.10a modulation classes (the 11-way closed set CLDNN classifies).
+DEFAULT_NUM_CLASSES = 11
+#: Canonical RML2016.10a IQ window length (samples per channel).
+DEFAULT_WINDOW = 128
+#: Convolution feature width shared by the conv stack (West & O'Shea use ~50-64 filters).
+DEFAULT_CONV_FILTERS = 64
+#: Number of stacked 1-D conv layers over the IQ window.
+DEFAULT_CONV_LAYERS = 3
+#: 1-D conv kernel length along the time axis (odd -> length-preserving with "same" padding).
+DEFAULT_KERNEL = 7
+#: Hidden width of each LSTM layer; also the penultimate feature width returned by :meth:`embed`.
+DEFAULT_LSTM_HIDDEN = 128
+
+
+def _same_pad_1d(kernel: int) -> int:
+    """Return the symmetric ``padding`` that keeps a 1-D conv's length unchanged (odd kernel)."""
+    return (kernel - 1) // 2
+
+
+class CLDNNNet(nn.Module):
+    """The CLDNN convolutional-LSTM-DNN network (Sainath et al. 2015; West & O'Shea 2017).
+
+    One IQ window (the two channels as a ``(B, 2, L)`` signal) is run through a short stack of
+    length-preserving 1-D convolutions, transposed into a length-``L`` sequence of feature
+    vectors, and passed through a two-layer LSTM. The LSTM's final hidden state is projected by
+    a dense layer (the penultimate embedding) and a classifier to ``num_classes`` logits.
+
+    :meth:`forward` returns ``(B, num_classes)`` logits; :meth:`features` returns the
+    ``(B, embed_dim)`` penultimate representation the probing regimes fit a head on.
+    """
+
+    def __init__(
+        self,
+        num_classes: int = DEFAULT_NUM_CLASSES,
+        *,
+        window: int = DEFAULT_WINDOW,
+        conv_filters: int = DEFAULT_CONV_FILTERS,
+        conv_layers: int = DEFAULT_CONV_LAYERS,
+        kernel: int = DEFAULT_KERNEL,
+        lstm_hidden: int = DEFAULT_LSTM_HIDDEN,
+    ) -> None:
+        """Build the 1-D conv stack, the LSTM and the dense head."""
+        super().__init__()
+        if num_classes < 1:
+            raise ValueError(f"num_classes must be >= 1, got {num_classes}")
+        if window < 1:
+            raise ValueError(f"window must be >= 1, got {window}")
+        if conv_layers < 1:
+            raise ValueError(f"conv_layers must be >= 1, got {conv_layers}")
+        self.num_classes = num_classes
+        self.window = window
+        self.conv_filters = conv_filters
+        self.conv_layers = conv_layers
+        self.lstm_hidden = lstm_hidden
+
+        # Convolutional front end: a stack of length-preserving 1-D convs over the (2, L) IQ.
+        # The first layer maps the 2 IQ channels to ``conv_filters``; the rest keep that width.
+        pad = _same_pad_1d(kernel)
+        conv_blocks: list[nn.Module] = []
+        in_ch = 2
+        for _ in range(conv_layers):
+            conv_blocks.append(nn.Conv1d(in_ch, conv_filters, kernel_size=kernel, padding=pad))
+            conv_blocks.append(nn.ReLU(inplace=True))
+            in_ch = conv_filters
+        self.conv = nn.Sequential(*conv_blocks)
+
+        # The (B, conv_filters, L) conv map -> a length-L sequence of conv_filters features.
+        self.lstm = nn.LSTM(
+            input_size=conv_filters,
+            hidden_size=lstm_hidden,
+            num_layers=2,
+            batch_first=True,
+        )
+        # Penultimate dense layer (the embedding) + the classifier head.
+        self.fc_embed = nn.Sequential(
+            nn.Linear(lstm_hidden, lstm_hidden),
+            nn.SELU(inplace=True),
+        )
+        self.classifier = nn.Linear(lstm_hidden, num_classes)
+
+    def _conv_sequence(self, x: Tensor) -> Tensor:
+        """Run the conv stack, returning a ``(B, L, conv_filters)`` sequence for the LSTM.
+
+        ``x`` is a ``(B, 2, L)`` IQ batch (row 0 = I, row 1 = Q). The 1-D conv stack keeps the
+        time axis at length ``L`` and produces ``(B, conv_filters, L)``, which is transposed into
+        the ``(B, L, conv_filters)`` layout ``nn.LSTM(batch_first=True)`` expects.
+        """
+        feat = self.conv(x)  # (B, conv_filters, L)
+        return feat.transpose(1, 2)  # (B, L, conv_filters)
+
+    def features(self, x: Tensor) -> Tensor:
+        """Return the ``(B, lstm_hidden)`` penultimate embedding for a ``(B, 2, L)`` batch."""
+        seq = self._conv_sequence(x)  # (B, L, conv_filters)
+        _out, (h_n, _c_n) = self.lstm(seq)
+        last = h_n[-1]  # (B, lstm_hidden) -- final layer's last hidden state
+        embedded = self.fc_embed(last)  # (B, lstm_hidden)
+        return cast("Tensor", embedded)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Return ``(B, num_classes)`` logits for a ``(B, 2, L)`` IQ batch."""
+        logits = self.classifier(self.features(x))
+        return cast("Tensor", logits)
+
+
+def _iq_to_tensor(iq_batch: object, device: torch.device, window: int) -> Tensor:
+    """Stack the collated ``x["iq"]`` list into a ``(B, 2, window)`` float tensor on ``device``.
+
+    ``iq_batch`` is the per-sample IQ list :func:`rfbench.core.evaluate.evaluate` collates from
+    :class:`~rfbench.tasks.amc.dataset.AmcDataset`: each element is a ``(2, window)`` array-like
+    (numpy on the cluster, nested lists in a synthetic fixture). ``torch.as_tensor`` handles
+    both; the result is coerced to ``float32`` and validated to the expected ``(B, 2, window)``
+    shape so a mis-shaped batch fails loudly rather than silently mis-classifying.
+
+    Mirrors :func:`rfbench.models.baselines.mcldnn._iq_to_tensor` -- the AMC baselines share the
+    same collated-batch contract, and the helper is duplicated (rather than imported) so this
+    module stands alone and never depends on a sibling baseline's import side effects.
+    """
+    tensor = torch.as_tensor(iq_batch, dtype=torch.float32, device=device)
+    if tensor.ndim == 2:  # a single unbatched (2, window) sample -> add the batch axis
+        tensor = tensor.unsqueeze(0)
+    if tensor.ndim != 3 or tensor.shape[1] != 2:
+        raise ValueError(f"expected IQ batch of shape (B, 2, {window}); got {tuple(tensor.shape)}")
+    return tensor
+
+
+@register_model("cldnn")
+class CLDNN(Model):
+    """The CLDNN AMC baseline as a :class:`~rfbench.core.model.Model` (registered ``"cldnn"``).
+
+    Wraps :class:`CLDNNNet` to satisfy the frozen ``Model`` contract exactly:
+
+    * :meth:`forward` maps the COLLATED batch dict (``x["iq"]`` a list of ``(2, window)`` IQ
+      windows from :class:`~rfbench.tasks.amc.dataset.AmcDataset`) to ``(B, num_classes)``
+      logits -- iterated per-sample by the AMC metrics.
+    * :meth:`embed` returns the ``(B, lstm_hidden)`` penultimate feature vector for the
+      ``linear_probe`` / ``few_shot`` regimes.
+    * :attr:`n_params` reports the trainable parameter count; :attr:`family` is ``"baseline"``.
+
+    Instantiated with no arguments by ``MODELS.get("cldnn")()`` on the registry path. Eval runs
+    in :meth:`eval` mode with gradients disabled; a from-scratch training loop (M3) loads weights
+    into :attr:`net` before evaluation.
+    """
+
+    family: Literal["baseline"] = "baseline"
+
+    def __init__(
+        self,
+        *,
+        name: str = "cldnn",
+        num_classes: int = DEFAULT_NUM_CLASSES,
+        window: int = DEFAULT_WINDOW,
+        device: str | None = None,
+    ) -> None:
+        """Build the network and move it to ``device`` (auto: CUDA when available, else CPU)."""
+        if not name:
+            raise ValueError("CLDNN needs a non-empty name")
+        self.name = name
+        self.window = window
+        if device is not None:
+            resolved = device
+        else:
+            resolved = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(resolved)
+        self.net = CLDNNNet(num_classes, window=window).to(self.device)
+
+    def forward(self, x: Batch) -> Tensor:
+        """Return ``(B, num_classes)`` class logits for the collated AMC batch ``x``."""
+        iq = _iq_to_tensor(x["iq"], self.device, self.window)
+        self.net.eval()
+        with torch.no_grad():
+            return self.net.forward(iq)
+
+    def embed(self, x: Batch) -> Tensor:
+        """Return the ``(B, lstm_hidden)`` embedding for ``linear_probe`` / ``few_shot``."""
+        iq = _iq_to_tensor(x["iq"], self.device, self.window)
+        self.net.eval()
+        with torch.no_grad():
+            return self.net.features(iq)
+
+    @property
+    def n_params(self) -> int:
+        """Total trainable parameter count (written to ``result.json.model.n_params``)."""
+        return sum(p.numel() for p in self.net.parameters() if p.requires_grad)
+
+
+__all__ = [
+    "CLDNN",
+    "CLDNNNet",
+    "DEFAULT_NUM_CLASSES",
+    "DEFAULT_WINDOW",
+    "DEFAULT_CONV_FILTERS",
+    "DEFAULT_CONV_LAYERS",
+    "DEFAULT_KERNEL",
+    "DEFAULT_LSTM_HIDDEN",
+]

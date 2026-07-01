@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Sprint 1 wave 2 — Data layer, leaderboard, CLI (M1/M2/M5, scaffolds)
+
+Datasets are not redistributed and real `prepare` runs on the cluster (ARM venv, `rfbench[data]` /
+`rfbench[detection]`); heavy deps are imported lazily and unit tests exercise the split path on
+pure-stdlib synthetic fixtures.
+
+- **WP-11 — AMC data (template).** `rfbench/data/prepare/{_common,amc}.py` + `download/amc_*.py`:
+  RadioML → 80/10/10 stratified by (modulation × SNR); Sig53 → adopted official TorchSig split.
+  `_common.py` (cache dir via `$RFBENCH_CACHE`, split+manifest helpers) is reused by SEI/detection.
+- **WP-12 — SEI data.** `rfbench/data/prepare/sei.py` + `download/sei_*.py`: `closed_set`,
+  `cross_receiver`, `cross_day` generated as separate grouped conditions with disjoint rx/day groups.
+- **WP-13 — Detection data.** `rfbench/data/prepare/detection.py` + `download/detection_wbsig53.py`:
+  split per policy + a T-F box annotations sidecar; detection vs recognition tracks kept distinct.
+- **WP-50 — Leaderboard site.** `leaderboard/site/generate.py` (`build_site`): static HTML from
+  `results/**.json`, sorted by primary metric, one table per regime (never mixed), verified/self_reported
+  badges; seeded with sample result JSONs under `leaderboard/results/`.
+- **WP-42 — CLI wiring.** `rfbench data prepare` / `eval` / `submit --check` / `leaderboard build` wired
+  to the real implementations; heavy imports stay lazy so `import rfbench` and `rfbench --help` remain
+  dependency-free.
+
 ### Added — Sprint 1 wave 1 — Splits & eval harness (M1/M4, partial)
 
 - **Split policy (normative).** `docs/EVALUATION_PROTOCOL.md`: adopt an official/literature split when

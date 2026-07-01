@@ -11,6 +11,9 @@ assert the acceptance criteria for WP-50:
 * the maintainer ``verified`` badge is rendered (vs ``self-reported``),
 * a comparison column NEVER mixes two regimes (D5): every row inside a
   ``<table data-regime="R">`` really has regime ``R``,
+* a comparison table NEVER mixes two tracks: two rows sharing a regime but declaring
+  different ``split.track`` land in SEPARATE tables (SEI / detection tracks are reported
+  separately),
 * invalid result JSONs are skipped (not rendered) instead of crashing the build.
 
 The generator module lives at ``leaderboard/site/generate.py``; it is loaded by file
@@ -127,31 +130,35 @@ def _make_results_tree(root: Path) -> None:
 # Minimal HTML parsing helpers (stdlib html.parser -- no bs4/lxml).
 # --------------------------------------------------------------------------------------------------
 class _RegimeTableParser(HTMLParser):
-    """Collect, per ``<table data-regime=R>``, the (model, regime) shown in each body row.
+    """Collect, per ``<table data-track=T data-regime=R>``, the (model, regime) body rows.
 
     The Model cell is the 1st ``<td>`` and the Regime cell the 3rd (Model, Params, Regime,
-    ...), captured in document order. Lets a test assert (a) that every row inside a
-    regime-tagged table really carries that regime -- the comparison column never blends
-    regimes (D5) -- and (b) the within-table row order (sorting by primary metric).
+    ...), captured in document order. Tables are keyed by the ``(track, regime)`` pair so
+    two same-regime/different-track tables never collide. Lets a test assert (a) that every
+    row inside a table really carries that table's regime -- the comparison column never
+    blends regimes (D5) -- (b) that different tracks land in separate tables (SEI /
+    detection reported separately), and (c) the within-table row order (primary metric).
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self._current_regime: str | None = None
+        self._current_key: tuple[str, str] | None = None
         self._in_body = False
         self._td_index = -1
         self._capture = False
         self._buffer: list[str] = []
         self._row_model: str = ""
-        # data-regime -> list of per-row (model, regime) cell texts, in document order
-        self.rows_by_table: dict[str, list[tuple[str, str]]] = {}
+        # (track, regime) -> list of per-row (model, regime) cell texts, in document order
+        self.rows_by_table: dict[tuple[str, str], list[tuple[str, str]]] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = dict(attrs)
         if tag == "table":
-            self._current_regime = attr.get("data-regime")
-            if self._current_regime is not None:
-                self.rows_by_table.setdefault(self._current_regime, [])
+            regime = attr.get("data-regime")
+            if regime is not None:
+                track = attr.get("data-track") or "all"
+                self._current_key = (track, regime)
+                self.rows_by_table.setdefault(self._current_key, [])
         elif tag == "tbody":
             self._in_body = True
         elif tag == "tr" and self._in_body:
@@ -169,23 +176,38 @@ class _RegimeTableParser(HTMLParser):
             text = "".join(self._buffer).strip()
             if self._td_index == 1:
                 self._row_model = text
-            elif self._td_index == 3 and self._current_regime is not None:
-                self.rows_by_table[self._current_regime].append((self._row_model, text))
+            elif self._td_index == 3 and self._current_key is not None:
+                self.rows_by_table[self._current_key].append((self._row_model, text))
             self._capture = False
         elif tag == "tbody":
             self._in_body = False
         elif tag == "table":
-            self._current_regime = None
+            self._current_key = None
 
     def handle_data(self, data: str) -> None:
         if self._capture:
             self._buffer.append(data)
 
 
-def _regime_tables(html_text: str) -> dict[str, list[tuple[str, str]]]:
+def _tables_by_track_regime(html_text: str) -> dict[tuple[str, str], list[tuple[str, str]]]:
+    """Return rendered tables keyed by their ``(track, regime)`` pair."""
     parser = _RegimeTableParser()
     parser.feed(html_text)
     return parser.rows_by_table
+
+
+def _regime_tables(html_text: str) -> dict[str, list[tuple[str, str]]]:
+    """Return rendered tables keyed by regime, assuming a single track per regime.
+
+    A convenience wrapper for the single-track AMC fixtures where each regime appears in
+    exactly one track; asserts that assumption so multi-track pages use the richer
+    ``_tables_by_track_regime`` view instead.
+    """
+    by_regime: dict[str, list[tuple[str, str]]] = {}
+    for (_track, regime), cells in _tables_by_track_regime(html_text).items():
+        assert regime not in by_regime, f"regime {regime} spans multiple tracks; use pair view"
+        by_regime[regime] = cells
+    return by_regime
 
 
 # --------------------------------------------------------------------------------------------------
@@ -282,6 +304,56 @@ def test_comparison_column_never_mixes_regimes(tmp_path: Path) -> None:
     # The linear_probe table holds exactly its two rows; full_finetune holds its one.
     assert len(tables["linear_probe"]) == 2
     assert len(tables["full_finetune"]) == 1
+
+
+def test_same_regime_different_track_split_into_separate_tables(tmp_path: Path) -> None:
+    """Two rows sharing a regime but declaring different tracks never share a table.
+
+    SEI reports closed_set / cross_receiver / cross_day separately (docs/
+    EVALUATION_PROTOCOL.md); both fixture rows use regime ``from_scratch`` but different
+    ``split.track``, so they must land in two distinct tables -- their primary-metric
+    column must never compare across tracks.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    # Same regime (from_scratch, per _sei_row), same model name, DIFFERENT track.
+    _write(results / "sei" / "closed.json", _sei_row("row-cs", "wisig-cnn", "closed_set", 0.94))
+    _write(results / "sei" / "xrx.json", _sei_row("row-xr", "wisig-cnn", "cross_receiver", 0.60))
+
+    generate.build_site(results, out)
+    sei_html = (out / "sei.html").read_text(encoding="utf-8")
+
+    tables = _tables_by_track_regime(sei_html)
+    # Two tables, one per track, both scoped to the same regime.
+    assert set(tables) == {("closed_set", "from_scratch"), ("cross_receiver", "from_scratch")}
+    # Each track table holds exactly its own row -- tracks are never blended.
+    assert tables[("closed_set", "from_scratch")] == [("wisig-cnn", "from_scratch")]
+    assert tables[("cross_receiver", "from_scratch")] == [("wisig-cnn", "from_scratch")]
+    # The page separates the tracks with labelled sections.
+    assert 'data-track="closed_set"' in sei_html
+    assert 'data-track="cross_receiver"' in sei_html
+
+
+def test_missing_track_falls_back_to_default_all_bucket(tmp_path: Path) -> None:
+    """A row without split.track renders fine under the default 'all' track bucket.
+
+    AMC omits ``track``; the page must still render and its tables key under track ``all``
+    (kept label-free for single-track tasks), so existing fixtures keep working.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "a.json", _amc_row("row-a", "iqfm", "linear_probe", 0.71, "self_reported")
+    )
+
+    generate.build_site(results, out)
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+
+    tables = _tables_by_track_regime(amc_html)
+    assert set(tables) == {("all", "linear_probe")}
+    assert tables[("all", "linear_probe")] == [("iqfm", "linear_probe")]
+    # A single-track task stays label-free: no visible "Track:" heading.
+    assert "Track:" not in amc_html
 
 
 def test_few_shot_regime_labels_carry_k(tmp_path: Path) -> None:

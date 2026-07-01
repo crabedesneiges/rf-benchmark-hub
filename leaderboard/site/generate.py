@@ -12,9 +12,15 @@ Board contract (mirrors the frozen policy in docs/IMPLEMENTATION_PLAN.md / D5):
 * One HTML page per task, plus an ``index.html`` linking to them.
 * Each task table is sorted by that task's PRIMARY metric (``metrics.primary``),
   descending -- higher is better for every v1 primary (accuracy/rank1/auroc/mAP/pd).
-* ``regime`` is an explicit column and the table is *grouped by regime*: a metric
-  (comparison) column therefore only ever compares rows within a single regime, so the
-  board NEVER mixes two regimes in one comparison column (D5 / risk guard-rail).
+* Rows are separated by ``track`` FIRST, then grouped by ``regime`` within each track
+  (docs/EVALUATION_PROTOCOL.md: SEI closed_set/cross_receiver/cross_day and detection
+  detection/recognition tracks are *reported separately*). ``track`` lives at
+  ``split.track`` and is free-form/optional; rows without one land in a default ``all``
+  bucket so single-track tasks (AMC, sensing) still render.
+* ``regime`` is an explicit column and each table is *scoped to one (track, regime)*: a
+  metric (comparison) column therefore only ever compares rows within a single track AND
+  a single regime, so the board NEVER mixes two regimes -- nor two tracks -- in one
+  comparison column (D5 / risk guard-rail).
 * A badge distinguishes ``verification.status`` ``verified`` from ``self_reported``.
 
 Invalid rows are skipped with a warning (stderr) and never reach the board.
@@ -62,6 +68,20 @@ REGIME_ORDER: tuple[str, ...] = (
     "linear_probe",
     "few_shot",
 )
+
+#: Bucket for rows whose split declares no ``track`` (single closed-set track tasks).
+_DEFAULT_TRACK: str = "all"
+
+#: Human-readable track titles for the board (falls back to the raw track id).
+TRACK_TITLES: dict[str, str] = {
+    "all": "All",
+    "closed_set": "Closed-set",
+    "cross_receiver": "Cross-receiver",
+    "cross_day": "Cross-day",
+    "open_set": "Open-set",
+    "detection": "Detection",
+    "recognition": "Recognition",
+}
 
 #: Verification badge text/CSS-class per status.
 _BADGE: dict[str, tuple[str, str]] = {
@@ -199,6 +219,26 @@ def _regime_label(row: dict[str, Any]) -> str:
     return name
 
 
+def _track_name(row: dict[str, Any]) -> str:
+    """Return the row's evaluation track (``split.track``), defaulting to ``all``.
+
+    ``track`` is free-form and OPTIONAL in the schema: SEI reports closed_set /
+    cross_receiver / cross_day / open_set and detection reports detection / recognition as
+    separate rows, while AMC/sensing typically omit it. A missing or ``None`` track maps to
+    the default ``all`` bucket so single-track tasks still render.
+    """
+    track = row["split"].get("track")
+    if track is None:
+        return _DEFAULT_TRACK
+    text = str(track).strip()
+    return text or _DEFAULT_TRACK
+
+
+def _track_label(track: str) -> str:
+    """Human label for a track (falls back to the raw track id)."""
+    return TRACK_TITLES.get(track, track)
+
+
 def _status(row: dict[str, Any]) -> str:
     """Return the verification status (``verified`` | ``self_reported``)."""
     return str(row["verification"]["status"])
@@ -226,6 +266,15 @@ def _regime_sort_key(regime: str) -> tuple[int, str]:
     if regime in REGIME_ORDER:
         return (REGIME_ORDER.index(regime), regime)
     return (len(REGIME_ORDER), regime)
+
+
+def _track_sort_key(track: str) -> tuple[int, str]:
+    """Order tracks with the default ``all`` bucket first, then alphabetically.
+
+    Tracks are free-form (Wave-B tasks add their own), so there is no locked order beyond
+    keeping the catch-all ``all`` bucket at the top for single-track tasks.
+    """
+    return (0 if track == _DEFAULT_TRACK else 1, track)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -279,6 +328,9 @@ tr.primary td.num.primary { font-weight:700; }
          font-weight:600; white-space:nowrap; }
 .badge-verified { background:#e6f6ea; color:#137333; border:1px solid #9fd8ae; }
 .badge-self { background:#fff4e5; color:#a15c00; border:1px solid #f0c891; }
+.track-group { margin:0 0 2rem; }
+.track-group h2 { font-size:1.2rem; margin:1.75rem 0 0.5rem; border-bottom:2px solid var(--line);
+                  padding-bottom:0.25rem; }
 .regime-group { margin:0 0 1.5rem; }
 .regime-group h3 { font-size:1.05rem; margin:1rem 0 0.25rem; }
 .note { color:var(--muted); font-size:0.85rem; }
@@ -329,17 +381,21 @@ def _render_row(row: dict[str, Any], primary_key: str) -> str:
 
 
 def _render_regime_table(
+    track: str,
     regime: str,
     rows: list[dict[str, Any]],
     primary_key: str,
 ) -> str:
-    """Render a per-regime sub-table (header + sorted rows).
+    """Render a per-(track, regime) sub-table (header + sorted rows).
 
-    Grouping by regime is what guarantees D5: the primary/other metric columns only ever
-    compare rows *inside one regime*, so a comparison column never mixes regimes.
+    Scoping each table to a single (track, regime) is what guarantees D5 (and the SEI /
+    detection 'reported separately' rule): the primary/other metric columns only ever
+    compare rows *inside one regime AND one track*, so a comparison column never mixes
+    regimes -- nor tracks. The table carries both ``data-track`` and ``data-regime`` so the
+    invariant is checkable from the rendered HTML.
     """
     ordered = _sort_rows(rows)
-    # Union of non-primary scalar keys across this regime's rows, for stable columns.
+    # Union of non-primary scalar keys across this group's rows, for stable columns.
     other_keys: list[str] = sorted(
         {k for row in ordered for k in row["metrics"]["values"] if k != primary_key}
     )
@@ -355,7 +411,7 @@ def _render_regime_table(
     return (
         '<section class="regime-group">'
         f"<h3>Regime: {_esc(label)}</h3>"
-        f'<table data-regime="{_esc(regime)}">'
+        f'<table data-track="{_esc(track)}" data-regime="{_esc(regime)}">'
         f"<caption>Ranked by <code>{_esc(primary_key)}</code> (descending).</caption>"
         f"{header}<tbody>\n{body_rows}\n</tbody></table>"
         "</section>"
@@ -366,8 +422,10 @@ def render_task_page(task_name: str, rows: list[dict[str, Any]]) -> str:
     """Render the full HTML page for one task.
 
     The primary metric key is taken from the rows (all rows of a task share it by
-    protocol). Rows are grouped by regime (D5) and each group is a table sorted by the
-    primary metric, descending. A verification badge is shown per row.
+    protocol). Rows are separated by ``track`` first (SEI / detection tracks are reported
+    separately), then grouped by regime within each track (D5). Each (track, regime) group
+    is a table sorted by the primary metric, descending, so a comparison column never mixes
+    tracks nor regimes. A verification badge is shown per row.
     """
     if not rows:
         raise ValueError(f"render_task_page called with no rows for task '{task_name}'")
@@ -375,18 +433,36 @@ def render_task_page(task_name: str, rows: list[dict[str, Any]]) -> str:
     primary_key = str(rows[0]["metrics"]["primary"])
     title = TASK_TITLES.get(task_name, task_name)
 
-    by_regime: dict[str, list[dict[str, Any]]] = {}
+    # track -> regime -> rows (preserving input order within each leaf group).
+    by_track: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for row in rows:
+        by_regime = by_track.setdefault(_track_name(row), {})
         by_regime.setdefault(_regime_name(row), []).append(row)
 
+    only_default_track = set(by_track) == {_DEFAULT_TRACK}
     sections: list[str] = [
-        '<p class="note">Each regime is ranked separately -- comparison columns never '
-        "mix regimes (D5). Badges mark maintainer-<strong>verified</strong> rows vs "
-        "self-reported ones.</p>",
+        '<p class="note">Tracks are reported separately, and each regime within a track '
+        "is ranked separately -- comparison columns never mix tracks nor regimes (D5). "
+        "Badges mark maintainer-<strong>verified</strong> rows vs self-reported ones.</p>",
         '<p class="note"><a href="index.html">&larr; all tasks</a></p>',
     ]
-    for regime in sorted(by_regime, key=_regime_sort_key):
-        sections.append(_render_regime_table(regime, by_regime[regime], primary_key))
+    for track in sorted(by_track, key=_track_sort_key):
+        by_regime = by_track[track]
+        tables = [
+            _render_regime_table(track, regime, by_regime[regime], primary_key)
+            for regime in sorted(by_regime, key=_regime_sort_key)
+        ]
+        # Only wrap in a labelled track section when the task actually uses tracks; a
+        # single-track task (everything in the default 'all' bucket) stays label-free.
+        if only_default_track:
+            sections.extend(tables)
+        else:
+            sections.append(
+                f'<section class="track-group" data-track="{_esc(track)}">'
+                f"<h2>Track: {_esc(_track_label(track))}</h2>"
+                f"{''.join(tables)}"
+                "</section>"
+            )
 
     return _PAGE_TEMPLATE.substitute(
         title=f"{title} -- RF-Benchmark-Hub",
@@ -409,8 +485,8 @@ def render_index(grouped: dict[str, list[dict[str, Any]]]) -> str:
         )
     body = (
         '<p class="note">Reproducible benchmarks for terrestrial RF ML tasks. '
-        "Each task ranks submissions by its primary metric; regimes are never mixed in a "
-        "comparison column.</p>"
+        "Each task ranks submissions by its primary metric; tracks and regimes are never "
+        "mixed in a comparison column.</p>"
         f'<ul class="tasks">\n{chr(10).join(items)}\n</ul>'
         if items
         else '<p class="note">No valid results yet.</p>'

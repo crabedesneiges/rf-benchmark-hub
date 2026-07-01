@@ -1,0 +1,10 @@
+# @package regime
+# The `linear_probe` regime (D5): freeze the backbone, fit a lightweight head on the
+# features from Model.embed. Adapter: rfbench.regimes.LinearProbeAdapter.
+name: linear_probe
+# k is meaningful only for few_shot; null here (mirrors RegimeSpec's coupling).
+k: null
+# Injectable head. Default is the pure-stdlib nearest-class-centroid placeholder
+# (deterministic, dependency-free). Real linear/logreg heads arrive in M3/M6 behind
+# optional extras and plug in through the same Head protocol.
+head: nearest_centroid

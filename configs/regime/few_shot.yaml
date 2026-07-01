@@ -1,0 +1,11 @@
+# @package regime
+# The `few_shot(k)` regime (D5): keep k labelled examples per class (deterministic,
+# seed 42), then behave like linear_probe. Adapter: rfbench.regimes.FewShotAdapter.
+name: few_shot
+# k is REQUIRED for few_shot (RegimeSpec enforces k_shot iff few_shot, k >= 1) and is
+# written verbatim into result.json.regime.k_shot. Override on the CLI, e.g. regime.k=1.
+k: 5
+# Seed for the per-class subsampling; 42 by protocol convention (matches splits).
+seed: 42
+# Same injectable head as linear_probe (default: pure-stdlib nearest-class-centroid).
+head: nearest_centroid

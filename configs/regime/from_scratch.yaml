@@ -1,0 +1,8 @@
+# @package regime
+# The `from_scratch` regime (D5): a model trained from random init on the task.
+# Adapter: rfbench.regimes.FromScratchAdapter — a thin pass-through to Model.forward
+# (the training that produced the weights is M3, out of scope for the eval harness).
+name: from_scratch
+# k is meaningful only for few_shot; declared null here to mirror RegimeSpec's
+# k_shot-iff-few_shot coupling. The adapter rejects a non-null k for this regime.
+k: null

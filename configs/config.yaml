@@ -1,0 +1,24 @@
+# Base Hydra-style composition for an rfbench evaluation run.
+#
+# Structure only — this declares HOW a run is composed (task + model + regime), not a
+# wired Hydra runtime. `rfbench eval` (M4) reads the composed config and drives
+# rfbench.core.evaluate.evaluate(model, task, split, regime, ...). The regime group is the
+# WP-41 deliverable; task/ and model/ groups are populated by their own work packages
+# (WP-20.. / WP-30..), so their defaults below are placeholders to be selected on the CLI.
+defaults:
+  - task: amc # one of task/{amc,sei,wideband_detection,spectrum_sensing}.yaml
+  - model: ??? # select on the CLI, e.g. `model=mcldnn` (WP-30..)
+  - regime: linear_probe # one of regime/{from_scratch,full_finetune,linear_probe,few_shot}.yaml
+  - _self_
+
+# Split scored by default; the board only scores {val, test} (train is fit-only).
+split: test
+# Optional per-task evaluation track/condition (e.g. SEI cross_receiver); null = default.
+track: null
+# Reproducibility: seed baked into the split ids and the environment fingerprint.
+seed: 42
+# Eval-loop knobs consumed by evaluate().
+batch_size: 256
+device: cuda
+# Where evaluate() writes the schema-valid result.json (null = return only, no write).
+out_path: null

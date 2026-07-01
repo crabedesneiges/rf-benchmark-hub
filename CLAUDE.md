@@ -1,17 +1,22 @@
 # rf-benchmark-hub — Claude Code
 
-> Benchmark hub pour modèles RF (foundation models et baselines).
+> Benchmark hub public pour tâches RF **terrestres** (baselines spécialisées vs
+> foundation models fine-tunés, sous protocole commun). Le satellite = dépôt séparé.
 > Ce fichier est lu automatiquement par Claude Code à l'ouverture du dépôt.
-> **Statut : scaffold v0.** Les fichiers de spec réels (schémas, contrats, plan
-> des work packages) sont fournis par Maxence et doivent être réconciliés avec
-> ce document dès leur import — en cas de conflit, la spec importée fait foi.
+>
+> **Spec maîtresse = `docs/`** (source de vérité, prime sur ce fichier en cas de conflit) :
+> - `docs/IMPLEMENTATION_PLAN.md` — plan + work packages (WP-xx) + milestones M0→M7.
+> - `docs/EVALUATION_PROTOCOL.md` — **normatif et versionné** : métriques/splits par tâche.
+> - `docs/ARCHITECTURE.md` — couches (contracts/data/tasks/models/leaderboard).
+> - `docs/SUBMISSION.md` — workflow de soumission + vérification 2 niveaux.
 
 ## But du projet
 
-Plateforme de benchmark reproductible pour tâches RF : préparation de données,
-entraînement/éval de baselines et fine-tuning de FM, leaderboard avec
-soumissions **vérifiables**. Le code s'écrit partout ; l'entraînement lourd
-tourne sur le cluster.
+Plateforme de benchmark reproductible pour tâches RF (AMC, SEI/RF-fingerprinting,
+détection large bande, spectrum sensing) : préparation de données, entraînement/éval
+de baselines et fine-tuning de FM, leaderboard avec soumissions **vérifiables**.
+Le code s'écrit partout ; l'entraînement lourd tourne sur le cluster.
+Licence code : **Apache-2.0**. Datasets : **jamais redistribués** (licences sources).
 
 ## Principes non négociables
 
@@ -25,31 +30,45 @@ tourne sur le cluster.
 - **Vérification à deux niveaux.** Niveau 1 = CI valide le format. Niveau 2 =
   re-run officiel de la soumission sur le cluster puis bascule du flag `verified`.
 
-## Architecture (cible)
+## Architecture (cible — cf. `docs/ARCHITECTURE.md` §3 du plan)
 
 ```
 rf-benchmark-hub/
-  src/rfbench/          # package Python (CLI `rfbench` + lib)
-    schemas/            # schémas pydantic : result.json, submission, task spec
-    contracts/          # interfaces core (Task, Metric, Dataset, Model)
-    tasks/              # une tâche = un plugin (AMC, SEI, detection, …)
-    metrics/            # métriques par tâche
-    data/               # préparation des splits (indices, pas les données)
-    cli/                # `rfbench data prepare`, `rfbench verify`, …
-  docs/
-    IMPLEMENTATION_PLAN.md   # les work packages (WP-xx) + dépendances + critères
-  configs/              # configs d'expérience (yaml), seed inclus
-  slurm/                # scripts SLURM générés pour le cluster
+  pyproject.toml        # package rfbench + entrypoint CLI
+  schemas/              # result.schema.json, submission.schema.json (JSON Schema)
+  rfbench/              # package importable + CLI `rfbench` (racine, PAS src/)
+    core/               # CONTRATS figés en M0 : task, dataset, metric, model,
+                        #   registry, splits, evaluate, manifest
+    tasks/{amc,sei,wideband_detection,spectrum_sensing}/   # une tâche = adapters+métriques+config
+    models/{baselines,foundation}/   # foundation/ expose embed() pour linear_probe/few_shot
+    data/{download,prepare}/         # scripts par dataset (jamais de données versionnées)
+  configs/              # Hydra : config.yaml, task/, model/, regime/
+  leaderboard/
+    results/<task>/*.json   # SOURCE DE VÉRITÉ des scores (versionnés)
+    splits/<dataset>/*.idx.json  # indices + checksum (versionnés, PAS les données)
+    site/generate.py         # results/*.json -> site statique GitHub Pages
+  docs/                 # spec maîtresse (voir en-tête)
   tests/
-  .github/workflows/    # CI
+  .github/workflows/    # ci.yml, validate-submission.yml, build-leaderboard.yml
 ```
 
-## CLI `rfbench` (contrat d'usage)
+## CLI `rfbench` (contrat d'usage — WP-42)
 
-- `rfbench data prepare <task>` — peuple le storage (via `RFBENCH_CACHE`), écrit les
-  indices de split. Ne télécharge/écrit jamais dans le repo.
-- `rfbench verify <submission>` — re-run officiel niveau 2, produit/valide
-  `result.json`, positionne `verified`.
+- `rfbench data prepare <task>` — download source officielle + `prepare` : écrit les
+  indices de split déterministes + checksums. Ne versionne jamais de données brutes.
+- `rfbench eval <task> --model <name> --regime <regime>` — émet `result.json` validé
+  vs `schemas/result.schema.json` (tier 1 self-serve → `self_reported`).
+- `rfbench submit --check` — valide le manifeste de repro localement avant PR.
+- `rfbench leaderboard build` — régénère le site statique depuis `results/*.json`.
+- `rfbench verify <pr>` (mainteneur, WP-53) — rejoue l'éval (eval-only ou re-train)
+  et flippe `verification.status → verified`.
+
+## Vérification à deux niveaux (D4)
+
+- **Tier 1 self-serve** : n'importe qui run l'éval en local → `self_reported`.
+- **Tier 2 officiel** : le mainteneur **re-exécute** sur station multi-GPU et signe
+  `verified` (avec `verified_by/date/hardware`) si repro dans la `tolerance`.
+  Le leaderboard ne mélange jamais deux régimes dans une colonne.
 
 ## Environnement (cluster Dalia / IDRIS)
 

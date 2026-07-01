@@ -24,17 +24,19 @@ export UV_CACHE_DIR="$WORK/.uv_cache_arm"
 export UV_PYTHON_INSTALL_DIR="$WORK/.uv_python"
 
 echo "=== node=$(hostname) arch=$(uname -m) date=$(date -Is) ==="
-source "$WORK/envs/uv-arm/env"          # prepend ARM uv to PATH
-echo "uv: $(command -v uv) — $(uv --version 2>&1)"
+# Use the ARM uv by ABSOLUTE path: PATH may otherwise resolve `uv` to the Intel
+# login-node binary ($WORK/envs/uv/bin/uv) -> "Exec format error" on aarch64.
+UV="$WORK/envs/uv-arm/uv"
+echo "uv: $UV — $("$UV" --version 2>&1)"
 
 cd "$REPO" || { echo "REPO NOT FOUND: $REPO"; exit 2; }
 echo "HEAD=$(git rev-parse --short HEAD 2>/dev/null)"
 
 echo "=== build ARM venv @ $VENV (python 3.11) ==="
-uv venv --python 3.11 "$VENV" || { echo "VENV BUILD FAILED"; exit 3; }
+"$UV" venv --python 3.11 "$VENV" || { echo "VENV BUILD FAILED"; exit 3; }
 
 echo "=== install -e .[dev,data] (ARM wheels) ==="
-uv pip install --python "$VENV/bin/python" -e ".[dev,data]" || { echo "INSTALL FAILED"; exit 4; }
+"$UV" pip install --python "$VENV/bin/python" -e ".[dev,data]" || { echo "INSTALL FAILED"; exit 4; }
 
 echo "=== interpreter arch ==="
 "$VENV/bin/python" -c "import platform; print('python', platform.python_version(), platform.machine())"

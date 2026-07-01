@@ -689,6 +689,24 @@ def _import_model_module(model: str) -> None:
         importlib.import_module(module)
 
 
+_TASK_MODULES: dict[str, str] = {
+    # Tasks register (via @register_task) on import of their module. These are dependency-free
+    # (torch stays lazy in their Dataset loaders), so importing them here just populates TASKS.
+    "amc": "rfbench.tasks.amc",
+    "sei": "rfbench.tasks.sei",
+    "wideband_detection": "rfbench.tasks.wideband_detection",
+}
+
+
+def _import_task_module(task: str) -> None:
+    """Import the module that registers ``task`` in ``TASKS`` (so ``get_task`` can resolve it)."""
+    module = _TASK_MODULES.get(task)
+    if module is not None:
+        import importlib
+
+        importlib.import_module(module)
+
+
 def _load_split_checksum(dataset: str, out_dir: Path) -> str | None:
     """Return the versioned split-index checksum for ``dataset`` (or ``None`` if absent).
 
@@ -750,6 +768,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
 
     try:
         spec = _regime_spec(args.regime, None)
+        _import_task_module(args.task)  # populate TASKS so get_task can resolve it
         task = get_task(args.task)
         dataset = resolve_amc_dataset(task, args.dataset)
         model = MODELS.get(args.model)()

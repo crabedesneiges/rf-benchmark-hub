@@ -162,11 +162,16 @@ def _load_radioml2016_labels(cache_dir: Path) -> list[tuple[str, int]]:
     """
     import pickle  # stdlib
 
-    path = cache_dir / "radioml_2016_10a" / "RML2016.10a_dict.pkl"
-    if not path.exists():
+    ds_dir = cache_dir / "radioml_2016_10a"
+    # DeepSig's original artifact is ``RML2016.10a_dict.pkl``; the Zenodo mirror
+    # (record 18397070, valid cert) ships the same dict re-pickled as
+    # ``RML2016.10a_dict_optimized.pkl``. Accept either.
+    candidates = ("RML2016.10a_dict.pkl", "RML2016.10a_dict_optimized.pkl")
+    path = next((ds_dir / name for name in candidates if (ds_dir / name).exists()), None)
+    if path is None:
         raise FileNotFoundError(
-            f"RadioML 2016.10a not found at {path}; run the download step first "
-            "(rfbench.data.download.amc_radioml.download_radioml)."
+            f"RadioML 2016.10a not found in {ds_dir} (looked for {list(candidates)}); run the "
+            "download step first (rfbench.data.download.amc_radioml.download_radioml)."
         )
     with path.open("rb") as fh:
         table = pickle.load(fh, encoding="latin1")  # noqa: S301 - trusted local dataset file

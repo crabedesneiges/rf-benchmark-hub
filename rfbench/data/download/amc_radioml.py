@@ -9,8 +9,9 @@ deps).
 
 Verified official source (July 2026, https://www.deepsig.ai/datasets/):
 
-* RadioML 2016.10a -> ``RML2016.10a.tar.bz2`` (a bzip2 tarball wrapping the pickle
-  ``RML2016.10a_dict.pkl``), from ``https://opendata.deepsig.io/datasets/2016.10/``.
+* RadioML 2016.10a -> ``RML2016.10a.tar.bz2`` (a bzip2 tarball wrapping the pickle dict).
+  Default source is the **Zenodo mirror** (record 18397070, valid TLS cert) because DeepSig's
+  own ``opendata.deepsig.io`` certificate is expired; the archive is byte-identical content.
 * RadioML 2018.01a -> ``2018.01.OSC.0001_1024x2M.h5.tar.gz`` (a gzip tarball wrapping the
   HDF5 ``GOLD_XYZ_OSC.0001_1024.hdf5``, ~21.5 GB), from
   ``https://opendata.deepsig.io/datasets/2018.01/``.
@@ -41,18 +42,29 @@ _ARCHIVE_NAME: dict[str, str] = {
     "radioml_2018_01a": "2018.01.OSC.0001_1024x2M.h5.tar.gz",
 }
 
-#: Verified default download URL per dataset (DeepSig open-data mirror, July 2026).
+#: Verified default download URL per dataset. RadioML 2016.10a uses the Zenodo mirror
+#: (record 18397070, VALID TLS cert, MD5 ffedb2c24e33b826d3d0df4aa8f32c1b, full 20-SNR set) --
+#: DeepSig's own opendata.deepsig.io cert is expired. RadioML 2018.01a stays on DeepSig
+#: (no verified valid-cert mirror found; ~21.5 GB).
 _DEFAULT_URL: dict[str, str] = {
-    "radioml_2016_10a": ("https://opendata.deepsig.io/datasets/2016.10/RML2016.10a.tar.bz2"),
+    "radioml_2016_10a": (
+        "https://zenodo.org/records/18397070/files/RML2016.10a.tar.bz2?download=1"
+    ),
     "radioml_2018_01a": (
         "https://opendata.deepsig.io/datasets/2018.01/2018.01.OSC.0001_1024x2M.h5.tar.gz"
     ),
 }
 
-#: Expected extracted file per dataset (consumed by the loaders in ``prepare/amc.py``).
+#: Canonical extracted file per dataset (used in manual-download messages).
 _EXPECTED_FILE: dict[str, str] = {
     "radioml_2016_10a": "RML2016.10a_dict.pkl",
     "radioml_2018_01a": "GOLD_XYZ_OSC.0001_1024.hdf5",
+}
+
+#: Accepted extracted-file names: DeepSig's original + the Zenodo re-pickled ``_optimized`` variant.
+_EXTRACTED_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "radioml_2016_10a": ("RML2016.10a_dict.pkl", "RML2016.10a_dict_optimized.pkl"),
+    "radioml_2018_01a": ("GOLD_XYZ_OSC.0001_1024.hdf5",),
 }
 
 _INSTALL_HINT = "Downloading RadioML needs requests; install it with `pip install rfbench[data]`."
@@ -83,9 +95,9 @@ def download_radioml(
 
     dest_dir = resolve_cache_dir(cache) / dataset
     dest_dir.mkdir(parents=True, exist_ok=True)
-    extracted = dest_dir / _EXPECTED_FILE[dataset]
-    if extracted.exists() and not force:
-        return extracted
+    existing = _find_extracted(dest_dir, dataset)
+    if existing is not None and not force:
+        return existing
 
     url = source_url or _DEFAULT_URL[dataset]
 
@@ -107,12 +119,21 @@ def download_radioml(
         raise RuntimeError(_gated_message(dataset, url, dest_dir)) from exc
 
     _extract_archive(archive, dest_dir)
-    if not extracted.exists():
+    produced = _find_extracted(dest_dir, dataset)
+    if produced is None:
         raise FileNotFoundError(
-            f"extracted {archive.name} but expected {extracted.name} was not produced "
+            f"extracted {archive.name} but none of {_EXTRACTED_CANDIDATES[dataset]} was produced "
             f"under {dest_dir}; the archive layout may have changed."
         )
-    return extracted
+    return produced
+
+
+def _find_extracted(dest_dir: Path, dataset: str) -> Path | None:
+    """Return the first accepted extracted-file path present in ``dest_dir`` (or ``None``)."""
+    return next(
+        (dest_dir / name for name in _EXTRACTED_CANDIDATES[dataset] if (dest_dir / name).exists()),
+        None,
+    )
 
 
 def _gated_message(dataset: str, url: str, dest_dir: Path) -> str:

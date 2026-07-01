@@ -1,0 +1,10 @@
+{
+  "canonical_split_id": "sei-wisig-closedset-strat-tx-8010-seed42-v1",
+  "created_at": "2026-07-01T14:35:34Z",
+  "dataset": "wisig",
+  "n_items": 511515,
+  "seed": 42,
+  "source_checksums": {},
+  "source_url": "https://cores.ee.ucla.edu/downloads/datasets/wisig/",
+  "split_checksum": "sha256:26981a0bc303c4c53ad03b3f7a84d290b799f40b2a96718efc2233f35e010d01"
+}

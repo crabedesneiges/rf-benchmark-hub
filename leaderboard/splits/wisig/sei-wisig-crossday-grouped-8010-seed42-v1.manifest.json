@@ -1,0 +1,10 @@
+{
+  "canonical_split_id": "sei-wisig-crossday-grouped-8010-seed42-v1",
+  "created_at": "2026-07-01T14:35:35Z",
+  "dataset": "wisig",
+  "n_items": 511515,
+  "seed": 42,
+  "source_checksums": {},
+  "source_url": "https://cores.ee.ucla.edu/downloads/datasets/wisig/",
+  "split_checksum": "sha256:933a7cb8a29d7818fedbac81ee35394e76ae9bb1bf36bec1487679e2674ae3d1"
+}

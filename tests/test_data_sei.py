@@ -170,6 +170,33 @@ def test_prepare_sei_cross_day_groups_disjoint(
     assert split.canonical_split_id == CANONICAL_SPLIT_IDS["wisig"]["cross_day"]
 
 
+def test_prepare_sei_cross_day_few_days_has_nonempty_test(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Few groups (real WiSig has ~4 days) must still yield a non-empty held-out test.
+
+    Regression guard: plain 80/10/10 largest-remainder on 4 groups gives [3, 1, 0] -> an
+    EMPTY test day (useless for a cross-day protocol). The grouped splitter now guarantees
+    >= 1 group in val AND test whenever there are >= 3 groups.
+    """
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    days = (0, 1, 2, 3)  # only 4 capture days, like real WiSig ManyTx
+    records = _wisig_records((1, 2), rxs=(100, 101), days=days, per_cell=3)
+
+    split, _ = prepare_sei("wisig", "cross_day", out_dir=str(tmp_path), records=records)
+
+    day_of = {i: records[i][2] for i in range(len(records))}
+    day_by_split = {name: {day_of[i] for i in split.indices[name]} for name in _SPLITS}
+    assert len(day_by_split["test"]) >= 1  # <-- the fix: never empty
+    assert len(day_by_split["val"]) >= 1
+    assert len(day_by_split["train"]) >= 1
+    assert not (day_by_split["train"] & day_by_split["test"])
+    assert not (day_by_split["train"] & day_by_split["val"])
+    assert not (day_by_split["val"] & day_by_split["test"])
+    assert split.indices["test"], "held-out test partition must contain items"
+    _assert_partition(split.indices, len(records))
+
+
 # --- three conditions are distinct + all written -------------------------------------
 
 

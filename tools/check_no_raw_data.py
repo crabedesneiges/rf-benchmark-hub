@@ -41,6 +41,17 @@ FORBIDDEN_EXTENSIONS: frozenset[str] = frozenset(
 # anything above this is almost certainly a dataset or checkpoint that slipped in.
 MAX_TRACKED_BYTES: int = 5 * 1024 * 1024  # 5 MiB
 
+#: Split-index sidecars (``leaderboard/splits/**/*.idx.json``) are the INTENDED versioned
+#: artifact -- for large datasets they legitimately exceed the 5 MiB blob heuristic (e.g. WiSig
+#: ManyTx ~= 7 MiB per condition). They are exempt from MAX_TRACKED_BYTES but still capped to
+#: catch pathological blobs. (Very large indices should move to gzip -- future optimisation.)
+MAX_SPLIT_INDEX_BYTES: int = 64 * 1024 * 1024  # 64 MiB
+
+
+def _is_split_index(rel_path: str) -> bool:
+    """True for canonical split-index sidecars under ``leaderboard/splits/``."""
+    return rel_path.startswith("leaderboard/splits/") and rel_path.endswith(".idx.json")
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -109,11 +120,12 @@ def find_violations(repo_root: Path) -> list[Violation]:
         except OSError:
             # Tracked-but-absent (staged deletion, sparse checkout): nothing to size.
             continue
-        if size > MAX_TRACKED_BYTES:
+        limit = MAX_SPLIT_INDEX_BYTES if _is_split_index(rel_path) else MAX_TRACKED_BYTES
+        if size > limit:
             violations.append(
                 Violation(
                     rel_path,
-                    f"file too large ({size} bytes > {MAX_TRACKED_BYTES} byte limit)",
+                    f"file too large ({size} bytes > {limit} byte limit)",
                 )
             )
 

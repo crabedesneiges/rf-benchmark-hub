@@ -268,7 +268,15 @@ def _partition_groups(
     counts = list(floors)
     for i in order[:remainder]:
         counts[i] += 1
-    train_n, val_n, _ = counts
+    train_n, val_n, test_n = counts
+    # Grouped splits can have very few groups (e.g. WiSig has ~4 capture days), where plain
+    # largest-remainder starves val/test: 4 groups -> [3, 1, 0], leaving an EMPTY held-out
+    # test day (useless for a cross-day protocol). Guarantee a non-empty val AND test
+    # whenever there are >= 3 groups, borrowing from train (train stays >= 1).
+    if n >= 3:
+        test_n = max(test_n, 1)
+        val_n = max(val_n, 1)
+        train_n = n - val_n - test_n
     return (
         groups[:train_n],
         groups[train_n : train_n + val_n],

@@ -17,9 +17,13 @@ implementations:
   (``make_adapter(RegimeSpec)``), preserving the ``--k-shot`` <-> ``few_shot`` coupling and the
   frozen result contract.
 * ``submit --check`` -> validate a ``result.json`` against ``schemas/result.schema.json`` plus a
-  basic manifest-completeness gate.
+  manifest-completeness gate: any manifest supplied via ``--manifest`` or referenced by the result's
+  ``submission_ref`` is validated for completeness against ``submission.schema.json`` and
+  cross-checked for consistency with the result it reproduces.
 * ``leaderboard build`` -> :func:`leaderboard.site.generate.build_site`.
-* ``verify`` -> maintainer stub (WP-53); parses args cleanly.
+* ``verify`` -> :mod:`rfbench.verify` (WP-53): compares a re-run's metrics against the manifest's
+  ``expected_metrics`` within ``tolerance`` and, on a match, writes a NEW result.json with
+  ``verification.status='verified'`` and provenance stamped.
 
 Every heavy or optional import (``jsonschema``, numpy/h5py/torch/torchsig/requests, and the
 ``leaderboard/site`` generator) is performed LAZILY inside the handler that needs it, so
@@ -635,12 +639,79 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------------------------------
 # `submit` handler
 # --------------------------------------------------------------------------------------------------
-def _manifest_completeness_errors(document: dict[str, Any], manifest_path: str | None) -> list[str]:
-    """Basic manifest-completeness gate mirroring the CI pre-flight (WP-51 subset).
+def _resolve_manifest_path(
+    document: dict[str, Any], manifest_path: str | None, result_path: Path
+) -> str | None:
+    """Resolve which manifest (if any) backs this result.
 
-    Checks the data-provenance identity a leaderboard row must carry: a concrete
-    ``canonical_split_id`` and a non-placeholder ``split.checksum``. When a standalone
-    ``--manifest`` is supplied, it is validated against ``submission.schema.json`` too.
+    Precedence: an explicit ``--manifest`` wins; otherwise the result's ``submission_ref`` is
+    honoured, resolved relative to the repo root (matching its repo-relative form). Returns ``None``
+    when no manifest is referenced at all (a bare Tier-1 self_reported dump).
+    """
+    if manifest_path is not None:
+        return manifest_path
+    ref = document.get("submission_ref")
+    if isinstance(ref, str) and ref:
+        candidate = _repo_root() / ref
+        if candidate.is_file():
+            return str(candidate)
+        # Fall back to a path relative to the result itself (fork checkouts).
+        sibling = result_path.parent / Path(ref).name
+        return str(sibling) if sibling.is_file() else str(candidate)
+    return None
+
+
+def _manifest_consistency_errors(
+    document: dict[str, Any], manifest_doc: dict[str, Any]
+) -> list[str]:
+    """Cross-check a Tier-2 manifest against the result it claims to reproduce.
+
+    The submission schema guarantees each field's SHAPE; this guards that the manifest and result
+    describe the SAME evaluation: matching task (name+version) and regime, and an
+    ``expected_metrics`` block that names the result's primary metric (so the maintainer's re-run
+    has a target for the ranking metric). Mismatches here are exactly what would let a verified row
+    drift from the score it displays.
+    """
+    errors: list[str] = []
+
+    result_task = document.get("task") if isinstance(document.get("task"), dict) else {}
+    manifest_task = manifest_doc.get("task") if isinstance(manifest_doc.get("task"), dict) else {}
+    if result_task and manifest_task and result_task != manifest_task:
+        errors.append(f"manifest.task {manifest_task} does not match result.task {result_task}")
+
+    result_regime = document.get("regime") if isinstance(document.get("regime"), dict) else {}
+    manifest_regime = (
+        manifest_doc.get("regime") if isinstance(manifest_doc.get("regime"), dict) else {}
+    )
+    if result_regime and manifest_regime and result_regime != manifest_regime:
+        errors.append(
+            f"manifest.regime {manifest_regime} does not match result.regime {result_regime}"
+        )
+
+    metrics = document.get("metrics") if isinstance(document.get("metrics"), dict) else {}
+    primary = metrics.get("primary") if isinstance(metrics, dict) else None
+    expected = manifest_doc.get("expected_metrics")
+    if isinstance(primary, str) and isinstance(expected, dict) and primary not in expected:
+        errors.append(
+            f"manifest.expected_metrics is missing the result's primary metric {primary!r}"
+        )
+    return errors
+
+
+def _manifest_completeness_errors(
+    document: dict[str, Any], manifest_path: str | None, result_path: Path
+) -> list[str]:
+    """Manifest-completeness gate mirroring the CI pre-flight (WP-51).
+
+    Two layers:
+
+    * **Data-provenance identity** every leaderboard row must carry -- a concrete
+      ``canonical_split_id`` and a non-placeholder ``split.checksum``.
+    * **Reproducibility manifest** (Tier-2) -- when a manifest is supplied via ``--manifest`` OR
+      referenced by the result's ``submission_ref``, it is validated for COMPLETENESS against
+      ``submission.schema.json`` (all required repro fields: code_commit, command,
+      weights_url/docker_image, hardware, expected_metrics, tolerance) and cross-checked for
+      consistency with the result it reproduces (same task/regime, primary metric expected).
     """
     errors: list[str] = []
     split = document.get("split", {})
@@ -653,16 +724,20 @@ def _manifest_completeness_errors(document: dict[str, Any], manifest_path: str |
             "(rfbench data prepare) so the row references a concrete split index"
         )
 
-    if manifest_path is not None:
+    resolved = _resolve_manifest_path(document, manifest_path, result_path)
+    if resolved is not None:
         try:
-            manifest_doc = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            manifest_doc = json.loads(Path(resolved).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            errors.append(f"could not read --manifest {manifest_path}: {exc}")
+            errors.append(f"could not read manifest {resolved}: {exc}")
         else:
-            errors.extend(
-                f"manifest: {msg}"
-                for msg in _validate_against_schema(manifest_doc, "submission.schema.json")
-            )
+            schema_errors = _validate_against_schema(manifest_doc, "submission.schema.json")
+            errors.extend(f"manifest: {msg}" for msg in schema_errors)
+            if not schema_errors and isinstance(manifest_doc, dict):
+                errors.extend(
+                    f"manifest: {msg}"
+                    for msg in _manifest_consistency_errors(document, manifest_doc)
+                )
     return errors
 
 
@@ -675,7 +750,7 @@ def _cmd_submit(args: argparse.Namespace) -> int:
         return EXIT_FAILURE
 
     errors = _validate_result(document)
-    errors.extend(_manifest_completeness_errors(document, args.manifest))
+    errors.extend(_manifest_completeness_errors(document, args.manifest, result_path))
     if errors:
         print(f"error: [submit --check] {result_path} is NOT PR-ready:", file=sys.stderr)
         for err in errors:
@@ -755,16 +830,71 @@ def _cmd_leaderboard_validate(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------------
-# `verify` handler (maintainer stub, WP-53)
+# `verify` handler (maintainer verification pipeline, WP-53)
 # --------------------------------------------------------------------------------------------------
 def _cmd_verify(args: argparse.Namespace) -> int:
-    _print_intent(
-        f"[verify] would re-run '{args.result}' per manifest={args.manifest} (mode={args.mode}, "
-        f"by={args.by}, hardware={args.hardware}, device={args.device}) and flip "
-        "verification.status self_reported -> verified within tolerance — "
-        "not yet implemented (WP-53).",
-        verbose=args.verbose,
+    """Re-run a submission and flip ``verification.status`` self_reported -> verified in tolerance.
+
+    Delegates the numerics to :func:`rfbench.verify.verify_result`. The recomputed metrics come
+    from a re-run ``result.json`` (``--rerun``, itself produced by ``rfbench eval`` on the
+    maintainer's station); when omitted the submitted result's own metrics are used, which is only
+    meaningful for a smoke re-check (it will always verify) and is called out in the output. On a
+    successful flip the verified result is written back (``--out`` or in place); on a mismatch /
+    incomplete manifest nothing is written and the diff is reported (exit 1).
+    """
+    from rfbench.verify import (
+        VerificationError,
+        load_json,
+        rerun_metrics_from_result,
+        verify_result,
     )
+
+    if not args.by:
+        print(
+            "error: [verify] --by (maintainer handle) is required to sign a flip",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not args.hardware:
+        print("error: [verify] --hardware is required to stamp a verified row", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        result = load_json(args.result)
+        manifest = load_json(args.manifest)
+        rerun_doc = load_json(args.rerun) if args.rerun else result
+        rerun_metrics = rerun_metrics_from_result(rerun_doc)
+    except VerificationError as exc:
+        print(f"error: [verify] {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    if not args.rerun:
+        print(
+            "[verify] no --rerun supplied: comparing the submitted result against itself "
+            "(smoke check only; supply --rerun <recomputed result.json> for a real re-run)."
+        )
+
+    try:
+        report = verify_result(
+            result,
+            manifest,
+            rerun_metrics,
+            verified_by=args.by,
+            verified_hardware=args.hardware,
+            method=args.mode,
+        )
+    except VerificationError as exc:
+        print(f"error: [verify] {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    if not report.verified:
+        print(f"error: [verify] {args.result}: {report.summary()}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    out_path = Path(args.out) if getattr(args, "out", None) else Path(args.result)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report.result, indent=2) + "\n", encoding="utf-8")
+    print(f"[verify] {args.result}: {report.summary()} -> wrote verified result to {out_path}.")
     return EXIT_OK
 
 
@@ -1045,26 +1175,39 @@ def _build_verify_parser(
         help="The submission.schema.json manifest (required).",
     )
     verify.add_argument(
+        "--rerun",
+        metavar="RESULT.JSON",
+        help=(
+            "Re-run result.json whose metrics.values are the recomputed metrics to compare against "
+            "the manifest's expected_metrics (default: the submitted result itself, a smoke check)."
+        ),
+    )
+    verify.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Where to write the verified result.json (default: overwrite the input in place).",
+    )
+    verify.add_argument(
         "--mode",
         choices=("eval_only", "full_retrain"),
         default="eval_only",
-        help="Re-run mode (default: eval_only, the cost guard-rail).",
+        help="Re-run mode -> verification.method (default: eval_only, the cost guard-rail).",
     )
     verify.add_argument(
         "--by",
         metavar="HANDLE",
-        help="Maintainer handle -> verification.verified_by.",
+        help="Maintainer handle -> verification.verified_by (required).",
     )
     verify.add_argument(
         "--hardware",
         metavar="STR",
-        help="Hardware string -> verification.verified_hardware.",
+        help="Hardware string -> verification.verified_hardware (required).",
     )
     verify.add_argument(
         "--device",
         choices=("cuda", "cpu"),
         default="cuda",
-        help="Compute device (default: cuda).",
+        help="Compute device for the re-run (default: cuda).",
     )
     verify.set_defaults(func=_cmd_verify)
 

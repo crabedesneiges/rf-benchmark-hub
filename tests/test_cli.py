@@ -427,6 +427,243 @@ def test_submit_check_missing_file(tmp_path: Path, capsys: pytest.CaptureFixture
     assert "could not read" in capsys.readouterr().err
 
 
+# --- verify (maintainer pipeline, WP-53) ---------------------------------------------
+
+
+def _self_reported_result_file(path: Path) -> Path:
+    """Write a minimal schema-valid self_reported AMC result and return its path."""
+    doc = {
+        "schema_version": "1.0.0",
+        "task": {"name": "amc", "version": "v1"},
+        "model": {"name": "mcldnn"},
+        "regime": {"name": "full_finetune"},
+        "dataset": {"name": "radioml_2016_10a"},
+        "split": {
+            "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+            "name": "test",
+            "seed": 42,
+            "checksum": "sha256:" + "3b" * 32,
+        },
+        "metrics": {
+            "primary": "accuracy_overall",
+            "values": {"accuracy_overall": 0.6123, "macro_f1": 0.5987},
+        },
+        "verification": {"status": "self_reported"},
+    }
+    dest = path / "result.json"
+    dest.write_text(json.dumps(doc), encoding="utf-8")
+    return dest
+
+
+def _manifest_file(path: Path, **overrides: object) -> Path:
+    """Write a complete Tier-2 manifest for the result above; overrides patch top-level keys."""
+    doc: dict[str, object] = {
+        "schema_version": "1.0.0",
+        "result_path": "leaderboard/results/amc/mcldnn.json",
+        "task": {"name": "amc", "version": "v1"},
+        "regime": {"name": "full_finetune"},
+        "code_commit": "git@1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+        "command": "rfbench eval amc --model mcldnn --regime full_finetune --seed 42",
+        "artifacts": {"weights_url": "https://zenodo.org/records/0/files/mcldnn.pt"},
+        "hardware": "1x NVIDIA A100 80GB",
+        "expected_metrics": {"accuracy_overall": 0.6123, "macro_f1": 0.5987},
+        "tolerance": {"absolute": 0.01},
+    }
+    doc.update(overrides)
+    dest = path / "manifest.json"
+    dest.write_text(json.dumps(doc), encoding="utf-8")
+    return dest
+
+
+def _rerun_result_file(path: Path, accuracy: float) -> Path:
+    """Write a re-run result.json carrying a single recomputed accuracy value."""
+    doc = {
+        "schema_version": "1.0.0",
+        "task": {"name": "amc", "version": "v1"},
+        "model": {"name": "mcldnn"},
+        "regime": {"name": "full_finetune"},
+        "dataset": {"name": "radioml_2016_10a"},
+        "split": {
+            "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+            "name": "test",
+            "seed": 42,
+            "checksum": "sha256:" + "3b" * 32,
+        },
+        "metrics": {"primary": "accuracy_overall", "values": {"accuracy_overall": accuracy}},
+        "verification": {"status": "self_reported"},
+    }
+    dest = path / "rerun.json"
+    dest.write_text(json.dumps(doc), encoding="utf-8")
+    return dest
+
+
+def test_verify_flips_to_verified_within_tolerance(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A re-run within tolerance flips the row to verified and writes the stamped result."""
+    result = _self_reported_result_file(tmp_path)
+    manifest = _manifest_file(tmp_path)
+    rerun = _rerun_result_file(tmp_path, accuracy=0.6100)
+    out = tmp_path / "verified.json"
+    rc = main(
+        [
+            "verify",
+            str(result),
+            "--manifest",
+            str(manifest),
+            "--rerun",
+            str(rerun),
+            "--by",
+            "rf-bench-maintainers",
+            "--hardware",
+            "4x NVIDIA GB200",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == EXIT_OK
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["verification"]["status"] == "verified"
+    assert doc["verification"]["verified_by"] == "rf-bench-maintainers"
+    assert doc["verification"]["verified_hardware"] == "4x NVIDIA GB200"
+    assert doc["verification"]["method"] == "eval_only"
+    # The submitted result is left untouched (verified doc went to --out).
+    original = json.loads(result.read_text(encoding="utf-8"))
+    assert original["verification"]["status"] == "self_reported"
+    assert "verified" in capsys.readouterr().out
+
+
+def test_verify_out_of_tolerance_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A re-run outside tolerance fails (exit 1), writes nothing, keeps the row self_reported."""
+    result = _self_reported_result_file(tmp_path)
+    manifest = _manifest_file(tmp_path)
+    rerun = _rerun_result_file(tmp_path, accuracy=0.40)
+    out = tmp_path / "verified.json"
+    rc = main(
+        [
+            "verify",
+            str(result),
+            "--manifest",
+            str(manifest),
+            "--rerun",
+            str(rerun),
+            "--by",
+            "maint",
+            "--hardware",
+            "hw",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == EXIT_FAILURE
+    assert not out.exists()
+    assert "out of tolerance" in capsys.readouterr().err
+
+
+def test_verify_incomplete_manifest_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An incomplete manifest is rejected (exit 1) and nothing is written."""
+    result = _self_reported_result_file(tmp_path)
+    manifest = _manifest_file(tmp_path, tolerance={})  # invalid: tolerance needs a bound
+    out = tmp_path / "verified.json"
+    rc = main(
+        [
+            "verify",
+            str(result),
+            "--manifest",
+            str(manifest),
+            "--by",
+            "maint",
+            "--hardware",
+            "hw",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == EXIT_FAILURE
+    assert not out.exists()
+    assert "manifest" in capsys.readouterr().err
+
+
+def test_verify_requires_by(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Omitting --by is a usage error (an unsigned flip must never happen)."""
+    result = _self_reported_result_file(tmp_path)
+    manifest = _manifest_file(tmp_path)
+    rc = main(["verify", str(result), "--manifest", str(manifest), "--hardware", "hw"])
+    assert rc == EXIT_USAGE
+    assert "--by" in capsys.readouterr().err
+
+
+def test_verify_smoke_check_without_rerun(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without --rerun the result is compared to itself (smoke check) and verifies in place."""
+    result = _self_reported_result_file(tmp_path)
+    manifest = _manifest_file(tmp_path)
+    rc = main(
+        [
+            "verify",
+            str(result),
+            "--manifest",
+            str(manifest),
+            "--by",
+            "maint",
+            "--hardware",
+            "hw",
+        ]
+    )
+    assert rc == EXIT_OK
+    # Overwrote the input in place (no --out).
+    doc = json.loads(result.read_text(encoding="utf-8"))
+    assert doc["verification"]["status"] == "verified"
+    out = capsys.readouterr().out
+    assert "smoke check only" in out
+
+
+# --- submit --check manifest completeness (WP-53 strengthening) -----------------------
+
+
+def test_submit_check_with_complete_manifest_passes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A valid result + complete manifest passes submit --check."""
+    result = _self_reported_result_file(tmp_path)
+    manifest = _manifest_file(tmp_path)
+    rc = main(["submit", "--check", str(result), "--manifest", str(manifest)])
+    assert rc == EXIT_OK
+    assert "PR-ready" in capsys.readouterr().out
+
+
+def test_submit_check_incomplete_manifest_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An incomplete manifest fails submit --check with a clear manifest error."""
+    result = _self_reported_result_file(tmp_path)
+    manifest = _manifest_file(tmp_path, code_commit="not a sha")  # violates pattern
+    rc = main(["submit", "--check", str(result), "--manifest", str(manifest)])
+    assert rc == EXIT_FAILURE
+    err = capsys.readouterr().err
+    assert "NOT PR-ready" in err
+    assert "manifest" in err
+
+
+def test_submit_check_manifest_task_mismatch_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A complete manifest describing a different task is rejected as inconsistent."""
+    result = _self_reported_result_file(tmp_path)
+    manifest = _manifest_file(
+        tmp_path,
+        task={"name": "sei", "version": "v1"},
+        result_path="leaderboard/results/sei/mcldnn.json",
+        expected_metrics={"accuracy_overall": 0.6123},
+    )
+    rc = main(["submit", "--check", str(result), "--manifest", str(manifest)])
+    assert rc == EXIT_FAILURE
+    assert "does not match result.task" in capsys.readouterr().err
+
+
 # --- import purity (clean subprocess, no heavy deps) ---------------------------------
 
 

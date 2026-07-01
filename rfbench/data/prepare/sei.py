@@ -15,15 +15,15 @@ split id, ``.idx.json`` and manifest sidecar:
   train / val / test, so the test days are disjoint from the train days (no day leakage),
   measuring robustness to channel/temporal drift.
 
-ORACLE (16-tx) is a single-condition closed-set dataset here: 80/10/10 stratified by
-transmitter.
+ORACLE (16-tx) and LoRa RFFI are single-condition closed-set datasets here: 80/10/10
+stratified by transmitter (ORACLE) / device (LoRa).
 
 Split GENERATION is decoupled from data loading exactly as in AMC: :func:`prepare_sei`
 accepts already-extracted ``(tx_id, rx_id, day_id)`` record tuples, so the whole
 grouping/stratification path runs on pure-stdlib synthetic fixtures with no numpy. The
-heavy metadata EXTRACTION from the real WiSig/ORACLE files lives in the lazy loaders below
-(:func:`load_wisig_records`, :func:`load_oracle_records`), which are never called in unit
-tests.
+heavy metadata EXTRACTION from the real WiSig/ORACLE/LoRa files lives in the lazy loaders
+below (:func:`load_wisig_records`, :func:`load_oracle_records`, :func:`load_lora_records`),
+which are never called in unit tests.
 
 Module-top imports are stdlib + the frozen core contracts + the ``_common`` template
 helpers only; numpy/h5py are imported lazily inside the loaders with a clear
@@ -45,7 +45,7 @@ from rfbench.data.prepare._common import (
 )
 
 #: The SEI datasets this WP prepares.
-SeiDataset = Literal["wisig", "oracle"]
+SeiDataset = Literal["wisig", "oracle", "lora"]
 
 #: The SEI split conditions, reported separately (``docs/EVALUATION_PROTOCOL.md`` §SEI).
 SeiCondition = Literal["closed_set", "cross_receiver", "cross_day"]
@@ -66,18 +66,23 @@ CANONICAL_SPLIT_IDS: dict[str, dict[str, str]] = {
     "oracle": {
         "closed_set": "sei-oracle-closedset-strat-tx-8010-seed42-v1",
     },
+    "lora": {
+        "closed_set": "sei-lora-closedset-strat-dev-8010-seed42-v1",
+    },
 }
 
 #: Official source URL recorded in each dataset's manifest (provenance, never redistributed).
 SOURCE_URLS: dict[str, str] = {
     "wisig": "https://cores.ee.ucla.edu/downloads/datasets/wisig/",
     "oracle": "https://www.genesys-lab.org/oracle",
+    "lora": "https://ieee-dataport.org/open-access/lorarffidataset",
 }
 
-#: Conditions each dataset supports (WiSig carries receiver + day metadata; ORACLE does not).
+#: Conditions each dataset supports (WiSig carries receiver + day metadata; the others do not).
 _CONDITIONS: dict[str, tuple[str, ...]] = {
     "wisig": ("closed_set", "cross_receiver", "cross_day"),
     "oracle": ("closed_set",),
+    "lora": ("closed_set",),
 }
 
 #: Which record field a grouped condition partitions on (index into :data:`SeiRecord`).
@@ -288,19 +293,29 @@ def _norm_group(group: object) -> tuple[int, str]:
 
 def load_wisig_records(
     cache: str | Path | None = None,
+    *,
+    equalized: int = 0,
 ) -> list[SeiRecord]:
-    """Extract per-item ``(tx_id, rx_id, day_id)`` records from the WiSig files on disk.
+    """Extract per-item ``(tx_id, rx_id, day_id)`` records from the WiSig ManyTx pickle.
 
-    WiSig (ManyTx) ships as a compressed pickle of per-(transmitter, receiver, day)
-    capture blocks; this flattens them into one ``(tx_id, rx_id, day_id)`` tuple per
-    signal, in file order, ready to hand to :func:`prepare_sei` as ``records=`` for any of
-    the three conditions. numpy/pickle are imported lazily so ``import
-    rfbench.data.prepare.sei`` stays dependency-free. Never called in unit tests (needs
-    real data + heavy deps).
+    WiSig (Hanna et al., IEEE Access 2022) ships each compact subset as a single pickle
+    (``ManyTx.pkl``) holding a ``dict`` with the axis label lists ``tx_list`` / ``rx_list``
+    / ``capture_date_list`` / ``equalized_list`` and a 5-level nested ``data`` list indexed
+    ``data[tx_i][rx_i][day_i][eq_i]`` -> an ``ndarray`` of shape ``(n_signals, 256, 2)``
+    (the WiSig ``wisig-examples`` layout). This flattens the whole tensor into one
+    ``(tx_id, rx_id, day_id)`` tuple per signal -- one per row of every ``(tx, rx, day)``
+    capture block -- in ``(tx, rx, day)`` file order, ready to hand to :func:`prepare_sei`
+    as ``records=`` for any of the three conditions (``eq_i`` is fixed to the
+    non-equalised captures by default, ``equalized=0``).
+
+    ``pickle`` (stdlib) reads the archive; ``numpy`` is imported lazily only to read each
+    block's row count, so ``import rfbench.data.prepare.sei`` stays dependency-free. Never
+    called in unit tests (needs real data + numpy). See :func:`extract_wisig_records` for
+    the pure-Python extraction used by the tests on a stdlib fixture.
     """
-    try:
-        import pickle  # noqa: F401 - stdlib; kept explicit for the FileNotFound path below
+    import pickle  # stdlib
 
+    try:
         import numpy as np  # noqa: F401 - surfaces the clear install error early
     except ModuleNotFoundError as exc:
         raise RuntimeError(
@@ -314,23 +329,69 @@ def load_wisig_records(
             f"WiSig not found at {path}; run the download step first "
             "(rfbench.data.download.sei_wisig)."
         )
-    raise NotImplementedError(
-        "WiSig record extraction runs on the cluster against the real ManyTx pickle; wire "
-        "it to the concrete (tx, rx, day) capture layout there."
-    )
+    with path.open("rb") as fh:
+        dataset = pickle.load(fh)  # noqa: S301 - trusted local dataset file
+    return extract_wisig_records(dataset, equalized=equalized)
+
+
+def extract_wisig_records(
+    dataset: Mapping[str, object],
+    *,
+    equalized: int = 0,
+) -> list[SeiRecord]:
+    """Flatten a loaded WiSig compact ``dataset`` dict into ``(tx, rx, day)`` records.
+
+    Pure-Python view of the WiSig ManyTx layout (see :func:`load_wisig_records`): given the
+    already-unpickled ``dict`` it walks ``data[tx_i][rx_i][day_i][eq_i]`` for the requested
+    ``equalized`` slot and emits one ``(tx_id, rx_id, day_id)`` record per signal row, using
+    the real ``tx_list`` / ``rx_list`` / ``capture_date_list`` axis labels as the ids.
+    ``block`` may be any object exposing ``len(...)`` == its row count (an ``ndarray`` on
+    the cluster; a plain ``list`` in the stdlib test fixture), so this function pulls in no
+    third-party dependency and is exercised directly in unit tests.
+    """
+    tx_list = list(_require_seq(dataset, "tx_list"))
+    rx_list = list(_require_seq(dataset, "rx_list"))
+    day_list = list(_require_seq(dataset, "capture_date_list"))
+    eq_list = list(_require_seq(dataset, "equalized_list"))
+    if equalized not in eq_list:
+        raise ValueError(f"equalized={equalized!r} not in dataset equalized_list {eq_list!r}")
+    eq_i = eq_list.index(equalized)
+
+    data = dataset.get("data")
+    if not isinstance(data, Sequence):
+        raise ValueError("WiSig dataset 'data' must be a nested sequence")
+
+    records: list[SeiRecord] = []
+    for tx_i, tx_id in enumerate(tx_list):
+        for rx_i, rx_id in enumerate(rx_list):
+            for day_i, day_id in enumerate(day_list):
+                block = data[tx_i][rx_i][day_i][eq_i]
+                n_signals = _block_len(block)
+                records.extend((tx_id, rx_id, day_id) for _ in range(n_signals))
+    return records
 
 
 def load_oracle_records(
     cache: str | Path | None = None,
 ) -> list[SeiRecord]:
-    """Extract per-item ``(tx_id, None, None)`` records from the ORACLE files on disk.
+    """Extract per-item ``(tx_id, None, None)`` records from the ORACLE capture tree.
 
-    ORACLE is a 16-transmitter closed-set dataset captured on a single receiver; only the
-    transmitter id is a meaningful group here, so ``rx_id`` / ``day_id`` are ``None``.
-    numpy is imported lazily. Never called in unit tests (needs real data + heavy deps).
+    ORACLE (Sankhe et al., Genesys/Northeastern) is a 16-transmitter closed-set dataset
+    captured on a single receiver and distributed in the SigMF format: the raw-IQ release
+    lays capture files out under distance folders (``<dist>ft/``) named
+    ``WiFi_air_X310_<serial>_<dist>ft_run<n>.sigmf-data`` with a sibling ``.sigmf-meta``
+    JSON header. The transmitter identity is the USRP X310 ``<serial>`` in the file name;
+    only that id is a meaningful group here, so ``rx_id`` / ``day_id`` are ``None``.
+
+    One record is emitted per IQ *capture window* of ``window`` complex samples in each
+    ``.sigmf-data`` file (``float32`` interleaved I/Q, so ``2 * window`` floats per window),
+    in sorted file order. numpy is imported lazily; never called in unit tests (needs real
+    data + numpy).
     """
+    import json  # stdlib
+
     try:
-        import numpy as np  # noqa: F401 - surfaces the clear install error early
+        import numpy as np
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Reading ORACLE needs numpy; install it with `pip install rfbench[data]`."
@@ -343,10 +404,120 @@ def load_oracle_records(
             f"ORACLE not found at {root}; run the download step first "
             "(rfbench.data.download.sei_oracle)."
         )
-    raise NotImplementedError(
-        "ORACLE record extraction runs on the cluster against the real capture tree; wire "
-        "it to the concrete per-transmitter SigMF/binary layout there."
-    )
+
+    window = _ORACLE_WINDOW
+    records: list[SeiRecord] = []
+    for data_path in sorted(root.rglob("*.sigmf-data")):
+        tx_id = _oracle_tx_id(data_path.name)
+        # SigMF raw IQ: interleaved I/Q float32 (confirm datatype in the .sigmf-meta).
+        meta_path = data_path.with_suffix(".sigmf-meta")
+        dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
+        iq = np.fromfile(data_path, dtype=dtype)
+        n_complex = iq.size // 2
+        n_windows = n_complex // window
+        records.extend((tx_id, None, None) for _ in range(n_windows))
+    if not records:
+        raise FileNotFoundError(
+            f"no ORACLE .sigmf-data captures found under {root}; check the extraction."
+        )
+    return records
+
+
+def load_lora_records(
+    cache: str | Path | None = None,
+    *,
+    filename: str = "dataset_training_aug.h5",
+) -> list[SeiRecord]:
+    """Extract per-item ``(device_id, None, None)`` records from the LoRa RFFI HDF5.
+
+    LoRa RFFI (Shen et al., IEEE JSAC 2021) is distributed as a single HDF5 archive
+    (``LoRa_RFFI.zip`` on IEEE DataPort, DOI 10.21227/qqt4-kz19) whose training file
+    ``Train/dataset_training_aug.h5`` holds two datasets: ``data`` of shape
+    ``(n_packets, 2 * n_samples)`` (the first half is the real part, the second half the
+    imaginary part of the preamble IQ) and ``label`` of shape ``(1, n_packets)`` carrying
+    the **1-indexed** device id of each packet (the ``gxhen/LoRa_RFFI`` layout). This reads
+    only the ``label`` row and emits one ``(device_id, None, None)`` record per packet, in
+    file order, ready for :func:`prepare_sei` as ``records=`` for the closed-set condition.
+
+    h5py + numpy are imported lazily; never called in unit tests (needs real data + heavy
+    deps). See :func:`extract_lora_records` for the pure-Python label -> record mapping.
+    """
+    try:
+        import h5py
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Reading LoRa RFFI needs numpy + h5py to read the HDF5 file; "
+            "install them with `pip install rfbench[data]`."
+        ) from exc
+
+    cache_dir = resolve_cache_dir(cache)
+    path = cache_dir / "lora" / filename
+    if not path.exists():
+        raise FileNotFoundError(
+            f"LoRa RFFI not found at {path}; run the download step first "
+            "(rfbench.data.download.sei_lora)."
+        )
+    with h5py.File(path, "r") as handle:
+        label = np.asarray(handle["label"][:]).astype(int).reshape(-1)
+    return extract_lora_records(label.tolist())
+
+
+def extract_lora_records(labels: Sequence[int]) -> list[SeiRecord]:
+    """Map a flat sequence of LoRa **1-indexed** device labels to closed-set records.
+
+    Pure-Python view of the LoRa label layout (see :func:`load_lora_records`): each label
+    is the transmitter/device id of one packet; this emits one ``(device_id, None, None)``
+    record per packet, preserving file order. Pulls in no third-party dependency, so it is
+    exercised directly in unit tests.
+    """
+    return [(int(dev), None, None) for dev in labels]
+
+
+#: ORACLE capture-window length (complex samples per record); matches the reference
+#: IEEE802.11a burst length used to slice each raw-IQ ``.sigmf-data`` file.
+_ORACLE_WINDOW = 128
+
+
+def _require_seq(dataset: Mapping[str, object], key: str) -> Sequence[object]:
+    """Return ``dataset[key]`` as a sequence or raise a clear ``ValueError``."""
+    value = dataset.get(key)
+    if not isinstance(value, Sequence):
+        raise ValueError(f"WiSig dataset is missing sequence field {key!r}")
+    return value
+
+
+def _block_len(block: object) -> int:
+    """Row count of one WiSig capture block (``ndarray`` on cluster, ``list`` in tests)."""
+    shape = getattr(block, "shape", None)
+    if shape is not None:
+        return int(shape[0]) if len(shape) else 0
+    return len(block)  # type: ignore[arg-type]
+
+
+def _oracle_tx_id(filename: str) -> str:
+    """Parse the USRP X310 serial (transmitter id) out of an ORACLE capture file name.
+
+    Expects the reference naming ``WiFi_air_X310_<serial>_<dist>ft_run<n>.sigmf-data``;
+    returns ``<serial>``. Falls back to the file stem if the name deviates.
+    """
+    parts = filename.split("_")
+    if len(parts) >= 4 and parts[0] == "WiFi" and parts[2] == "X310":
+        return parts[3]
+    return filename.rsplit(".", 1)[0]
+
+
+def _sigmf_np_dtype(np_mod: object, meta_path: Path, json_mod: object) -> object:
+    """Map a SigMF ``core:datatype`` to a numpy dtype (defaults to interleaved f32)."""
+    meta = json_mod.loads(meta_path.read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    datatype = str(meta.get("global", {}).get("core:datatype", "cf32_le"))
+    table = {
+        "cf32_le": np_mod.float32,  # type: ignore[attr-defined]
+        " cf32": np_mod.float32,  # type: ignore[attr-defined]
+        "ci16_le": np_mod.int16,  # type: ignore[attr-defined]
+        "cf64_le": np_mod.float64,  # type: ignore[attr-defined]
+    }
+    return table.get(datatype, np_mod.float32)  # type: ignore[attr-defined]
 
 
 __all__ = [
@@ -357,5 +528,8 @@ __all__ = [
     "SOURCE_URLS",
     "prepare_sei",
     "load_wisig_records",
+    "extract_wisig_records",
     "load_oracle_records",
+    "load_lora_records",
+    "extract_lora_records",
 ]

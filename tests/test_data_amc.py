@@ -29,7 +29,16 @@ from rfbench.data.prepare._common import (
     prepare_from_labels,
     resolve_cache_dir,
 )
-from rfbench.data.prepare.amc import CANONICAL_SPLIT_IDS, prepare_amc
+from rfbench.data.prepare.amc import (
+    _RADIOML2018_MODS,
+    CANONICAL_SPLIT_IDS,
+    _expand_radioml2016_table,
+    _load_radioml2016_labels,
+    _radioml2018_labels_from_arrays,
+    load_radioml_labels,
+    load_sig53_official_split,
+    prepare_amc,
+)
 
 _SPLITS: tuple[SplitName, SplitName, SplitName] = ("train", "val", "test")
 
@@ -261,3 +270,154 @@ def test_prepare_from_labels_length_mismatch_raises(tmp_path: Path) -> None:
             source_url="http://example",
             out_dir=str(tmp_path),
         )
+
+
+# --- real RadioML 2016.10a loader on a TINY REAL pickle fixture ----------------------
+
+
+def _write_radioml2016_pickle(path: Path, table: dict[tuple[object, object], list[object]]) -> None:
+    """Write a tiny REAL ``RML2016.10a_dict.pkl`` fixture with stdlib pickle (no numpy).
+
+    Mirrors the published layout: a ``dict`` keyed by ``(modulation, snr)`` whose values are
+    per-cell blocks. The real file stores ``ndarray[N, 2, 128]``; we use nested Python lists of
+    the same first dimension ``N`` so ``len(block)`` yields the item count the loader expands on.
+    """
+    import pickle
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as fh:
+        pickle.dump(table, fh)
+
+
+def test_expand_radioml2016_table_counts_items_per_cell() -> None:
+    """``_expand_radioml2016_table`` emits one (mod, snr) label per item in each cell block."""
+    table: dict[tuple[object, object], list[object]] = {
+        ("BPSK", -4): [[[0.0] * 128, [0.0] * 128] for _ in range(3)],  # 3 items
+        ("QPSK", 8): [[[0.0] * 128, [0.0] * 128] for _ in range(2)],  # 2 items
+    }
+    labels = _expand_radioml2016_table(table)
+    assert Counter(labels) == Counter({("BPSK", -4): 3, ("QPSK", 8): 2})
+    assert len(labels) == 5
+    # Values coerced to (str, int) exactly as the real loader would.
+    assert all(isinstance(m, str) and isinstance(s, int) for m, s in labels)
+
+
+def test_load_radioml2016_labels_reads_real_pickle_and_prepare_stratifies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end on a REAL stdlib pickle: load 2016 labels -> prepare_amc strata by (mod x snr).
+
+    Builds a tiny genuine ``RML2016.10a_dict.pkl`` (stdlib pickle, nested lists mimicking the
+    ``[N, 2, 128]`` blocks), reads it through the real loader, and asserts prepare_amc produces
+    the 80/10/10 stratified split with each (mod, snr) cell split 8/1/1.
+    """
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    mods = ("BPSK", "QPSK", "8PSK")
+    snrs = (-4, 0, 4, 8)
+    per_cell = 10  # 3 x 4 x 10 = 120 items -> each cell 8/1/1
+    table: dict[tuple[object, object], list[object]] = {
+        (mod, snr): [[[0.0] * 128, [0.0] * 128] for _ in range(per_cell)]
+        for mod in mods
+        for snr in snrs
+    }
+    pkl = resolve_cache_dir() / "radioml_2016_10a" / "RML2016.10a_dict.pkl"
+    _write_radioml2016_pickle(pkl, table)
+
+    # Real loader (stdlib pickle path) reads the fixture back into per-item labels.
+    labels = _load_radioml2016_labels(resolve_cache_dir())
+    assert len(labels) == 120
+    assert Counter(labels)[("BPSK", -4)] == per_cell
+
+    # Public entry point resolves the same file via $RFBENCH_CACHE.
+    assert load_radioml_labels("radioml_2016_10a") == labels
+
+    split, manifest = prepare_amc("radioml_2016_10a", out_dir=str(tmp_path), labels=labels)
+    sizes = {name: len(split.indices[name]) for name in _SPLITS}
+    assert sizes == {"train": 96, "val": 12, "test": 12}
+
+    label_of = {i: labels[i] for i in range(len(labels))}
+    expected_per_split: tuple[tuple[SplitName, int], ...] = (("train", 8), ("val", 1), ("test", 1))
+    for name, expected in expected_per_split:
+        counts = Counter(label_of[i] for i in split.indices[name])
+        for mod in mods:
+            for snr in snrs:
+                assert counts[(mod, snr)] == expected, (name, mod, snr)
+    assert manifest.n_items == 120
+
+
+def test_load_radioml2016_labels_missing_file_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clear FileNotFoundError points at the download step when the pickle is absent."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    with pytest.raises(FileNotFoundError, match="run the download step first"):
+        _load_radioml2016_labels(resolve_cache_dir())
+
+
+# --- RadioML 2018.01a label logic (pure Python) + guarded HDF5 parser ---------------
+
+
+def test_radioml2018_labels_from_arrays_maps_onehot_argmax_to_class_names() -> None:
+    """One-hot argmax indices + SNRs map to the canonical 24-class names, in order."""
+    # Column indices 0,3,23 -> OOK, BPSK, OQPSK per _RADIOML2018_MODS.
+    labels = _radioml2018_labels_from_arrays([0, 3, 23], [-20, 0, 30])
+    assert labels == [("OOK", -20), ("BPSK", 0), ("OQPSK", 30)]
+    assert len(_RADIOML2018_MODS) == 24
+
+
+def test_radioml2018_labels_from_arrays_length_mismatch_raises() -> None:
+    with pytest.raises(ValueError, match="mod/snr length mismatch"):
+        _radioml2018_labels_from_arrays([0, 1], [0])
+
+
+def test_load_radioml2018_labels_parses_real_hdf5(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REAL HDF5 parser: skipped in the dep-free venv, runs on the cluster [data] venv.
+
+    Guarded with importorskip so it SKIPS where numpy/h5py are absent and RUNS on the cluster.
+    Writes a tiny genuine ``GOLD_XYZ_OSC.0001_1024.hdf5`` with the published ``X/Y/Z`` layout,
+    then asserts the loader returns the expected (mod, snr) labels.
+    """
+    h5py = pytest.importorskip("h5py")
+    np = pytest.importorskip("numpy")
+
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    path = resolve_cache_dir() / "radioml_2018_01a" / "GOLD_XYZ_OSC.0001_1024.hdf5"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 3 items: modulation columns 0 (OOK), 3 (BPSK), 23 (OQPSK); SNRs -20/0/30.
+    y = np.zeros((3, 24), dtype="float32")
+    y[0, 0] = 1.0
+    y[1, 3] = 1.0
+    y[2, 23] = 1.0
+    z = np.array([[-20], [0], [30]], dtype="int64")  # (N, 1) as in the real file
+    x = np.zeros((3, 1024, 2), dtype="float32")
+    with h5py.File(path, "w") as fh:
+        fh.create_dataset("X", data=x)
+        fh.create_dataset("Y", data=y)
+        fh.create_dataset("Z", data=z)
+
+    labels = load_radioml_labels("radioml_2018_01a")
+    assert labels == [("OOK", -20), ("BPSK", 0), ("OQPSK", 30)]
+
+
+# --- Sig53: no static release -> BLOCKED (must not synthesise) -----------------------
+
+
+def test_load_sig53_official_split_is_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sig53 has no static published artifact -> loader raises a clear, actionable blocker."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    with pytest.raises(NotImplementedError, match="NO static published download"):
+        load_sig53_official_split()
+
+
+def test_download_sig53_is_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Sig53 download entry point refuses to synthesise and reports the blocker + root."""
+    from rfbench.data.download.amc_sig53 import download_sig53
+
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    with pytest.raises(NotImplementedError, match="generation-only via TorchSig"):
+        download_sig53()

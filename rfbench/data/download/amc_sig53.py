@@ -1,13 +1,20 @@
-"""Generate the Sig53 AMC dataset via TorchSig into ``$RFBENCH_CACHE``.
+"""Sig53 AMC dataset acquisition -- BLOCKED: no static published release exists.
 
-Sig53 is not a downloadable archive: it is *generated* from TorchSig's official generator
-into a local root (impaired train/val). We never redistribute it (D3) -- this only drives
-the generator into the cache. ``torchsig`` (and its ``torch``/``numpy`` stack) is imported
-LAZILY with a clear ``pip install rfbench[detection]`` error, so importing this module
-stays dependency-free and it is NEVER exercised in CI (heavy deps, hours of generation).
+Sig53 (Boegner et al., "Large Scale Radio Frequency Signal Classification", 2022) is the
+53-class AMC dataset from the TorchSig project. Unlike RadioML, DeepSig/TorchSig do NOT
+publish a static, statically-downloadable Sig53 artifact: the dataset is *generated* locally
+from the TorchSig generator (verified July 2026 against the TorchSig repo, its docs at
+``torchsig.com/dist/downloads.html``, and Papers with Code -- all point to local generation,
+none to a Zenodo/HuggingFace/S3 download).
 
-On the cluster: run inside the ARM venv, GPU not required for generation but the process
-is long and disk-heavy -- point ``$RFBENCH_CACHE`` at Lustre.
+Per the project's data policy, we do NOT fabricate a dataset by generation here: RF-Benchmark
+uses the REAL published artifacts used by the reference papers, and generation-only datasets
+with no static release are treated as a **blocker** rather than silently synthesised. This
+module therefore does not download or generate anything -- it raises a clear, actionable
+error so the AMC Sig53 track stays disabled until a static release is confirmed (or the team
+explicitly opts in to on-cluster TorchSig generation as a separate, reviewed step).
+
+``import`` of this module stays dependency-free; it never touches torch/torchsig/numpy.
 """
 
 from __future__ import annotations
@@ -19,59 +26,42 @@ from rfbench.data.prepare._common import resolve_cache_dir
 #: Official TorchSig repository (Sig53 generator + canonical split live here).
 TORCHSIG_REPO = "https://github.com/TorchDSP/torchsig"
 
-#: Cache subdirectory the generated Sig53 root is written under.
+#: TorchSig dataset documentation page consulted for a static release (none offered).
+TORCHSIG_DOWNLOADS_PAGE = "https://torchsig.com/dist/downloads.html"
+
+#: Reference paper introducing Sig53 (arXiv:2207.09918).
+SIG53_PAPER = "https://arxiv.org/abs/2207.09918"
+
+#: Cache subdirectory a Sig53 root would live under (created for the manual/opt-in path).
 _SIG53_SUBDIR = "sig53"
 
-_INSTALL_HINT = (
-    "Generating Sig53 needs TorchSig (torch + numpy); "
-    "install it with `pip install rfbench[detection]`."
+_BLOCKER_MESSAGE = (
+    "Sig53 has NO static published download: it is generation-only via TorchSig "
+    f"({TORCHSIG_REPO}; see {TORCHSIG_DOWNLOADS_PAGE}). RF-Benchmark does not synthesise "
+    "datasets in place of a real published artifact, so the Sig53 AMC track is BLOCKED "
+    "pending a static release (Zenodo/HuggingFace/S3) or an explicit, separately-reviewed "
+    "decision to run TorchSig generation on the cluster. To opt in manually: generate Sig53 "
+    "with TorchSig on an ARM compute node, place the generated root at "
+    "{root}, then wire load_sig53_official_split (rfbench.data.prepare.amc) to that layout. "
+    f"Paper: {SIG53_PAPER}."
 )
 
 
-def generate_sig53(
-    *,
-    cache: str | Path | None = None,
-    impaired: bool = True,
-    force: bool = False,
-) -> Path:
-    """Generate the Sig53 dataset via TorchSig into ``$RFBENCH_CACHE/sig53/``.
+def download_sig53(*, cache: str | Path | None = None) -> Path:
+    """Report the Sig53 acquisition blocker (no static release; generation-only).
 
-    ``impaired`` selects the impaired variant used by the AMC benchmark (the version the
-    official split and the XCiT baseline are reported on). If the root already exists and
-    ``force`` is ``False`` generation is skipped (idempotent). Returns the Sig53 root path.
-
-    ``torchsig`` is imported lazily; NEVER called in unit tests (heavy deps + long runtime).
+    Sig53 cannot be fetched as a published artifact, and per policy we do NOT generate it
+    here in lieu of a real download. This always raises :class:`NotImplementedError` with
+    actionable manual-generation instructions and the expected on-disk root path; it never
+    imports torch/torchsig or writes any data.
     """
     root = resolve_cache_dir(cache) / _SIG53_SUBDIR
-    root.mkdir(parents=True, exist_ok=True)
-    if _looks_generated(root) and not force:
-        return root
-
-    try:
-        from torchsig.datasets.sig53 import Sig53
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(_INSTALL_HINT) from exc
-
-    # Drive TorchSig's generator for both the train and val partitions of the official
-    # split; the exact generator kwargs are pinned on the cluster against the installed
-    # torchsig version. Kept minimal here to avoid coupling to a specific API revision.
-    for train in (True, False):
-        Sig53(
-            root=str(root),
-            train=train,
-            impaired=impaired,
-            regenerate=force,
-            use_signal_data=True,
-        )
-    return root
-
-
-def _looks_generated(root: Path) -> bool:
-    """Cheap idempotency check: a non-empty Sig53 root is treated as already generated."""
-    return root.is_dir() and any(root.iterdir())
+    raise NotImplementedError(_BLOCKER_MESSAGE.format(root=root))
 
 
 __all__ = [
     "TORCHSIG_REPO",
-    "generate_sig53",
+    "TORCHSIG_DOWNLOADS_PAGE",
+    "SIG53_PAPER",
+    "download_sig53",
 ]

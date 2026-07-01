@@ -24,7 +24,16 @@ import pytest
 
 from rfbench.core.splits import split_checksum
 from rfbench.core.types import SplitName
+from rfbench.data.download.detection_wbsig53 import (
+    RADDET_CLASSES,
+    _parse_yolo_label_text,
+    _yolo_to_tf_box,
+    generate_wbsig53,
+    load_raddet_annotations,
+    load_wbsig53_annotations,
+)
 from rfbench.data.prepare.detection import (
+    SOURCE_URLS,
     TRACKS,
     annotations_checksum,
     canonical_split_id,
@@ -283,3 +292,175 @@ def test_prepare_detection_rejects_missing_box_field(tmp_path: Path) -> None:
 def test_prepare_detection_rejects_non_list_boxes(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="must be a list of box mappings"):
         prepare_detection("wbsig53", out_dir=str(tmp_path), samples=[{"boxes": "nope"}])
+
+
+# --- RadDet (REAL published dataset) YOLO box extraction ----------------------------
+#
+# RadDet (ICASSP 2025, arXiv:2501.10407) is the real, static, downloadable wideband
+# detection dataset: spectrogram PNGs with sibling YOLO ``.txt`` box labels. The parse +
+# T-F box conversion + directory walk are all pure stdlib, so the REAL loader is exercised
+# here on a synthetic tree that mimics the published layout -- no numpy/torchsig/network.
+
+
+def _write_raddet_tree(root: Path, tree: dict[str, dict[str, str]]) -> None:
+    """Materialise a synthetic RadDet tree: ``images/<split>/<stem>.png`` + ``.txt``.
+
+    ``tree`` maps ``split -> {stem: yolo_label_text}``. The PNGs are empty placeholders
+    (the loader only reads their names); the ``.txt`` files carry real YOLO rows.
+    """
+    for split, items in tree.items():
+        split_dir = root / "raddet" / "images" / split
+        split_dir.mkdir(parents=True, exist_ok=True)
+        for stem, label_text in items.items():
+            (split_dir / f"{stem}.png").write_bytes(b"")  # placeholder image
+            (split_dir / f"{stem}.txt").write_text(label_text, encoding="utf-8")
+
+
+def _boxes_of(sample: dict[str, object]) -> list[dict[str, object]]:
+    """Narrow a loader sample's ``boxes`` field to a typed list (keeps mypy --strict happy)."""
+    boxes = sample["boxes"]
+    assert isinstance(boxes, list)
+    return boxes
+
+
+def test_yolo_label_text_parses_rows() -> None:
+    """A YOLO label file parses to ``(class_id, xc, yc, w, h)`` rows; blanks are skipped."""
+    text = "0 0.5 0.5 0.2 0.4\n\n  9 0.611153 0.540000 0.250000 0.039563  \n"
+    rows = _parse_yolo_label_text(text)
+    assert rows == [
+        (0, 0.5, 0.5, 0.2, 0.4),
+        (9, 0.611153, 0.540000, 0.250000, 0.039563),
+    ]
+
+
+def test_yolo_label_text_empty_file_is_background_frame() -> None:
+    """An empty label file is a valid background frame (no boxes), not an error."""
+    assert _parse_yolo_label_text("") == []
+    assert _parse_yolo_label_text("\n  \n") == []
+
+
+def test_yolo_label_text_rejects_wrong_field_count() -> None:
+    with pytest.raises(ValueError, match="needs 5 fields"):
+        _parse_yolo_label_text("0 0.5 0.5 0.2")
+
+
+def test_yolo_label_text_rejects_non_numeric() -> None:
+    with pytest.raises(ValueError, match="non-numeric"):
+        _parse_yolo_label_text("0 x 0.5 0.2 0.4")
+
+
+def test_yolo_to_tf_box_center_size_to_extents() -> None:
+    """YOLO center/size maps to T-F extents (x=time, y=freq); class id -> RadDet name."""
+    box = _yolo_to_tf_box(0, 0.5, 0.5, 0.2, 0.4)
+    assert box["class"] == RADDET_CLASSES[0] == "Rect"
+    assert box["t_start"] == pytest.approx(0.4)
+    assert box["t_stop"] == pytest.approx(0.6)
+    assert box["f_low"] == pytest.approx(0.3)
+    assert box["f_high"] == pytest.approx(0.7)
+
+
+def test_yolo_to_tf_box_clamps_subpixel_overflow() -> None:
+    """A box straddling the edge is clamped into normalised [0, 1] (published rounding)."""
+    box = _yolo_to_tf_box(10, 0.02, 0.99, 0.1, 0.1)  # class 10 == FMCW
+    assert box["class"] == "FMCW"
+    assert box["t_start"] == 0.0  # 0.02 - 0.05 -> clamped
+    assert 0.0 <= float(box["t_stop"]) <= 1.0  # type: ignore[arg-type]
+    assert box["f_high"] == 1.0  # 0.99 + 0.05 -> clamped
+
+
+def test_yolo_to_tf_box_unknown_class_falls_back() -> None:
+    """An out-of-range class id degrades to a raw ``class_<id>`` name (no crash)."""
+    box = _yolo_to_tf_box(99, 0.5, 0.5, 0.1, 0.1)
+    assert box["class"] == "class_99"
+
+
+def test_load_raddet_annotations_reads_real_yolo_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The REAL RadDet loader walks images/<split>/*.png + sibling .txt into T-F boxes."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    _write_raddet_tree(
+        tmp_path,
+        {
+            "train": {
+                "000000000000": "0 0.5 0.5 0.2 0.4\n1 0.25 0.25 0.1 0.1\n",
+                "000000000001": "",  # background frame -> no boxes
+            },
+            "val": {"000000000002": "9 0.5 0.5 0.5 0.5\n"},
+        },
+    )
+
+    samples = load_raddet_annotations()
+    by_id = {s["sample_id"]: s for s in samples}
+    # Sample ids are ``<split>/<stem>``; train sorted before val by the walk order.
+    assert set(by_id) == {"train/000000000000", "train/000000000001", "val/000000000002"}
+
+    first_boxes = _boxes_of(by_id["train/000000000000"])
+    assert len(first_boxes) == 2
+    assert first_boxes[0]["class"] == "Rect"
+    assert first_boxes[0]["t_start"] == pytest.approx(0.4)
+
+    # Background frame keeps an empty box list (valid detection negative).
+    assert _boxes_of(by_id["train/000000000001"]) == []
+    assert _boxes_of(by_id["val/000000000002"])[0]["class"] == "LFM"
+
+
+def test_load_raddet_annotations_feeds_prepare_detection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: real loader output is a valid ``samples=`` input for prepare_detection."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    tree = {
+        "train": {f"{i:012d}": "0 0.5 0.5 0.2 0.2\n" for i in range(8)},
+        "val": {f"{i:012d}": "1 0.3 0.3 0.1 0.1\n" for i in range(8, 10)},
+    }
+    _write_raddet_tree(tmp_path, tree)
+
+    samples = load_raddet_annotations()
+    split, manifest, ann_path = prepare_detection(
+        "raddet", out_dir=str(tmp_path / "out"), samples=samples
+    )
+
+    assert manifest.dataset == "raddet"
+    assert manifest.n_items == len(samples) == 10
+    assert split.canonical_split_id == canonical_split_id("raddet", "detection", official=False)
+    assert manifest.source_url == SOURCE_URLS["raddet"]
+    assert ann_path.exists()
+
+
+def test_load_raddet_annotations_missing_tree_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absent RadDet tree raises FileNotFoundError with manual-download guidance."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    with pytest.raises(FileNotFoundError, match="RadDet not found"):
+        load_raddet_annotations()
+
+
+def test_prepare_detection_raddet_records_real_source_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The raddet dataset id records the real Kaggle provenance URL in its manifest."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    _, manifest, _ = prepare_detection(
+        "raddet", out_dir=str(tmp_path), samples=_synthetic_samples(20)
+    )
+    assert manifest.source_url == SOURCE_URLS["raddet"]
+    assert "kaggle.com" in manifest.source_url
+
+
+# --- WBSig53 blocker stubs (generation-only -> no synthetic generation) --------------
+
+
+def test_wbsig53_generate_is_blocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """WBSig53 generation is disabled: real datasets only, no torchsig generation."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    with pytest.raises(NotImplementedError, match="no static published artifact"):
+        generate_wbsig53()
+
+
+def test_wbsig53_load_is_blocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """WBSig53 annotation loading is a documented blocker stub, not faked."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    with pytest.raises(NotImplementedError, match="RadDet"):
+        load_wbsig53_annotations()

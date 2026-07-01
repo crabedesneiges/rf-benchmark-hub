@@ -29,6 +29,8 @@ from rfbench.core.types import SplitName
 from rfbench.data.prepare.sei import (
     CANONICAL_SPLIT_IDS,
     SeiRecord,
+    extract_lora_records,
+    extract_wisig_records,
     prepare_sei,
 )
 
@@ -299,7 +301,7 @@ def test_prepare_sei_cross_receiver_string_group_ids(
 
 def test_prepare_sei_unknown_dataset_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown SEI dataset"):
-        prepare_sei("lora_rffi", "closed_set", out_dir=str(tmp_path), records=[(1, 2, 3)])
+        prepare_sei("nonexistent_dataset", "closed_set", out_dir=str(tmp_path), records=[(1, 2, 3)])
 
 
 def test_prepare_sei_unsupported_condition_raises(tmp_path: Path) -> None:
@@ -319,3 +321,206 @@ def test_prepare_sei_cross_day_requires_day(tmp_path: Path) -> None:
         prepare_sei(
             "wisig", "cross_day", out_dir=str(tmp_path), records=[(1, 100, None), (2, 101, None)]
         )
+
+
+# --- LoRa closed-set (device labels) -------------------------------------------------
+
+
+def test_prepare_sei_lora_closed_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LoRa -> closed_set stratified by device id; rx/day absent (None) is fine here."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    records: list[SeiRecord] = [(dev, None, None) for dev in range(1, 31) for _ in range(10)]
+
+    split, manifest = prepare_sei("lora", "closed_set", out_dir=str(tmp_path), records=records)
+    assert split.canonical_split_id == CANONICAL_SPLIT_IDS["lora"]["closed_set"]
+    assert manifest.dataset == "lora"
+    assert manifest.n_items == 300
+    dev_of = {i: records[i][0] for i in range(len(records))}
+    expected_per_split: tuple[tuple[SplitName, int], ...] = (("train", 8), ("val", 1), ("test", 1))
+    for name, expected in expected_per_split:
+        counts = Counter(dev_of[i] for i in split.indices[name])
+        assert all(counts[dev] == expected for dev in range(1, 31)), name
+    _assert_partition(split.indices, len(records))
+
+
+def test_prepare_sei_lora_no_cross_conditions(tmp_path: Path) -> None:
+    """LoRa is single-condition closed-set only (no receiver/day metadata)."""
+    with pytest.raises(ValueError, match="does not support condition"):
+        prepare_sei("lora", "cross_receiver", out_dir=str(tmp_path), records=[(1, None, None)])
+
+
+# --- pure-Python label extraction on synthetic record layouts ------------------------
+
+
+def _fake_wisig_dataset(
+    txs: tuple[str, ...],
+    rxs: tuple[str, ...],
+    days: tuple[str, ...],
+    per_cell: int,
+    *,
+    equalized_list: tuple[int, ...] = (0,),
+) -> dict[str, object]:
+    """Pure-stdlib mimic of the real WiSig ManyTx compact pickle dict.
+
+    Mirrors the ``wisig-examples`` layout: axis label lists + a 5-level nested ``data``
+    list indexed ``data[tx_i][rx_i][day_i][eq_i]`` whose leaf is a per-signal block. The
+    real leaf is a ``(n, 256, 2)`` ndarray; here it is a plain list of ``per_cell`` rows so
+    the extraction runs with no numpy (``extract_wisig_records`` only needs ``len(block)``).
+    """
+    n_tx, n_rx, n_day, n_eq = len(txs), len(rxs), len(days), len(equalized_list)
+
+    def _cell() -> list[list[float]]:
+        return [[0.0, 0.0] for _ in range(per_cell)]
+
+    data = [
+        [[[_cell() for _ in range(n_eq)] for _ in range(n_day)] for _ in range(n_rx)]
+        for _ in range(n_tx)
+    ]
+    return {
+        "tx_list": list(txs),
+        "rx_list": list(rxs),
+        "capture_date_list": list(days),
+        "equalized_list": list(equalized_list),
+        "data": data,
+    }
+
+
+def test_extract_wisig_records_flattens_tx_rx_day() -> None:
+    """extract_wisig_records emits one (tx, rx, day) per signal, in tx/rx/day order."""
+    txs = ("A", "B")
+    rxs = ("r1", "r2", "r3")
+    days = ("d0", "d1")
+    per_cell = 4
+    dataset = _fake_wisig_dataset(txs, rxs, days, per_cell)
+
+    records = extract_wisig_records(dataset)
+
+    assert len(records) == len(txs) * len(rxs) * len(days) * per_cell
+    # First cell is (tx=A, rx=r1, day=d0) repeated per_cell times.
+    assert records[:per_cell] == [("A", "r1", "d0")] * per_cell
+    # Group ids round-trip: distinct tx/rx/day sets match the axis labels.
+    assert {r[0] for r in records} == set(txs)
+    assert {r[1] for r in records} == set(rxs)
+    assert {r[2] for r in records} == set(days)
+
+
+def test_extract_wisig_records_feeds_prepare_sei(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Records extracted from the fake ManyTx dict drive all three WiSig conditions."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    dataset = _fake_wisig_dataset(
+        ("A", "B", "C"),
+        tuple(f"r{k}" for k in range(10)),
+        tuple(f"d{k}" for k in range(10)),
+        per_cell=1,
+    )
+    records = extract_wisig_records(dataset)
+
+    for condition in ("closed_set", "cross_receiver", "cross_day"):
+        split, _ = prepare_sei("wisig", condition, out_dir=str(tmp_path), records=records)
+        _assert_partition(split.indices, len(records))
+
+
+def test_extract_wisig_records_selects_equalized_slot() -> None:
+    """The equalized= slot selects the matching eq_i axis; unknown values raise."""
+    dataset = _fake_wisig_dataset(("A",), ("r1",), ("d0",), per_cell=3, equalized_list=(0, 1))
+    # eq slot 1 is empty in this fixture (only slot 0 populated) -> different length.
+    # Populate slot 1 explicitly to make the selection observable.
+    data = dataset["data"]
+    assert isinstance(data, list)
+    data[0][0][0][1] = [[0.0, 0.0]] * 5  # eq=1 has 5 signals
+
+    recs_eq0 = extract_wisig_records(dataset, equalized=0)
+    recs_eq1 = extract_wisig_records(dataset, equalized=1)
+    assert len(recs_eq0) == 3
+    assert len(recs_eq1) == 5
+
+    with pytest.raises(ValueError, match="equalized"):
+        extract_wisig_records(dataset, equalized=9)
+
+
+def test_extract_wisig_records_missing_field_raises() -> None:
+    with pytest.raises(ValueError, match="tx_list"):
+        extract_wisig_records({"rx_list": [], "capture_date_list": [], "equalized_list": [0]})
+
+
+def test_extract_lora_records_maps_device_labels() -> None:
+    """extract_lora_records turns a flat device-id label vector into closed-set records."""
+    labels = [1, 1, 2, 2, 2, 3]
+    records = extract_lora_records(labels)
+    assert records == [
+        (1, None, None),
+        (1, None, None),
+        (2, None, None),
+        (2, None, None),
+        (2, None, None),
+        (3, None, None),
+    ]
+    assert {r[0] for r in records} == {1, 2, 3}
+
+
+# --- heavy-format parser tests (SKIP without numpy/h5py, RUN on the [data] venv) ------
+
+
+def test_load_wisig_records_reads_real_pickle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """load_wisig_records round-trips a REAL pickle in the ManyTx layout (needs numpy).
+
+    Skipped in the dependency-free venv (the loader imports numpy lazily); runs on the
+    cluster [data] venv. The fixture is a genuine pickle whose leaves are numpy arrays of
+    the real ``(n, 256, 2)`` shape, so this exercises the actual on-disk parse path.
+    """
+    np = pytest.importorskip("numpy")
+    import pickle
+
+    from rfbench.data.prepare.sei import load_wisig_records
+
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    txs, rxs, days, per_cell = ("A", "B"), ("r1", "r2"), ("d0",), 3
+    dataset = _fake_wisig_dataset(txs, rxs, days, per_cell)
+    # Replace stdlib leaves with real (n, 256, 2) float32 arrays.
+    data = dataset["data"]
+    assert isinstance(data, list)
+    for tx_i in range(len(txs)):
+        for rx_i in range(len(rxs)):
+            for day_i in range(len(days)):
+                data[tx_i][rx_i][day_i][0] = np.zeros((per_cell, 256, 2), dtype=np.float32)
+
+    wisig_dir = tmp_path / "wisig"
+    wisig_dir.mkdir(parents=True)
+    with (wisig_dir / "ManyTx.pkl").open("wb") as fh:
+        pickle.dump(dataset, fh)
+
+    records = load_wisig_records(cache=str(tmp_path))
+    assert len(records) == len(txs) * len(rxs) * len(days) * per_cell
+    assert records[0] == ("A", "r1", "d0")
+
+
+def test_load_lora_records_reads_real_hdf5(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """load_lora_records round-trips a REAL HDF5 in the LoRa layout (needs numpy + h5py).
+
+    Skipped in the dependency-free venv; runs on the cluster [data] venv. Writes a genuine
+    HDF5 with a ``(1, N)`` 1-indexed ``label`` row and a matching ``data`` matrix, then
+    checks the loader recovers one record per packet with the right device ids.
+    """
+    np = pytest.importorskip("numpy")
+    h5py = pytest.importorskip("h5py")
+
+    from rfbench.data.prepare.sei import load_lora_records
+
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    lora_dir = tmp_path / "lora"
+    lora_dir.mkdir(parents=True)
+    # 1-indexed device labels for 6 packets across 3 devices; data is (N, 2*L).
+    labels = np.array([[1, 1, 2, 2, 3, 3]], dtype=np.int64)  # shape (1, N)
+    data = np.zeros((6, 8), dtype=np.float32)
+    with h5py.File(lora_dir / "dataset_training_aug.h5", "w") as fh:
+        fh.create_dataset("label", data=labels)
+        fh.create_dataset("data", data=data)
+
+    records = load_lora_records(cache=str(tmp_path))
+    assert len(records) == 6
+    assert [r[0] for r in records] == [1, 1, 2, 2, 3, 3]
+    assert all(r[1] is None and r[2] is None for r in records)

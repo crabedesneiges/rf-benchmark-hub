@@ -4,16 +4,21 @@ Builds the canonical split per the SPLIT POLICY (``docs/EVALUATION_PROTOCOL.md``
 
 * **RadioML 2016.10a / 2018.01a** have no canonical literature split -> a deterministic
   **80/10/10** split **stratified by (modulation x snr)**, seed 42. Canonical ids
-  ``amc-radioml2016-strat-snr-8010-seed42-v1`` / ``amc-radioml2018-...``.
-* **Sig53** ships the official TorchSig split -> adopt it verbatim
-  (``adopt_official_split``), id ``amc-sig53-official-v1``.
+  ``amc-radioml2016-strat-snr-8010-seed42-v1`` / ``amc-radioml2018-...``. Both are fetched as
+  the REAL published DeepSig artifacts (pickle / HDF5) -- see
+  :mod:`rfbench.data.download.amc_radioml`.
+* **Sig53** would adopt the official TorchSig split verbatim (``adopt_official_split``, id
+  ``amc-sig53-official-v1``) -- BUT Sig53 has no static published release (generation-only via
+  TorchSig), so per policy we do NOT synthesise it and the track is BLOCKED. Both
+  :func:`load_sig53_official_split` and :func:`rfbench.data.download.amc_sig53.download_sig53`
+  raise a clear blocker; the ``prepare_amc`` official-split path still works if a real split is
+  ever supplied.
 
 Split GENERATION is decoupled from data loading: :func:`prepare_amc` accepts
 already-extracted ``(modulation, snr_db)`` label tuples (RadioML) or an explicit official
 partition (Sig53), so the whole path runs on pure-stdlib synthetic fixtures with no numpy.
-The heavy label EXTRACTION from the real ``.h5`` / TorchSig files lives in the lazy
-loaders below (:func:`load_radioml_labels`, :func:`load_sig53_official_split`), which are
-never called in unit tests.
+The heavy label EXTRACTION from the real pickle / ``.h5`` files lives in the lazy loaders
+below (:func:`load_radioml_labels`), which are never called in unit tests.
 
 Module top imports are stdlib + the frozen core contracts only; numpy/h5py/torchsig are
 imported lazily inside the loaders with a clear ``pip install rfbench[data]`` error.
@@ -21,7 +26,7 @@ imported lazily inside the loaders with a clear ``pip install rfbench[data]`` er
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Sized
 from pathlib import Path
 from typing import Literal
 
@@ -45,8 +50,8 @@ CANONICAL_SPLIT_IDS: dict[str, str] = {
 
 #: Official source URL recorded in each dataset's manifest (provenance, never redistributed).
 SOURCE_URLS: dict[str, str] = {
-    "radioml_2016_10a": "https://www.deepsig.ai/datasets/",
-    "radioml_2018_01a": "https://www.deepsig.ai/datasets/",
+    "radioml_2016_10a": "https://opendata.deepsig.io/datasets/2016.10/RML2016.10a.tar.bz2",
+    "radioml_2018_01a": "https://opendata.deepsig.io/datasets/2018.01/2018.01.OSC.0001_1024x2M.h5.tar.gz",
     "sig53": "https://github.com/TorchDSP/torchsig",
 }
 
@@ -147,30 +152,54 @@ def load_radioml_labels(
 
 
 def _load_radioml2016_labels(cache_dir: Path) -> list[tuple[str, int]]:
-    """Read ``(mod, snr)`` per item from the RadioML 2016.10a pickle (lazy numpy/pickle)."""
-    try:
-        import pickle
-    except ModuleNotFoundError as exc:  # pragma: no cover - pickle is stdlib
-        raise RuntimeError("pickle is required to read RadioML 2016.10a") from exc
+    """Read ``(mod, snr)`` per item from the RadioML 2016.10a pickle (stdlib pickle).
+
+    The published ``RML2016.10a_dict.pkl`` is a ``dict`` keyed by ``(modulation, snr)`` whose
+    values are per-cell signal blocks of shape ``[N, 2, 128]`` (numpy on the real file, but any
+    length-supporting sequence in a fixture). We expand each key to ``N`` per-item labels using
+    only ``len(block)`` (the number of items in the cell), so this parser is exercisable on a
+    pure-stdlib pickle fixture -- no numpy import is needed to extract the labels.
+    """
+    import pickle  # stdlib
 
     path = cache_dir / "radioml_2016_10a" / "RML2016.10a_dict.pkl"
     if not path.exists():
         raise FileNotFoundError(
             f"RadioML 2016.10a not found at {path}; run the download step first "
-            "(rfbench.data.download.amc_radioml)."
+            "(rfbench.data.download.amc_radioml.download_radioml)."
         )
     with path.open("rb") as fh:
         table = pickle.load(fh, encoding="latin1")  # noqa: S301 - trusted local dataset file
 
+    return _expand_radioml2016_table(table)
+
+
+def _expand_radioml2016_table(
+    table: Mapping[tuple[object, object], Sized],
+) -> list[tuple[str, int]]:
+    """Expand a ``{(mod, snr): block}`` table into one ``(mod, snr)`` label per item.
+
+    Split out from :func:`_load_radioml2016_labels` so the label-extraction logic (the only
+    part with real parsing semantics) is unit-testable on a pure-stdlib fixture that mimics the
+    published ``dict[(mod, snr) -> [N, 2, 128]]`` layout, with no numpy and no pickle file. The
+    block value need only be :class:`~typing.Sized` (real: ``ndarray[N, 2, 128]``; fixture:
+    nested list of length ``N``) since we take just ``len(block)`` -- the item count in the cell.
+    """
     labels: list[tuple[str, int]] = []
-    for (mod, snr), array in table.items():
-        n = len(array)
-        labels.extend((str(mod), int(snr)) for _ in range(n))
+    for (mod, snr), block in table.items():
+        n = len(block)
+        labels.extend((str(mod), int(str(snr))) for _ in range(n))
     return labels
 
 
 def _load_radioml2018_labels(cache_dir: Path) -> list[tuple[str, int]]:
-    """Read ``(mod, snr)`` per item from the RadioML 2018.01a HDF5 (lazy numpy/h5py)."""
+    """Read ``(mod, snr)`` per item from the RadioML 2018.01a HDF5 (lazy numpy/h5py).
+
+    The published ``GOLD_XYZ_OSC.0001_1024.hdf5`` holds three datasets: ``X`` ``(N, 1024, 2)``
+    signals, ``Y`` ``(N, 24)`` one-hot modulation, ``Z`` ``(N, 1)`` (or ``(N,)``) SNR in dB.
+    We only need ``Y``/``Z`` for stratification. The pure-index conversion is factored into
+    :func:`_radioml2018_labels_from_arrays`, so the label logic is testable without HDF5.
+    """
     try:
         import h5py
         import numpy as np
@@ -184,16 +213,30 @@ def _load_radioml2018_labels(cache_dir: Path) -> list[tuple[str, int]]:
     if not path.exists():
         raise FileNotFoundError(
             f"RadioML 2018.01a not found at {path}; run the download step first "
-            "(rfbench.data.download.amc_radioml)."
+            "(rfbench.data.download.amc_radioml.download_radioml)."
         )
-    # 24 canonical modulation classes in 2018.01a, in the dataset's one-hot column order.
-    mod_classes = _RADIOML2018_MODS
     with h5py.File(path, "r") as handle:
-        onehot = handle["Y"][:]  # (N, 24) one-hot modulation
-        snr = handle["Z"][:]  # (N, 1) SNR in dB
-    mod_idx = np.asarray(onehot).argmax(axis=1)
-    snr_flat = np.asarray(snr).reshape(-1).astype(int)
-    return [(mod_classes[int(m)], int(s)) for m, s in zip(mod_idx, snr_flat, strict=True)]
+        onehot = np.asarray(handle["Y"][:])  # (N, 24) one-hot modulation
+        snr = np.asarray(handle["Z"][:])  # (N, 1) or (N,) SNR in dB
+    mod_idx = [int(i) for i in onehot.argmax(axis=1)]
+    snr_flat = [int(s) for s in snr.reshape(-1)]
+    return _radioml2018_labels_from_arrays(mod_idx, snr_flat)
+
+
+def _radioml2018_labels_from_arrays(
+    mod_idx: Sequence[int],
+    snr_db: Sequence[int],
+) -> list[tuple[str, int]]:
+    """Map decoded (one-hot argmax) modulation indices + SNRs to ``(mod_name, snr)`` labels.
+
+    Pure Python: given the per-item modulation column index and SNR (already extracted from the
+    HDF5 ``Y``/``Z`` datasets), resolve each index through the canonical 24-class order. Kept
+    numpy-free so the class-mapping logic is unit-testable on plain lists.
+    """
+    if len(mod_idx) != len(snr_db):
+        raise ValueError(f"mod/snr length mismatch: {len(mod_idx)} vs {len(snr_db)}")
+    mod_classes = _RADIOML2018_MODS
+    return [(mod_classes[m], int(s)) for m, s in zip(mod_idx, snr_db, strict=True)]
 
 
 #: Canonical 24-class modulation order of RadioML 2018.01a (Y one-hot column order).
@@ -228,25 +271,22 @@ _RADIOML2018_MODS: tuple[str, ...] = (
 def load_sig53_official_split(
     cache: str | Path | None = None,
 ) -> dict[str, list[int]]:
-    """Extract the official TorchSig Sig53 train/val(/test) partition as index lists.
+    """Report the Sig53 blocker: no static release, so no official split to extract.
 
-    TorchSig ships Sig53 already partitioned (``impaired`` train/val roots); this maps the
-    on-disk partition to explicit ``{"train": [...], "val": [...], "test": [...]}`` index
-    lists suitable for :func:`prepare_amc`'s ``official_split=``. ``torchsig`` is imported
-    lazily. Never called in unit tests (needs TorchSig + generated data).
+    Sig53 has NO statically-downloadable published artifact -- it is generation-only via
+    TorchSig -- and RF-Benchmark does not synthesise datasets in lieu of a real published
+    release (see :mod:`rfbench.data.download.amc_sig53`). There is therefore nothing on disk
+    to extract an official split from, and this always raises :class:`NotImplementedError`
+    with the same actionable blocker message as :func:`download_sig53`. If the team opts in to
+    on-cluster TorchSig generation as a separate reviewed step, wire this to the concrete
+    ``torchsig.datasets`` layout there and feed the result to :func:`prepare_amc` via
+    ``official_split=``. Never called in unit tests.
     """
-    resolve_cache_dir(cache)  # validate cache resolution eagerly; TorchSig reads real files
-    try:
-        import torchsig  # noqa: F401 - imported to surface the clear install error early
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "Sig53 uses the official TorchSig split; install TorchSig with "
-            "`pip install rfbench[detection]` (provides torchsig) to read it."
-        ) from exc
-    raise NotImplementedError(
-        "Sig53 official-split extraction runs on the cluster against a generated TorchSig "
-        "dataset; wire it to the concrete torchsig.datasets.Sig53 layout there."
-    )
+    resolve_cache_dir(cache)  # keep the cache-resolution contract identical to the real loader
+    from rfbench.data.download.amc_sig53 import download_sig53
+
+    # Delegates to the single source of truth for the blocker message + expected root path.
+    return download_sig53(cache=cache)  # type: ignore[return-value]  # always raises
 
 
 __all__ = [

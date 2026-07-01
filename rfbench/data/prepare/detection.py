@@ -1,17 +1,26 @@
-"""Wideband detection (WBSig53) canonical splits + T-F box annotations -- WP-13.
+"""Wideband detection canonical splits + T-F box annotations -- WP-13.
 
 Builds the canonical split per the SPLIT POLICY (``docs/EVALUATION_PROTOCOL.md``
 §Wideband detection):
 
-* adopt the **official WBSig53/TorchSig split** verbatim when one is provided;
+* adopt the **official split** verbatim when one is provided;
 * otherwise a deterministic **80/10/10** split over samples, seed 42.
 
-Canonical ids ``detect-wbsig53-<track>-8010-seed42-v1`` (generated) /
-``detect-wbsig53-<track>-official-v1`` (adopted), where ``<track>`` keeps the
+Canonical ids ``detect-<dataset>-<track>-8010-seed42-v1`` (generated) /
+``detect-<dataset>-<track>-official-v1`` (adopted), where ``<track>`` keeps the
 **detection** and **recognition** tracks distinct: the *detection* track scores signal
 presence/localisation (boxes only), the *recognition* track additionally scores the
 per-box signal class. Both tracks share the same samples but are prepared and reported
 separately (never mixed in one column).
+
+Dataset choice (see :data:`SOURCE_URLS`): the protocol names **WBSig53**, but WBSig53 has
+no static published artifact -- it is generated via TorchSig, which the data-layer rule
+forbids (real published datasets only). WBSig53 is therefore a blocker (kept as a
+documented stub in the download module). The real, static, published stand-in used by a
+reference wideband-detection paper is **RadDet** (ICASSP 2025, arXiv:2501.10407): published
+spectrograms with time-frequency bounding boxes in YOLO format. Both ids are supported here
+so the split/annotation machinery is dataset-agnostic; ``raddet`` is the one that resolves
+to real data on the cluster.
 
 Unlike AMC (a single scalar label per item), each detection sample carries a *list of
 time-frequency boxes*. The frozen :class:`~rfbench.core.manifest.DatasetManifest` has no
@@ -22,9 +31,9 @@ boxes with a stable checksum.
 Split GENERATION + annotation recording are decoupled from data loading:
 :func:`prepare_detection` accepts already-extracted per-sample boxes (plain Python dicts),
 so the whole path runs on pure-stdlib synthetic fixtures with no numpy/torchsig. The heavy
-box EXTRACTION from the generated TorchSig root lives in the lazy
-:func:`rfbench.data.download.detection_wbsig53.load_wbsig53_annotations`, never called in
-unit tests.
+box EXTRACTION from the real dataset root lives in the lazy
+:func:`rfbench.data.download.detection_wbsig53.load_raddet_annotations` (RadDet;
+``load_wbsig53_annotations`` remains a blocker stub), never called in unit tests.
 
 Module-top imports are stdlib + the frozen core contracts only.
 """
@@ -44,8 +53,10 @@ from rfbench.data.prepare._common import (
     prepare_from_official,
 )
 
-#: The wideband-detection datasets this WP prepares.
-DetectionDataset = Literal["wbsig53"]
+#: The wideband-detection datasets this WP prepares. ``raddet`` is the real, published
+#: dataset (ICASSP 2025); ``wbsig53`` is the protocol-named dataset kept for compatibility
+#: but blocked (generation-only, see the download module).
+DetectionDataset = Literal["raddet", "wbsig53"]
 
 #: The two reporting tracks kept distinct (detection = boxes only, recognition = +class).
 DetectionTrack = Literal["detection", "recognition"]
@@ -53,8 +64,19 @@ DetectionTrack = Literal["detection", "recognition"]
 #: Recognised tracks (kept in lockstep with :data:`DetectionTrack`).
 TRACKS: tuple[DetectionTrack, DetectionTrack] = ("detection", "recognition")
 
-#: Official source URL recorded in the manifest (provenance; never redistributed, D3).
-SOURCE_URL = "https://github.com/TorchDSP/torchsig"
+#: Official source URL per dataset, recorded in the manifest (provenance; never
+#: redistributed, D3). RadDet is the real published artifact; WBSig53 points at TorchSig
+#: (its generation-only origin).
+SOURCE_URLS: dict[str, str] = {
+    "raddet": "https://www.kaggle.com/datasets/abcxyzi/raddet-icassp-2025",
+    "wbsig53": "https://github.com/TorchDSP/torchsig",
+}
+
+#: Fallback provenance URL for a dataset id not in :data:`SOURCE_URLS`.
+_DEFAULT_SOURCE_URL = "https://github.com/abcxyzi/RadDet"
+
+#: Backward-compatible alias (WBSig53 provenance); prefer :data:`SOURCE_URLS`.
+SOURCE_URL = SOURCE_URLS["wbsig53"]
 
 
 def canonical_split_id(
@@ -118,6 +140,7 @@ def prepare_detection(
     boxes_by_sample = _normalise_samples(samples)
     is_official = official_split is not None
     split_id = canonical_split_id(dataset, track, official=is_official)
+    source_url = SOURCE_URLS.get(str(dataset), _DEFAULT_SOURCE_URL)
 
     if is_official:
         assert official_split is not None  # narrowed for mypy; guarded by is_official
@@ -125,7 +148,7 @@ def prepare_detection(
             dataset=dataset,
             split_id=split_id,
             official=official_split,
-            source_url=SOURCE_URL,
+            source_url=source_url,
             out_dir=out_dir,
             source_checksums=source_checksums,
             seed=seed,
@@ -136,7 +159,7 @@ def prepare_detection(
             split_id=split_id,
             n_items=n_items,
             strata=None,  # detection: one box-set per sample, no scalar stratum label
-            source_url=SOURCE_URL,
+            source_url=source_url,
             out_dir=out_dir,
             source_checksums=source_checksums,
             seed=seed,
@@ -266,6 +289,7 @@ __all__ = [
     "DetectionTrack",
     "TRACKS",
     "SOURCE_URL",
+    "SOURCE_URLS",
     "canonical_split_id",
     "prepare_detection",
     "write_detection_annotations",

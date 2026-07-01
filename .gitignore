@@ -1,7 +1,9 @@
 # --- Données & artefacts lourds : JAMAIS en git (voir CLAUDE.md) ---
-data/
-datasets/
-checkpoints/
+# NB: ancrés à la racine (/) pour ne PAS masquer le sous-package rfbench/data/.
+# Les données brutes restent bloquées partout par les règles d'extension ci-dessous + le garde-fou CI.
+/data/
+/datasets/
+/checkpoints/
 *.pt
 *.ckpt
 *.pth

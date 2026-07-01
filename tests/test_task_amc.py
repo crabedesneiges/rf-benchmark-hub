@@ -290,3 +290,34 @@ def test_end_to_end_writes_valid_json(tmp_path: Path) -> None:
     on_disk = json.loads(out_path.read_text(encoding="utf-8"))
     assert on_disk == result
     Draft202012Validator(_load_schema()).validate(on_disk)
+
+
+# --- on-disk loader: index alignment (regression guard, WP-30) ------------------------
+
+
+def test_radioml2016_arrays_align_with_prepare_labels(tmp_path: Path) -> None:
+    """The on-disk IQ flatten order MUST equal prepare's label order (else indices corrupt).
+
+    numpy-guarded: skips in the dep-free venv, runs on the cluster [tasks]/[data] venv.
+    """
+    np = pytest.importorskip("numpy")
+    import pickle
+
+    from rfbench.data.prepare.amc import _expand_radioml2016_table
+    from rfbench.tasks.amc.dataset import _load_radioml2016_arrays
+
+    table = {
+        ("BPSK", 0): np.zeros((2, 2, 128), dtype=np.float32),
+        ("QPSK", 10): np.ones((3, 2, 128), dtype=np.float32),
+        ("GFSK", -4): np.full((1, 2, 128), 0.5, dtype=np.float32),
+    }
+    ds_dir = tmp_path / "radioml_2016_10a"
+    ds_dir.mkdir(parents=True)
+    (ds_dir / "RML2016.10a_dict.pkl").write_bytes(pickle.dumps(table))
+
+    iq, mods, snrs = _load_radioml2016_arrays(tmp_path)
+    labels = _expand_radioml2016_table(table)
+
+    assert len(iq) == len(labels) == 6
+    assert list(zip(mods, snrs, strict=True)) == labels  # identical order == index alignment
+    assert iq[0].shape == (2, 128)

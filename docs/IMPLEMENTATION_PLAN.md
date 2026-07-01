@@ -116,7 +116,9 @@ plus sans revue. (Implémentations détaillées dans le scaffold `rfbench/core/`
 - `Dataset` : `download()`, `prepare()` (→ splits déterministes + manifest), `load(split)`,
   `canonical_split_id`, `checksum`.
 - `Metric` : `update(pred, target, meta)`, `compute() -> dict`, `primary_key` (métrique de tri).
-- `Model` : `forward(x)`, `embed(x)` (pour linear_probe/few_shot), `regime`, `n_params`.
+- `Model` : `forward(x)`, `embed(x)` (pour linear_probe/few_shot), `n_params` (+ `name`/`family`).
+  *Le régime n'est pas un attribut du `Model` : il est porté par `RegimeSpec`, passé à `evaluate()`
+  (adaptateur) puis écrit dans `result.json` — cf. la note « Régimes » ci-dessous.*
 - `evaluate(model, task, split, regime) -> result.json` conforme à `schemas/result.schema.json`.
 
 **Régimes** (D5) implémentés comme *adaptateurs* autour d'un `Model` :

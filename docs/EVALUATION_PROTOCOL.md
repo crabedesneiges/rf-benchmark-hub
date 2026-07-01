@@ -16,9 +16,11 @@ Any change here that alters a metric or split is a **breaking change** → bump 
 - **Metrics**: closed-set → `rank1_accuracy` (**primary**); open-set → `auroc`, `eer`.
 
 ## Wideband detection
-- **Dataset**: WBSig53 (impaired).
-- **Split** (per split policy): adopt the official WBSig53/TorchSig split if provided; else **80/10/10**,
-  seed 42 → `detect-wbsig53-<split>-v1`.
+- **Dataset**: **RadDet** (ICASSP 2025 — real published spectrogram images + YOLO time-frequency box
+  annotations, 11 classes). *WBSig53 (TorchSig) is generation-only with no static published artifact, so
+  it is excluded under the "use real published datasets, do not generate" policy.*
+- **Split** (per split policy): adopt RadDet's official train/val/test split if provided; else **80/10/10**,
+  seed 42 → `detect-raddet-<track>-v1`.
 - **Metrics**: `mAP` (**primary**), `mAR`, `IoU`; report detection vs recognition tracks.
 
 ## Spectrum sensing (Wave B)

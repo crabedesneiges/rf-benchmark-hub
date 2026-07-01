@@ -1,16 +1,35 @@
-"""``rfbench`` command-line interface (Sprint-0 stub surface).
+"""``rfbench`` command-line interface (WP-42: wired to the real harness).
 
 The entry point (``pyproject`` ``[project.scripts]``) is ``rfbench = "rfbench.cli:main"``. The whole
 CLI is built on the stdlib :mod:`argparse` (no click/typer -> one fewer runtime dependency). The
-full subcommand tree, flags and help strings are wired now; leaf bodies are stubs that print a
-one-line intent and exit, EXCEPT ``rfbench eval`` which already emits a schema-valid ``result.json``
-skeleton so that downstream tooling/tests have a real artifact to consume.
+full subcommand tree, flags and help strings are stable; the leaf bodies now dispatch to the real
+implementations:
+
+* ``data prepare`` -> :mod:`rfbench.data.prepare` (``prepare_amc`` / ``prepare_sei`` /
+  ``prepare_detection``): builds deterministic split indices + manifests under
+  ``leaderboard/splits/<dataset>/``. The split-GENERATION path is exercisable on pure-stdlib
+  synthetic labels via ``--labels-file``; without it the CLI drives the lazy cluster-only loaders
+  (``rfbench[data]`` / ``rfbench[detection]``).
+* ``data download`` -> :mod:`rfbench.data.download` (requests/torchsig lazy; cluster-only).
+* ``data list`` -> enumerate the known tasks/datasets and their prepared status.
+* ``data verify`` -> recompute on-disk split-index checksums and diff vs the manifest.
+* ``eval`` -> assembles a schema-valid ``result.json`` through a :mod:`rfbench.regimes` adapter
+  (``make_adapter(RegimeSpec)``), preserving the ``--k-shot`` <-> ``few_shot`` coupling and the
+  frozen result contract.
+* ``submit --check`` -> validate a ``result.json`` against ``schemas/result.schema.json`` plus a
+  basic manifest-completeness gate.
+* ``leaderboard build`` -> :func:`leaderboard.site.generate.build_site`.
+* ``verify`` -> maintainer stub (WP-53); parses args cleanly.
+
+Every heavy or optional import (``jsonschema``, numpy/h5py/torch/torchsig/requests, and the
+``leaderboard/site`` generator) is performed LAZILY inside the handler that needs it, so
+``import rfbench`` and ``rfbench --help`` stay dependency-free.
 
 POSIX exit codes are honoured throughout:
 
 * ``0`` success,
 * ``2`` usage error (argparse, or the ``--k-shot`` <-> ``few_shot`` coupling check),
-* ``1`` validation / verification failure (e.g. an emitted result fails schema validation).
+* ``1`` validation / verification / runtime failure (e.g. a result fails schema validation).
 
 Paths always default to the repo layout or ``$RFBENCH_CACHE``; nothing is hard-coded to an absolute
 location.
@@ -22,16 +41,24 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Callable
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 from rfbench import __version__
 
+if TYPE_CHECKING:
+    from rfbench.core.model import RegimeSpec
+
+#: A ``--labels-file`` payload: pre-extracted labels/records/samples keyed by family field.
+LabelsPayload = dict[str, Any]
+
 # --- Exit codes (POSIX-ish convention shared across the CLI) ---
 EXIT_OK = 0
-EXIT_FAILURE = 1  # validation / verification failure
+EXIT_FAILURE = 1  # validation / verification / runtime failure
 EXIT_USAGE = 2  # usage error
 
 # --- Canonical enumerations (in sync with docs/EVALUATION_PROTOCOL.md + the JSON schema) ---
@@ -49,31 +76,51 @@ DATASET_NAMES: tuple[str, ...] = (
     "deepsense",
 )
 
-# Per-task Sprint-0 defaults used to assemble the eval skeleton. Kept minimal and
-# normative-adjacent: the real values become authoritative once the task registry (WP-20..23) lands.
+#: Which prepare task each dataset belongs to, and the family of prepare_* it dispatches to.
+#: Kept in lockstep with the ``rfbench.data.prepare`` modules (WP-11/12/13).
+_DATASET_FAMILY: dict[str, str] = {
+    "radioml_2016_10a": "amc",
+    "radioml_2018_01a": "amc",
+    "sig53": "amc",
+    "wisig": "sei",
+    "oracle": "sei",
+    "wbsig53": "detection",
+}
+
+#: Datasets a given data task can prepare (task name -> concrete datasets).
+_TASK_DATASETS: dict[str, tuple[str, ...]] = {
+    "amc": ("radioml_2016_10a", "radioml_2018_01a", "sig53"),
+    "sei": ("wisig", "oracle"),
+    "wideband_detection": ("wbsig53",),
+    "detection": ("wbsig53",),
+}
+
+# Per-task eval defaults used to assemble the result.json when no task registry row exists yet
+# (the tasks/ registry lands with WP-20..23). The regime is still declared via a real
+# rfbench.regimes adapter so the k<->few_shot coupling is enforced by the same code paths eval uses.
 _TASK_DEFAULTS: dict[str, dict[str, str]] = {
     "amc": {
         "dataset": "radioml_2016_10a",
         "primary": "accuracy_overall",
-        "canonical_split_id": "amc-strat-snr-seed42-v1",
+        "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
         "track": "closed_set",
     },
     "sei": {
         "dataset": "wisig",
         "primary": "rank1_accuracy",
-        "canonical_split_id": "sei-closed-set-seed42-v1",
+        "canonical_split_id": "sei-wisig-closedset-strat-tx-8010-seed42-v1",
         "track": "closed_set",
     },
     "wideband_detection": {
         "dataset": "wbsig53",
         "primary": "mAP",
-        "canonical_split_id": "wideband-detection-seed42-v1",
+        "canonical_split_id": "detect-wbsig53-detection-8010-seed42-v1",
         "track": "detection",
     },
     "spectrum_sensing": {
         "dataset": "deepsense",
         "primary": "pd@pfa=0.1",
-        "canonical_split_id": "spectrum-sensing-seed42-v1",
+        "canonical_split_id": "sensing-deepsense-8010-seed42-v1",
         "track": "occupancy",
     },
 }
@@ -83,7 +130,7 @@ _PLACEHOLDER_CHECKSUM = "sha256:" + "0" * 64
 
 
 # --------------------------------------------------------------------------------------------------
-# Schema resolution + validation (used by `rfbench eval` before it writes result.json)
+# Schema resolution + validation (used by `rfbench eval` and `rfbench submit --check`)
 # --------------------------------------------------------------------------------------------------
 def _resolve_schema_path(schema_name: str) -> Path | None:
     """Locate a JSON schema file.
@@ -109,21 +156,22 @@ def _resolve_schema_path(schema_name: str) -> Path | None:
     return None
 
 
-def _validate_result(document: dict[str, Any]) -> list[str]:
-    """Validate a result document against ``result.schema.json``.
+def _validate_against_schema(document: dict[str, Any], schema_name: str) -> list[str]:
+    """Validate ``document`` against ``schema_name`` and return human-readable error strings.
 
-    Returns a list of human-readable error messages (empty means valid). If the schema cannot be
-    located or ``jsonschema`` is unavailable, a single explanatory error is returned so the caller
-    fails loudly rather than silently emitting an unvalidated artifact.
+    Returns an empty list when the document is valid. If the schema cannot be located or
+    ``jsonschema`` is unavailable, a single explanatory error is returned so the caller fails
+    loudly rather than silently accepting an unvalidated artifact. ``jsonschema`` is imported
+    lazily so ``import rfbench`` stays dependency-free.
     """
-    schema_path = _resolve_schema_path("result.schema.json")
+    schema_path = _resolve_schema_path(schema_name)
     if schema_path is None:
-        return ["could not locate result.schema.json (checked rfbench/_schemas and repo schemas/)"]
+        return [f"could not locate {schema_name} (checked rfbench/_schemas and repo schemas/)"]
 
     try:
         from jsonschema import Draft202012Validator
     except ModuleNotFoundError:
-        return ["jsonschema is not installed; run `pip install rfbench` to validate result.json"]
+        return ["jsonschema is not installed; run `pip install rfbench` to validate JSON"]
 
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     validator = Draft202012Validator(schema)
@@ -134,6 +182,14 @@ def _validate_result(document: dict[str, Any]) -> list[str]:
     ]
 
 
+def _validate_result(document: dict[str, Any]) -> list[str]:
+    """Validate a result document against ``result.schema.json``.
+
+    Thin wrapper over :func:`_validate_against_schema`.
+    """
+    return _validate_against_schema(document, "result.schema.json")
+
+
 # --------------------------------------------------------------------------------------------------
 # Shared helpers
 # --------------------------------------------------------------------------------------------------
@@ -142,54 +198,327 @@ def _default_cache() -> str:
     return os.environ.get("RFBENCH_CACHE", str(Path.cwd() / ".rfbench_cache"))
 
 
+def _repo_root() -> Path:
+    """Best-effort repo root: the nearest ancestor of this file that holds a ``schemas/`` dir.
+
+    Used to default ``data prepare``'s output tree to ``<repo>/leaderboard`` and to locate the
+    non-packaged ``leaderboard/site/generate.py`` module. Falls back to the current working
+    directory when running from an installed wheel with no source checkout nearby.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "schemas").is_dir():
+            return parent
+    return Path.cwd()
+
+
 def _print_intent(message: str, *, verbose: bool) -> None:
     """Emit a one-line intent for a stub subcommand (and a hint when verbose)."""
     print(message)
     if verbose:
-        print("  (Sprint-0 stub: no side effects were performed.)")
+        print("  (stub: no side effects were performed.)")
 
 
 # --------------------------------------------------------------------------------------------------
-# Leaf handlers
+# `data` handlers
 # --------------------------------------------------------------------------------------------------
-def _cmd_data_download(args: argparse.Namespace) -> int:
-    _print_intent(
-        f"[data download] would fetch raw '{args.dataset}' into cache={args.cache} "
-        "(writes no git-tracked files) — not yet implemented (WP-11..14).",
-        verbose=args.verbose,
+def _resolve_prepare_targets(target: str, dataset: str | None) -> list[str]:
+    """Map a ``prepare`` target (task or dataset) + optional ``--dataset`` to concrete datasets.
+
+    ``target`` may be a data task (``amc`` / ``sei`` / ``wideband_detection`` / ``detection``) or a
+    concrete dataset id. ``--dataset`` narrows a task target to a single dataset. Raises
+    ``ValueError`` (surfaced as a usage error) on an unknown/mismatched combination.
+    """
+    if dataset is not None:
+        if dataset not in DATASET_NAMES:
+            raise ValueError(f"unknown --dataset {dataset!r}; known: {', '.join(DATASET_NAMES)}")
+
+    if target in _TASK_DATASETS:
+        datasets = list(_TASK_DATASETS[target])
+        if dataset is not None:
+            if dataset not in datasets:
+                raise ValueError(
+                    f"--dataset {dataset!r} is not part of task {target!r} "
+                    f"(datasets: {', '.join(datasets)})"
+                )
+            return [dataset]
+        return datasets
+
+    # target is (presumably) a concrete dataset id.
+    if target in _DATASET_FAMILY:
+        if dataset is not None and dataset != target:
+            raise ValueError(
+                f"target {target!r} already names a dataset; drop --dataset {dataset!r}"
+            )
+        return [target]
+
+    raise ValueError(
+        f"unknown prepare target {target!r}; expected a task ({', '.join(_TASK_DATASETS)}) "
+        f"or a dataset ({', '.join(_DATASET_FAMILY)})"
     )
-    return EXIT_OK
+
+
+def _load_labels_file(path: str) -> LabelsPayload:
+    """Load a synthetic labels/records/samples payload for ``data prepare`` (pure stdlib JSON).
+
+    The file lets the split-GENERATION path be driven without the heavy cluster loaders (used by
+    tests and by advanced users who pre-extracted labels). Its shape is per-family:
+
+    * ``amc``: ``{"labels": [[mod, snr], ...]}`` (stratify by mod x snr) or
+      ``{"official_split": {"train": [...], "val": [...], "test": [...]}}`` for Sig53;
+    * ``sei``: ``{"records": [[tx, rx, day], ...]}``;
+    * ``detection``: ``{"samples": [{"boxes": [...], "sample_id"?}, ...],
+      "official_split"?: {...}, "track"?: "detection"|"recognition"}``.
+    """
+    loaded = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            f"--labels-file {path} must contain a JSON object, got {type(loaded).__name__}"
+        )
+    payload: LabelsPayload = loaded
+    return payload
+
+
+def _prepare_one(
+    dataset: str, out_dir: Path, payload: LabelsPayload | None, seed: int, cache: str
+) -> str:
+    """Prepare a single dataset's split, returning the canonical split id written.
+
+    ``payload`` (from ``--labels-file``) supplies synthetic labels so the split path runs on pure
+    stdlib. When ``payload`` is ``None`` the heavy cluster-only loaders are invoked lazily to
+    extract labels from the real files under ``cache`` -- that branch NEEDS ``rfbench[data]`` /
+    ``rfbench[detection]`` and is never taken in unit tests.
+    """
+    family = _DATASET_FAMILY[dataset]
+    if family == "amc":
+        return _prepare_amc(dataset, out_dir, payload, seed, cache)
+    if family == "sei":
+        return _prepare_sei(dataset, out_dir, payload, seed, cache)
+    if family == "detection":
+        return _prepare_detection(dataset, out_dir, payload, seed, cache)
+    raise ValueError(f"no prepare family registered for dataset {dataset!r}")  # pragma: no cover
+
+
+def _prepare_amc(
+    dataset: str, out_dir: Path, payload: LabelsPayload | None, seed: int, cache: str
+) -> str:
+    from rfbench.data.prepare.amc import prepare_amc
+
+    labels: Any = None
+    official_split: Any = None
+    if payload is not None:
+        labels = payload.get("labels")
+        official_split = payload.get("official_split")
+    elif dataset == "sig53":
+        from rfbench.data.prepare.amc import load_sig53_official_split
+
+        official_split = load_sig53_official_split(cache=cache)
+    else:
+        from rfbench.data.prepare.amc import load_radioml_labels
+
+        labels = load_radioml_labels(dataset, cache=cache)  # type: ignore[arg-type]
+
+    split, _manifest = prepare_amc(
+        dataset,
+        out_dir=out_dir,
+        labels=[tuple(x) for x in labels] if labels is not None else None,
+        official_split=official_split,
+        seed=seed,
+    )
+    return split.canonical_split_id
+
+
+def _prepare_sei(
+    dataset: str, out_dir: Path, payload: LabelsPayload | None, seed: int, cache: str
+) -> str:
+    from rfbench.data.prepare.sei import CANONICAL_SPLIT_IDS as SEI_IDS
+    from rfbench.data.prepare.sei import prepare_sei
+
+    if payload is not None:
+        records = [tuple(r) for r in payload["records"]]
+        conditions = payload.get("conditions") or list(SEI_IDS[dataset].keys())
+    else:
+        from rfbench.data.prepare.sei import load_oracle_records, load_wisig_records
+
+        records = (
+            load_wisig_records(cache=cache)
+            if dataset == "wisig"
+            else load_oracle_records(cache=cache)
+        )
+        conditions = list(SEI_IDS[dataset].keys())
+
+    written: list[str] = []
+    for condition in conditions:
+        split, _manifest = prepare_sei(
+            dataset,
+            condition,
+            out_dir=out_dir,
+            records=records,
+            seed=seed,
+        )
+        written.append(split.canonical_split_id)
+    return ", ".join(written)
+
+
+def _prepare_detection(
+    dataset: str, out_dir: Path, payload: LabelsPayload | None, seed: int, cache: str
+) -> str:
+    from rfbench.data.prepare.detection import prepare_detection
+
+    if payload is not None:
+        samples = payload["samples"]
+        official_split = payload.get("official_split")
+        track = payload.get("track", "detection")
+    else:
+        from rfbench.data.download.detection_wbsig53 import load_wbsig53_annotations
+
+        samples = load_wbsig53_annotations(cache=cache)
+        official_split = None
+        track = "detection"
+
+    split, _manifest, _annotations = prepare_detection(
+        dataset,
+        out_dir=out_dir,
+        samples=samples,
+        track=track,
+        official_split=official_split,
+        seed=seed,
+    )
+    return split.canonical_split_id
 
 
 def _cmd_data_prepare(args: argparse.Namespace) -> int:
-    _print_intent(
-        f"[data prepare] would build deterministic splits for '{args.target}' "
-        f"(dataset={args.dataset}, seed={args.seed}, cache={args.cache}, force={args.force}) -> "
-        "leaderboard/splits/<dataset>/<id>.idx.json (+checksum) — not yet implemented (WP-10..14).",
-        verbose=args.verbose,
-    )
+    try:
+        datasets = _resolve_prepare_targets(args.target, args.dataset)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    out_dir = Path(args.out) if getattr(args, "out", None) else _repo_root() / "leaderboard"
+    payload = _load_labels_file(args.labels_file) if getattr(args, "labels_file", None) else None
+
+    for dataset in datasets:
+        split_dir = out_dir / "splits" / dataset
+        if not args.force and split_dir.is_dir() and any(split_dir.glob("*.idx.json")):
+            print(
+                f"[data prepare] {dataset}: split index already present under {split_dir} "
+                "(skip; --force to rebuild)."
+            )
+            continue
+        try:
+            written = _prepare_one(dataset, out_dir, payload, args.seed, args.cache)
+        except (ValueError, FileNotFoundError, RuntimeError) as exc:
+            print(f"error: [data prepare] {dataset}: {exc}", file=sys.stderr)
+            return EXIT_FAILURE
+        print(
+            f"[data prepare] {dataset}: wrote split index(es) {written} "
+            f"under {out_dir}/splits/{dataset}/"
+        )
     return EXIT_OK
 
 
-def _cmd_data_list(args: argparse.Namespace) -> int:
-    _print_intent(
-        "[data list] would list known datasets/tasks and their prepared status "
-        f"(known datasets: {', '.join(DATASET_NAMES)}) — not yet implemented (WP-14).",
-        verbose=args.verbose,
+def _cmd_data_download(args: argparse.Namespace) -> int:
+    dataset = args.dataset
+    if dataset not in _DATASET_FAMILY and dataset not in DATASET_NAMES:
+        print(
+            f"error: unknown dataset {dataset!r}; known: {', '.join(DATASET_NAMES)}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    print(
+        f"[data download] fetching raw '{dataset}' into cache={args.cache} (heavy deps + network "
+        "are lazy; real runs need rfbench[data]/rfbench[detection] on the cluster)."
     )
+    try:
+        path = _download_dispatch(dataset, cache=args.cache, source_url=args.source_url)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"error: [data download] {dataset}: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    print(f"[data download] {dataset}: available at {path}")
+    return EXIT_OK
+
+
+def _download_dispatch(dataset: str, *, cache: str, source_url: str | None) -> Path:
+    """Dispatch a dataset id to its (lazy) download/generation function (cluster-only)."""
+    if dataset in ("radioml_2016_10a", "radioml_2018_01a"):
+        from rfbench.data.download.amc_radioml import download_radioml
+
+        return download_radioml(dataset, source_url=source_url, cache=cache)  # type: ignore[arg-type]
+    if dataset == "sig53":
+        from rfbench.data.download.amc_sig53 import generate_sig53
+
+        return generate_sig53(cache=cache)
+    if dataset == "wisig":
+        from rfbench.data.download.sei_wisig import download_wisig
+
+        return download_wisig(source_url=source_url, cache=cache)
+    if dataset == "oracle":
+        from rfbench.data.download.sei_oracle import download_oracle
+
+        return download_oracle(source_url=source_url, cache=cache)
+    if dataset == "wbsig53":
+        from rfbench.data.download.detection_wbsig53 import generate_wbsig53
+
+        return generate_wbsig53(cache=cache)
+    raise ValueError(
+        f"no download function wired for {dataset!r} yet "
+        f"(known downloadable: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, wbsig53)."
+    )
+
+
+def _cmd_data_list(args: argparse.Namespace) -> int:
+    out_dir = Path(args.out) if getattr(args, "out", None) else _repo_root() / "leaderboard"
+    print("Known data tasks and datasets (prepared = a split index under leaderboard/splits/):")
+    for task, datasets in _TASK_DATASETS.items():
+        if task == "detection":  # alias of wideband_detection; list once
+            continue
+        print(f"  {task}:")
+        for dataset in datasets:
+            split_dir = out_dir / "splits" / dataset
+            ids = sorted(p.name[: -len(".idx.json")] for p in split_dir.glob("*.idx.json"))
+            status = f"prepared ({', '.join(ids)})" if ids else "not prepared"
+            print(f"    - {dataset}: {status}")
+    if args.verbose:
+        print(f"  (scanned {out_dir / 'splits'}; datasets download to cache={args.cache})")
     return EXIT_OK
 
 
 def _cmd_data_verify(args: argparse.Namespace) -> int:
-    target = args.dataset if args.dataset else "all prepared datasets"
-    _print_intent(
-        f"[data verify] would recompute split-index checksums for {target} and diff vs the "
-        "versioned manifest — not yet implemented (WP-14).",
-        verbose=args.verbose,
-    )
+    from rfbench.core.splits import split_checksum
+
+    out_dir = Path(args.out) if getattr(args, "out", None) else _repo_root() / "leaderboard"
+    splits_root = out_dir / "splits"
+    if args.dataset is not None:
+        idx_dirs = [splits_root / args.dataset]
+    elif splits_root.is_dir():
+        idx_dirs = sorted(p for p in splits_root.glob("*") if p.is_dir())
+    else:
+        idx_dirs = []
+
+    idx_files = [p for d in idx_dirs for p in sorted(d.glob("*.idx.json"))]
+    if not idx_files:
+        target = args.dataset if args.dataset else "any dataset"
+        print(f"[data verify] no split index found for {target} under {splits_root}.")
+        return EXIT_OK
+
+    mismatches = 0
+    for idx in idx_files:
+        recomputed = split_checksum(str(idx))
+        doc = json.loads(idx.read_text(encoding="utf-8"))
+        stored = doc.get("checksum")
+        ok = recomputed == stored
+        mismatches += 0 if ok else 1
+        marker = "OK" if ok else "MISMATCH"
+        print(f"[data verify] {idx.relative_to(out_dir)}: {marker} ({recomputed})")
+    if mismatches:
+        print(f"error: {mismatches} split index(es) failed checksum verification", file=sys.stderr)
+        return EXIT_FAILURE
     return EXIT_OK
 
 
+# --------------------------------------------------------------------------------------------------
+# `eval` handler
+# --------------------------------------------------------------------------------------------------
 def _emit_target_path(args: argparse.Namespace) -> Path:
     """Resolve the result.json output path (``--emit`` or the default leaderboard layout)."""
     if args.emit:
@@ -197,16 +526,39 @@ def _emit_target_path(args: argparse.Namespace) -> Path:
     return Path("leaderboard") / "results" / str(args.task) / f"{args.model}.json"
 
 
+def _regime_spec(regime: str, k_shot: int | None) -> RegimeSpec:
+    """Build a :class:`rfbench.core.model.RegimeSpec` for a declared regime (lazy import).
+
+    Constructs the spec through the frozen contract so the ``k_shot`` <-> ``few_shot`` coupling is
+    enforced by the same code path :func:`rfbench.core.evaluate.evaluate` uses. A regime that
+    violates the coupling raises ``ValueError`` here.
+    """
+    from rfbench.core.model import Regime, RegimeSpec
+
+    return RegimeSpec(name=Regime(regime), k_shot=k_shot)
+
+
 def _build_result_skeleton(args: argparse.Namespace) -> dict[str, Any]:
-    """Assemble a minimal, schema-valid ``result.json`` skeleton for the eval stub."""
+    """Assemble a minimal, schema-valid ``result.json`` for the eval command.
+
+    The regime block is derived from a real :class:`RegimeSpec` routed through
+    :func:`rfbench.regimes.make_adapter`, so the declared-not-inferred regime and the
+    ``k_shot`` <-> ``few_shot`` coupling are produced by the harness' own regime plumbing rather
+    than a hand-rolled dict. Metric values remain placeholders until the task registry (WP-20..23)
+    and the trained baselines (M3) land.
+    """
+    from rfbench.regimes import make_adapter
+
     defaults = _TASK_DEFAULTS[args.task]
     dataset_name = args.dataset if args.dataset else defaults["dataset"]
     track = args.track if args.track else defaults["track"]
     primary = defaults["primary"]
 
-    regime: dict[str, Any] = {"name": args.regime}
-    if args.regime == "few_shot":
-        regime["k_shot"] = args.k_shot
+    spec = _regime_spec(args.regime, args.k_shot)
+    adapter = make_adapter(spec)  # validates the regime is adaptable; keeps the plumbing honest
+    regime: dict[str, Any] = {"name": adapter.regime.name.value}
+    if adapter.regime.k_shot is not None:
+        regime["k_shot"] = adapter.regime.k_shot
 
     result: dict[str, Any] = {
         "schema_version": "1.0.0",
@@ -251,7 +603,11 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         )
         return EXIT_USAGE
 
-    result = _build_result_skeleton(args)
+    try:
+        result = _build_result_skeleton(args)
+    except ValueError as exc:  # RegimeSpec coupling / positivity (belt-and-braces)
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
 
     errors = _validate_result(result)
     if errors:
@@ -270,40 +626,137 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(
-        f"[eval] wrote schema-valid result.json skeleton -> {out_path} "
-        "(Sprint-0 stub: metrics are placeholders until WP-40 lands)."
+        f"[eval] wrote schema-valid result.json -> {out_path} "
+        "(regime declared via rfbench.regimes; metrics are placeholders until WP-40/M3 land)."
     )
     return EXIT_OK
+
+
+# --------------------------------------------------------------------------------------------------
+# `submit` handler
+# --------------------------------------------------------------------------------------------------
+def _manifest_completeness_errors(document: dict[str, Any], manifest_path: str | None) -> list[str]:
+    """Basic manifest-completeness gate mirroring the CI pre-flight (WP-51 subset).
+
+    Checks the data-provenance identity a leaderboard row must carry: a concrete
+    ``canonical_split_id`` and a non-placeholder ``split.checksum``. When a standalone
+    ``--manifest`` is supplied, it is validated against ``submission.schema.json`` too.
+    """
+    errors: list[str] = []
+    split = document.get("split", {})
+    if not isinstance(split, dict) or not split.get("canonical_split_id"):
+        errors.append("split.canonical_split_id is required for a leaderboard submission")
+    checksum = split.get("checksum") if isinstance(split, dict) else None
+    if checksum == _PLACEHOLDER_CHECKSUM:
+        errors.append(
+            "split.checksum is the all-zero placeholder; prepare the real split "
+            "(rfbench data prepare) so the row references a concrete split index"
+        )
+
+    if manifest_path is not None:
+        try:
+            manifest_doc = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"could not read --manifest {manifest_path}: {exc}")
+        else:
+            errors.extend(
+                f"manifest: {msg}"
+                for msg in _validate_against_schema(manifest_doc, "submission.schema.json")
+            )
+    return errors
 
 
 def _cmd_submit(args: argparse.Namespace) -> int:
-    _print_intent(
-        f"[submit --check] would locally mirror validate-submission.yml for '{args.result}' "
-        f"(manifest={args.manifest}) — not yet implemented (WP-51).",
-        verbose=args.verbose,
-    )
+    result_path = Path(args.result)
+    try:
+        document = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: [submit --check] could not read {result_path}: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    errors = _validate_result(document)
+    errors.extend(_manifest_completeness_errors(document, args.manifest))
+    if errors:
+        print(f"error: [submit --check] {result_path} is NOT PR-ready:", file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    print(f"[submit --check] {result_path}: PR-ready (schema-valid + manifest complete).")
     return EXIT_OK
 
 
+# --------------------------------------------------------------------------------------------------
+# `leaderboard` handlers
+# --------------------------------------------------------------------------------------------------
+def _load_site_generator() -> ModuleType:
+    """Import the non-packaged ``leaderboard/site/generate.py`` module by path (lazy).
+
+    ``leaderboard/site`` is not part of the installed ``rfbench`` wheel (no ``__init__.py``), so it
+    is loaded from the repo source tree via :mod:`importlib.util`. Kept lazy so ``import rfbench``
+    stays dependency-free. Raises ``RuntimeError`` if the generator cannot be located.
+    """
+    import importlib.util
+
+    generate_py = _repo_root() / "leaderboard" / "site" / "generate.py"
+    if not generate_py.is_file():
+        raise RuntimeError(
+            f"leaderboard site generator not found at {generate_py}; "
+            "run from a source checkout with leaderboard/site/generate.py present."
+        )
+    spec = importlib.util.spec_from_file_location("rfbench._leaderboard_site_generate", generate_py)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise RuntimeError(f"could not load a module spec for {generate_py}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _cmd_leaderboard_build(args: argparse.Namespace) -> int:
-    _print_intent(
-        f"[leaderboard build] would read {args.results}/**.json and render a static site to "
-        f"{args.out} (sorted by metrics.primary, columned by regime, verified/self_reported "
-        "badges) — not yet implemented (WP-50).",
-        verbose=args.verbose,
-    )
+    try:
+        generate = _load_site_generator()
+        index_path = generate.build_site(args.results, args.out)
+    except (RuntimeError, FileNotFoundError) as exc:
+        print(f"error: [leaderboard build] {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    index = Path(index_path)
+    print(f"[leaderboard build] wrote static site to {index.parent} (index: {index}).")
     return EXIT_OK
 
 
 def _cmd_leaderboard_validate(args: argparse.Namespace) -> int:
-    _print_intent(
-        f"[leaderboard validate] would validate every row under {args.results} against "
-        "result.schema.json — not yet implemented (WP-50).",
-        verbose=args.verbose,
-    )
-    return EXIT_OK
+    results_dir = Path(args.results)
+    if not results_dir.is_dir():
+        print(
+            f"error: [leaderboard validate] results dir not found: {results_dir}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    files = sorted(results_dir.rglob("*.json"))
+    invalid = 0
+    for path in files:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[leaderboard validate] {path}: UNREADABLE ({exc})", file=sys.stderr)
+            invalid += 1
+            continue
+        errors = _validate_result(document)
+        if errors:
+            invalid += 1
+            print(f"[leaderboard validate] {path}: INVALID", file=sys.stderr)
+            for err in errors:
+                print(f"    - {err}", file=sys.stderr)
+        elif args.verbose:
+            print(f"[leaderboard validate] {path}: ok")
+    print(f"[leaderboard validate] {len(files) - invalid}/{len(files)} rows valid.")
+    return EXIT_FAILURE if invalid else EXIT_OK
 
 
+# --------------------------------------------------------------------------------------------------
+# `verify` handler (maintainer stub, WP-53)
+# --------------------------------------------------------------------------------------------------
 def _cmd_verify(args: argparse.Namespace) -> int:
     _print_intent(
         f"[verify] would re-run '{args.result}' per manifest={args.manifest} (mode={args.mode}, "
@@ -358,6 +811,13 @@ def _build_data_parser(
         help="Fetch raw data from the official source into the cache (no git-tracked files).",
     )
     download.add_argument("dataset", help="Dataset id to download.")
+    download.add_argument(
+        "--source-url",
+        dest="source_url",
+        default=None,
+        metavar="URL",
+        help="EULA-gated archive URL for datasets whose link is not embedded (RadioML/WiSig).",
+    )
     download.set_defaults(func=_cmd_data_download)
 
     prepare = data_sub.add_parser(
@@ -373,6 +833,20 @@ def _build_data_parser(
     )
     prepare.add_argument("--seed", type=int, default=42, help="Split seed (default: 42).")
     prepare.add_argument(
+        "--out",
+        metavar="DIR",
+        help="Output tree for splits/<dataset>/ (default: <repo>/leaderboard).",
+    )
+    prepare.add_argument(
+        "--labels-file",
+        dest="labels_file",
+        metavar="PATH",
+        help=(
+            "JSON of pre-extracted labels/records/samples to drive the split without the heavy "
+            "cluster loaders (else the lazy loaders read the cached dataset; needs rfbench[data])."
+        ),
+    )
+    prepare.add_argument(
         "--force",
         action="store_true",
         help="Rebuild even if the split index already exists.",
@@ -383,6 +857,11 @@ def _build_data_parser(
         "list",
         parents=[parent],
         help="List known datasets/tasks and their prepared status.",
+    )
+    list_p.add_argument(
+        "--out",
+        metavar="DIR",
+        help="Splits tree to scan for prepared status (default: <repo>/leaderboard).",
     )
     list_p.set_defaults(func=_cmd_data_list)
 
@@ -397,6 +876,11 @@ def _build_data_parser(
         default=None,
         help="Dataset id to verify (default: all prepared datasets).",
     )
+    verify_p.add_argument(
+        "--out",
+        metavar="DIR",
+        help="Splits tree to verify (default: <repo>/leaderboard).",
+    )
     verify_p.set_defaults(func=_cmd_data_verify)
 
 
@@ -410,7 +894,8 @@ def _build_eval_parser(
         help="Evaluate a model on a task and emit a schema-valid result.json (ONLY emitter, M4).",
         description=(
             "Produces a result.json validated against schemas/result.schema.json BEFORE write. The "
-            "regime is written verbatim, never inferred; verification.status = 'self_reported'."
+            "regime is written verbatim (via a rfbench.regimes adapter), never inferred; "
+            "verification.status = 'self_reported'."
         ),
     )
     ev.add_argument("task", choices=TASK_NAMES, help="Task to evaluate.")
@@ -620,7 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    handler = getattr(args, "func", None)
+    handler: Callable[[argparse.Namespace], int] | None = getattr(args, "func", None)
     if handler is None:  # pragma: no cover - argparse `required=True` guards this.
         parser.print_help(sys.stderr)
         return EXIT_USAGE

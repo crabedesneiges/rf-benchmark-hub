@@ -1,0 +1,36 @@
+# @package task
+# The wideband-detection task (WP-22, EVALUATION_PROTOCOL.md §Wideband detection).
+# Structure only: this declares WHAT the task scores, not a wired Hydra runtime. `rfbench
+# eval` reads it and drives rfbench.core.evaluate.evaluate(model, task, split, regime, ...)
+# with rfbench.tasks.wideband_detection.WidebandDetectionTask.
+name: wideband_detection
+# Task protocol version (bumps on any metric/split change; matches the split id -v<N>).
+version: v1
+
+# Single dataset per the protocol: WBSig53 (impaired), generated via TorchSig. Real data
+# is never redistributed (D3): only split indices + T-F box annotations are versioned.
+dataset: wbsig53
+
+# Detection vs recognition tracks are reported SEPARATELY and never mixed in one board
+# column: `detection` scores presence/localisation (boxes only); `recognition` also scores
+# each box's signal class. Select the scored track on the CLI (e.g. `task.track=recognition`).
+tracks: [detection, recognition]
+track: detection
+
+# Metrics (EVALUATION_PROTOCOL.md): mAP is the PRIMARY ranking metric; mAR and IoU are
+# reported alongside. IoU is computed on normalised time-frequency boxes (t/f in [0, 1]).
+metrics: [mAP, mAR, IoU]
+primary_metric: mAP
+
+# Operating IoU threshold for matching a predicted box to a ground-truth box (baked into
+# result.json.eval.conditions.iou_threshold for comparability).
+iou_threshold: 0.5
+
+# Production mAP path selection: false -> pure-stdlib AP-by-IoU (dependency-free, used in
+# CI/tests); true -> lazy torchmetrics MeanAveragePrecision (needs rfbench[detection]).
+use_torchmetrics: false
+
+# Partition scored by default; the board only scores {val, test} (train is fit-only).
+default_split: test
+# Reproducibility seed baked into the split id and the environment fingerprint.
+seed: 42

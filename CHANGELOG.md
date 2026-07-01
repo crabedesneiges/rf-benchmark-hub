@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Sprint 2 — Task adapters (M2)
+
+- **WP-20 — AMC task.** `rfbench/tasks/amc/`: `AmcTask` (registered `amc`) + metrics
+  `accuracy_overall` (primary, full SNR range), `accuracy_vs_snr` curve, `macro_f1` (pure-stdlib),
+  dataset adapter, `configs/task/amc.yaml`.
+- **WP-21 — SEI task.** `rfbench/tasks/sei/`: `SeiTask` (registered `sei`), tracks
+  closed_set/cross_receiver/cross_day/open_set; `rank1_accuracy` (primary) + `auroc`/`eer` as
+  separate metrics (pure-stdlib), `configs/task/sei.yaml`.
+- **WP-22 — Wideband detection task.** `rfbench/tasks/wideband_detection/`: task + `mAP`/`mAR`/`IoU`
+  (pure-stdlib IoU+AP path, lazy torchmetrics for production), detection vs recognition tracks kept
+  distinct, `configs/task/wideband_detection.yaml`.
+- **Cluster.** `slurm/setup_and_test_arm.sh`: CPU-only job that builds the `rfbench` venv on an ARM
+  compute node and runs the full suite on aarch64 (proves the harness on the target arch).
+
 ### Added — Sprint 1 wave 2 — Data layer, leaderboard, CLI (M1/M2/M5, scaffolds)
 
 Datasets are not redistributed and real `prepare` runs on the cluster (ARM venv, `rfbench[data]` /

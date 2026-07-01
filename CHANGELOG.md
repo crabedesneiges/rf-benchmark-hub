@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Real dataset loaders (M1, no generation)
+
+Per the "use the datasets from the reference papers, do not generate" decision:
+
+- **AMC.** RadioML 2016.10a (pickle, `opendata.deepsig.io`) + 2018.01a (HDF5) real loaders; **Sig53 is a
+  reported blocker** (generation-only, no static release — not synthesised).
+- **SEI.** Real loaders for WiSig (ManyTx), ORACLE (SigMF), LoRa RFFI (HDF5), each targeting the confirmed
+  official source; credential-gated sources raise with manual-download instructions (no scraping).
+- **Detection.** Adopted **RadDet** (ICASSP 2025, real published spectrogram + YOLO box annotations) as the
+  wideband-detection dataset; **WBSig53 is a blocker** (generation-only). Protocol + task layer updated.
+- Heavy deps (numpy/h5py/requests) stay lazy behind `rfbench[data]`; parsers tested on synthetic fixtures
+  (real stdlib-pickle fixture for RadioML 2016; `importorskip` for HDF5). CLI wired to the real API.
+
 ### Added — Submission, publish, verify, FM wrappers (M5/M6)
 
 - **WP-51/52 — Submission & publish CI.** `.github/workflows/validate-submission.yml`

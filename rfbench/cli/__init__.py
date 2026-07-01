@@ -16,6 +16,10 @@ implementations:
 * ``eval`` -> assembles a schema-valid ``result.json`` through a :mod:`rfbench.regimes` adapter
   (``make_adapter(RegimeSpec)``), preserving the ``--k-shot`` <-> ``few_shot`` coupling and the
   frozen result contract.
+* ``train`` -> runs the real from-scratch / full-finetune training loop
+  (:func:`rfbench.training.train_baseline`) for a registered baseline (e.g. ``mcldnn`` on
+  ``radioml_2016_10a``) and then emits the trained model's ``result.json`` via ``evaluate``. The
+  torch model module is imported lazily inside the handler (M3, GPU/cluster).
 * ``submit --check`` -> validate a ``result.json`` against ``schemas/result.schema.json`` plus a
   manifest-completeness gate: any manifest supplied via ``--manifest`` or referenced by the result's
   ``submission_ref`` is validated for completeness against ``submission.schema.json`` and
@@ -662,6 +666,137 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------------
+# `train` handler (real from-scratch / full-finetune training, WP-30)
+# --------------------------------------------------------------------------------------------------
+_MODEL_MODULES: dict[str, str] = {
+    # Baseline models register on explicit import of their (torch) module; map name -> module.
+    "mcldnn": "rfbench.models.baselines.mcldnn",
+}
+
+
+def _import_model_module(model: str) -> None:
+    """Import the module that registers ``model`` in ``MODELS`` (opt-in, pulls torch lazily).
+
+    Baseline model modules import torch at their top and are therefore NOT imported by
+    ``import rfbench``; importing them here is the explicit opt-in that both loads torch and
+    creates the ``@register_model`` entry. Unknown names are left to the registry, which raises
+    a clear ``KeyError`` listing the registered models.
+    """
+    module = _MODEL_MODULES.get(model)
+    if module is not None:
+        import importlib
+
+        importlib.import_module(module)
+
+
+def _load_split_checksum(dataset: str, out_dir: Path) -> str | None:
+    """Return the versioned split-index checksum for ``dataset`` (or ``None`` if absent).
+
+    Reads ``<out_dir>/splits/<dataset>/<canonical_split_id>.idx.json`` and returns its
+    ``checksum`` field so the emitted ``result.json`` references the concrete split (not the
+    all-zero placeholder). Missing indices yield ``None`` -- the training run still emits a
+    valid (self_reported) row and the checksum is filled once the split is prepared.
+    """
+    split_dir = out_dir / "splits" / dataset
+    if not split_dir.is_dir():
+        return None
+    for idx in sorted(split_dir.glob("*.idx.json")):
+        try:
+            doc = json.loads(idx.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        checksum = doc.get("checksum")
+        if isinstance(checksum, str) and checksum:
+            return checksum
+    return None
+
+
+def _cmd_train(args: argparse.Namespace) -> int:
+    """Train a baseline on a task's train split, then emit a schema-valid result.json.
+
+    Loads the registered task + model (importing the model's torch module lazily), runs the
+    real training loop in :func:`rfbench.training.train_baseline` for the declared regime
+    (``from_scratch`` / ``full_finetune``), and writes the result under ``--out``. torch and
+    the training module are imported inside this handler so ``import rfbench`` /
+    ``rfbench --help`` stay dependency-free.
+    """
+    if args.regime not in ("from_scratch", "full_finetune"):
+        print(
+            f"error: [train] --regime must be from_scratch or full_finetune, got {args.regime!r} "
+            "(probing regimes are evaluated via `rfbench eval`).",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    try:
+        from rfbench.core.registry import MODELS, get_task
+        from rfbench.training import resolve_amc_dataset, train_baseline
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: [train] training needs the torch extra (`pip install rfbench[torch]`): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    try:
+        _import_model_module(args.model)
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: [train] could not import the '{args.model}' model module "
+            f"(needs the torch extra): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    try:
+        spec = _regime_spec(args.regime, None)
+        task = get_task(args.task)
+        dataset = resolve_amc_dataset(task, args.dataset)
+        model = MODELS.get(args.model)()
+    except (KeyError, ValueError) as exc:
+        print(f"error: [train] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    # Point the dataset's cache at --cache so the on-disk loader finds the prepared arrays.
+    os.environ.setdefault("RFBENCH_CACHE", args.cache)
+    checksum = _load_split_checksum(args.dataset, _repo_root() / "leaderboard")
+    if checksum is not None and hasattr(dataset, "checksum"):
+        dataset.checksum = checksum
+
+    out_path = (
+        Path(args.out)
+        if args.out
+        else Path("leaderboard") / "results" / str(args.task) / f"{args.model}.json"
+    )
+    print(
+        f"[train] training '{args.model}' on {args.task}/{args.dataset} "
+        f"(regime={args.regime}, epochs={args.epochs}, batch_size={args.batch_size}, "
+        f"lr={args.lr}, device={args.device})..."
+    )
+    try:
+        _model, result = train_baseline(
+            task,
+            model,
+            dataset,
+            regime=spec,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            seed=args.seed,
+            device=None if args.device == "auto" else args.device,
+            out_path=out_path,
+        )
+    except (ValueError, RuntimeError, TypeError) as exc:
+        print(f"error: [train] {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    primary = result["metrics"]["primary"]
+    score = result["metrics"]["values"].get(primary)
+    print(f"[train] wrote result.json -> {out_path} ({primary}={score}).")
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------------------------------
 # `submit` handler
 # --------------------------------------------------------------------------------------------------
 def _resolve_manifest_path(
@@ -1113,6 +1248,58 @@ def _build_eval_parser(
     ev.set_defaults(func=_cmd_eval)
 
 
+def _build_train_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    parent: argparse.ArgumentParser,
+) -> None:
+    tr = subparsers.add_parser(
+        "train",
+        parents=[parent],
+        help="Train a baseline on a task's train split, then emit a result.json (M3, GPU).",
+        description=(
+            "Runs the real torch training loop (rfbench.training.train_baseline) for the "
+            "from_scratch / full_finetune regimes, then evaluates on the test split and writes a "
+            "schema-valid result.json. Needs the torch extra; runs on the cluster GPU."
+        ),
+    )
+    tr.add_argument("--task", required=True, choices=TASK_NAMES, help="Task to train on.")
+    tr.add_argument(
+        "--dataset",
+        required=True,
+        choices=DATASET_NAMES,
+        help="Dataset variant to train + score on.",
+    )
+    tr.add_argument("--model", required=True, metavar="NAME", help="Registered model name.")
+    tr.add_argument(
+        "--regime",
+        default="from_scratch",
+        choices=("from_scratch", "full_finetune"),
+        help="Trainable regime, ALWAYS declared (default: from_scratch).",
+    )
+    tr.add_argument("--epochs", type=int, default=50, help="Training epochs (default: 50).")
+    tr.add_argument(
+        "--batch-size",
+        dest="batch_size",
+        type=int,
+        default=256,
+        help="Batch size (default: 256).",
+    )
+    tr.add_argument("--lr", type=float, default=1e-3, help="Adam learning rate (default: 1e-3).")
+    tr.add_argument("--seed", type=int, default=42, help="Global seed (default: 42).")
+    tr.add_argument(
+        "--device",
+        choices=("cuda", "cpu", "auto"),
+        default="auto",
+        help="Compute device (default: auto -> cuda when available).",
+    )
+    tr.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Output path (default: leaderboard/results/<task>/<model>.json).",
+    )
+    tr.set_defaults(func=_cmd_train)
+
+
 def _build_submit_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     parent: argparse.ArgumentParser,
@@ -1262,6 +1449,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="<command>", required=True)
     _build_data_parser(subparsers, parent)
     _build_eval_parser(subparsers, parent)
+    _build_train_parser(subparsers, parent)
     _build_submit_parser(subparsers, parent)
     _build_leaderboard_parser(subparsers, parent)
     _build_verify_parser(subparsers, parent)

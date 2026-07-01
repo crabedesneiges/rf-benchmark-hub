@@ -59,6 +59,15 @@ ignore_missing_imports = true   # torch/hydra stubs optional in the light instal
 disallow_untyped_defs = true
 packages = ["rfbench"]
 
+# Torch-dependent modules (baselines, training loop): in the dep-free dev/CI venv torch is
+# absent, so `nn.Module` resolves to Any and strict subclassing/return-any checks fire
+# spuriously. These modules are strictly type-checked on the GPU venv (torch present); here we
+# relax only the torch-absence-induced rules so `mypy rfbench` stays green without torch.
+[[tool.mypy.overrides]]
+module = ["rfbench.models.baselines.*", "rfbench.training"]
+disallow_subclassing_any = false
+warn_return_any = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

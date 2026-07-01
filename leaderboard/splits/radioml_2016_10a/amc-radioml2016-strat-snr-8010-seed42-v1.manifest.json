@@ -1,0 +1,10 @@
+{
+  "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+  "created_at": "2026-07-01T14:18:31Z",
+  "dataset": "radioml_2016_10a",
+  "n_items": 220000,
+  "seed": 42,
+  "source_checksums": {},
+  "source_url": "https://opendata.deepsig.io/datasets/2016.10/RML2016.10a.tar.bz2",
+  "split_checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869"
+}

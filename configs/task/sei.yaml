@@ -1,0 +1,48 @@
+# @package task
+# The SEI (RF fingerprinting) task (WP-21). Declares the registered task id, the datasets,
+# the per-condition tracks and the metric families per docs/EVALUATION_PROTOCOL.md §SEI.
+# `rfbench eval` resolves this to rfbench.tasks.sei.task.SeiTask via the task registry and
+# drives rfbench.core.evaluate.evaluate(model, task, split, regime, track=...).
+name: sei
+# Task protocol version (EVALUATION_PROTOCOL.md); bumps on any metric/split change and
+# matches the '-v<N>' suffix of the canonical split ids below.
+version: v1
+
+# Datasets this task can be evaluated on (docs/EVALUATION_PROTOCOL.md §SEI).
+# WiSig (ManyTx) carries the receiver + day metadata that the cross-* conditions need;
+# ORACLE is a 16-tx single-receiver closed-set dataset. Default: WiSig.
+dataset: wisig
+datasets:
+  - wisig
+  - oracle
+
+# Evaluation tracks/conditions, reported SEPARATELY (the board never blends them). The
+# first three are closed-set identification conditions; open_set is the open-set
+# verification protocol. WiSig supports all four; ORACLE is closed_set only.
+default_track: closed_set
+tracks:
+  closed_set:
+    kind: closed_set
+    canonical_split_id: sei-wisig-closedset-strat-tx-8010-seed42-v1
+    # Closed-set identification: rank-1 (top-1) accuracy is the PRIMARY ranking metric.
+    primary: rank1_accuracy
+    metrics: [rank1_accuracy]
+  cross_receiver:
+    kind: closed_set
+    canonical_split_id: sei-wisig-crossrx-grouped-8010-seed42-v1
+    primary: rank1_accuracy
+    metrics: [rank1_accuracy]
+  cross_day:
+    kind: closed_set
+    canonical_split_id: sei-wisig-crossday-grouped-8010-seed42-v1
+    primary: rank1_accuracy
+    metrics: [rank1_accuracy]
+  open_set:
+    kind: open_set
+    # Open-set verification reuses the closed-set captures but is scored with AUROC + EER.
+    canonical_split_id: sei-wisig-closedset-strat-tx-8010-seed42-v1
+    primary: auroc
+    metrics: [auroc, eer]
+
+# Partition scored by default; the board only scores {val, test} (train is fit-only).
+default_split: test

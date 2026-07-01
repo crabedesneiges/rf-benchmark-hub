@@ -7,10 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Sprint 0 — Bootstrap & contracts (M0). Scaffolds the repo, freezes the core contracts and
-JSON schemas, and lands the normative docs and CI skeleton.
+### Added — Sprint 1 wave 1 — Splits & eval harness (M1/M4, partial)
 
-### Added
+- **Split policy (normative).** `docs/EVALUATION_PROTOCOL.md`: adopt an official/literature split when
+  one exists (provenance recorded), otherwise a deterministic **80/10/10** stratified split, seed 42.
+  Ratios + seed are part of `canonical_split_id`; this supersedes the earlier 60/20/20 AMC placeholder.
+- **WP-10 — Deterministic splits.** `rfbench/core/splits.py`: `make_split` (pure-stdlib, seeded,
+  stratified, default 80/10/10) → `SplitManifest`; `adopt_official_split` (pass-through), reproducible
+  `write_split_index` + `split_checksum`. No generated indices committed (no data yet).
+- **WP-40 — `evaluate()` + `result.json`.** `rfbench/core/evaluate.py`: the single canonical emitter;
+  assembles a schema-valid `result.json` (regime declared verbatim, `verification.status=self_reported`),
+  validated against `schemas/result.schema.json` via lazily-imported `jsonschema`.
+- **WP-41 — Regime adapters.** `rfbench/regimes/` (`from_scratch`, `full_finetune`, `linear_probe`
+  with a pure-Python nearest-centroid head, `few_shot(k)`) + `configs/config.yaml` and
+  `configs/regime/*.yaml`. Dependency-free; real numerical heads deferred to M3/M6 behind extras.
+
+### Added — Sprint 0 — Bootstrap & contracts (M0)
+
+Scaffolds the repo, freezes the core contracts and JSON schemas, and lands the normative docs and
+CI skeleton.
 
 - **WP-00 — Repo & packaging.** `pyproject.toml` defining the `rfbench` package (at repo root,
   not `src/`) and the `rfbench` CLI entrypoint; pre-commit with `ruff` + `black` (line-length 100);

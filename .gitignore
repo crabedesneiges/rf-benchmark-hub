@@ -9,6 +9,8 @@ checkpoints/
 *.hdf5
 *.npy
 *.npz
+*.bin
+*.sigmf-data
 *.tar
 *.tar.gz
 # résultats bruts (le result.json de soumission est versionné explicitement si besoin)

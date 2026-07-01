@@ -124,7 +124,7 @@ def test_data_list_reports_not_prepared(tmp_path: Path, capsys: pytest.CaptureFi
     assert rc == EXIT_OK
     out = capsys.readouterr().out
     assert "radioml_2016_10a: not prepared" in out
-    assert "wisig" in out and "wbsig53" in out
+    assert "wisig" in out and "lora" in out and "raddet" in out
 
 
 def test_data_list_reflects_prepared(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

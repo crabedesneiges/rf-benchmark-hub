@@ -42,8 +42,9 @@ from rfbench.core.types import Batch, SplitName, Tensor, Track
 #: split change bumps it; matches the ``-v<N>`` suffix of the canonical split id.
 TASK_VERSION = "v1"
 
-#: The single wideband-detection dataset (WBSig53), per the protocol.
-DATASET_NAME = "wbsig53"
+#: The real published wideband-detection dataset used by the board: RadDet (ICASSP 2025).
+#: WBSig53 is generation-only (no static release) and, per policy, is not synthesised here.
+DATASET_NAME = "raddet"
 
 #: The two reporting tracks, kept distinct and never mixed in one board column:
 #: ``detection`` scores presence/localisation (boxes only), ``recognition`` additionally
@@ -500,13 +501,12 @@ class _InMemoryDetectionSplit:
 
 
 class WidebandDetectionDataset(Dataset):
-    """WBSig53 wideband-detection dataset variant for one ``(split, track)``.
+    """RadDet wideband-detection dataset variant for one ``(split, track)``.
 
     :meth:`load` yields canonical ``{"iq", "boxes", "meta"}`` samples where ``boxes`` is a
-    per-sample list of time-frequency boxes. Real loading (reading the generated TorchSig
-    root + the ``.annotations.json`` sidecar) is lazy/cluster-only behind
-    ``rfbench[detection]``; unit tests pass ``samples=`` to drive an in-memory split with
-    no heavy dependency.
+    per-sample list of time-frequency boxes. Real loading (reading the RadDet YOLO boxes +
+    the ``.annotations.json`` sidecar) is lazy/cluster-only behind ``rfbench[detection]``;
+    unit tests pass ``samples=`` to drive an in-memory split with no heavy dependency.
     """
 
     name = DATASET_NAME
@@ -535,28 +535,28 @@ class WidebandDetectionDataset(Dataset):
         self.checksum = "sha256:" + "0" * 64
 
     def download(self, cache: Path | None = None) -> None:
-        """Generate WBSig53 into ``$RFBENCH_CACHE`` (lazy, cluster-only).
+        """Fetch the real RadDet dataset into ``$RFBENCH_CACHE`` (lazy, cluster-only).
 
-        Delegates to the lazy TorchSig generator; ``torchsig`` is imported there behind
-        ``rfbench[detection]`` and NEVER in unit tests.
+        Delegates to :func:`rfbench.data.download.detection_wbsig53.download_raddet`; heavy
+        deps + Kaggle credentials are handled there and NEVER exercised in unit tests.
         """
-        from rfbench.data.download.detection_wbsig53 import generate_wbsig53  # noqa: PLC0415
+        from rfbench.data.download.detection_wbsig53 import download_raddet  # noqa: PLC0415
 
-        generate_wbsig53(cache=cache)
+        download_raddet(cache=cache)
 
     def prepare(self, seed: int = 42) -> SplitManifest:
         """Build the canonical detection split + T-F annotations (lazy, cluster-only).
 
-        Extracts per-sample boxes from the generated root (lazy numpy/torchsig) and hands
-        them to :func:`rfbench.data.prepare.detection.prepare_detection`. Updates
+        Extracts per-sample boxes from the RadDet YOLO annotations (lazy) and hands them to
+        :func:`rfbench.data.prepare.detection.prepare_detection`. Updates
         :attr:`canonical_split_id` / :attr:`checksum` from the returned manifest.
         """
         from rfbench.data.download.detection_wbsig53 import (  # noqa: PLC0415
-            load_wbsig53_annotations,
+            load_raddet_annotations,
         )
         from rfbench.data.prepare.detection import prepare_detection  # noqa: PLC0415
 
-        samples = load_wbsig53_annotations()
+        samples = load_raddet_annotations()
         split, _manifest, _ann = prepare_detection(
             DATASET_NAME,
             out_dir="leaderboard",
@@ -591,11 +591,11 @@ class WidebandDetectionDataset(Dataset):
     def _load_from_cache(self, split: SplitName, track: Track) -> _InMemoryDetectionSplit:
         """Lazy cluster-only path: read prepared boxes + generated IQ (never in tests)."""
         from rfbench.data.download.detection_wbsig53 import (  # noqa: PLC0415
-            load_wbsig53_annotations,
+            load_raddet_annotations,
         )
 
         del split, track  # split filtering is applied by the concrete cluster loader
-        samples = cast("list[Batch]", load_wbsig53_annotations())
+        samples = cast("list[Batch]", load_raddet_annotations())
         return _InMemoryDetectionSplit(samples)
 
 

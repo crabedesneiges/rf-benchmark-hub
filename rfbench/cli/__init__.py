@@ -75,7 +75,8 @@ DATASET_NAMES: tuple[str, ...] = (
     "sig53",
     "wisig",
     "oracle",
-    "lora_rffi",
+    "lora",
+    "raddet",
     "wbsig53",
     "deepsense",
 )
@@ -88,15 +89,19 @@ _DATASET_FAMILY: dict[str, str] = {
     "sig53": "amc",
     "wisig": "sei",
     "oracle": "sei",
+    "lora": "sei",
+    "raddet": "detection",
     "wbsig53": "detection",
 }
 
 #: Datasets a given data task can prepare (task name -> concrete datasets).
+#: Detection targets RadDet (the real published ICASSP-2025 artifact); wbsig53 stays a
+#: reachable name but only yields a blocker (generation-only, no static release).
 _TASK_DATASETS: dict[str, tuple[str, ...]] = {
     "amc": ("radioml_2016_10a", "radioml_2018_01a", "sig53"),
-    "sei": ("wisig", "oracle"),
-    "wideband_detection": ("wbsig53",),
-    "detection": ("wbsig53",),
+    "sei": ("wisig", "oracle", "lora"),
+    "wideband_detection": ("raddet",),
+    "detection": ("raddet",),
 }
 
 # Per-task eval defaults used to assemble the result.json when no task registry row exists yet
@@ -342,13 +347,18 @@ def _prepare_sei(
         records = [tuple(r) for r in payload["records"]]
         conditions = payload.get("conditions") or list(SEI_IDS[dataset].keys())
     else:
-        from rfbench.data.prepare.sei import load_oracle_records, load_wisig_records
-
-        records = (
-            load_wisig_records(cache=cache)
-            if dataset == "wisig"
-            else load_oracle_records(cache=cache)
+        from rfbench.data.prepare.sei import (
+            load_lora_records,
+            load_oracle_records,
+            load_wisig_records,
         )
+
+        if dataset == "wisig":
+            records = load_wisig_records(cache=cache)
+        elif dataset == "oracle":
+            records = load_oracle_records(cache=cache)
+        else:  # lora
+            records = load_lora_records(cache=cache)
         conditions = list(SEI_IDS[dataset].keys())
 
     written: list[str] = []
@@ -374,9 +384,16 @@ def _prepare_detection(
         official_split = payload.get("official_split")
         track = payload.get("track", "detection")
     else:
-        from rfbench.data.download.detection_wbsig53 import load_wbsig53_annotations
+        from rfbench.data.download.detection_wbsig53 import (
+            load_raddet_annotations,
+            load_wbsig53_annotations,
+        )
 
-        samples = load_wbsig53_annotations(cache=cache)
+        samples = (
+            load_raddet_annotations(cache=cache)
+            if dataset == "raddet"
+            else load_wbsig53_annotations(cache=cache)
+        )
         official_split = None
         track = "detection"
 
@@ -411,7 +428,7 @@ def _cmd_data_prepare(args: argparse.Namespace) -> int:
             continue
         try:
             written = _prepare_one(dataset, out_dir, payload, args.seed, args.cache)
-        except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        except (ValueError, FileNotFoundError, RuntimeError, NotImplementedError) as exc:
             print(f"error: [data prepare] {dataset}: {exc}", file=sys.stderr)
             return EXIT_FAILURE
         print(
@@ -435,7 +452,7 @@ def _cmd_data_download(args: argparse.Namespace) -> int:
     )
     try:
         path = _download_dispatch(dataset, cache=args.cache, source_url=args.source_url)
-    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+    except (ValueError, FileNotFoundError, RuntimeError, NotImplementedError) as exc:
         print(f"error: [data download] {dataset}: {exc}", file=sys.stderr)
         return EXIT_FAILURE
     print(f"[data download] {dataset}: available at {path}")
@@ -449,9 +466,9 @@ def _download_dispatch(dataset: str, *, cache: str, source_url: str | None) -> P
 
         return download_radioml(dataset, source_url=source_url, cache=cache)  # type: ignore[arg-type]
     if dataset == "sig53":
-        from rfbench.data.download.amc_sig53 import generate_sig53
+        from rfbench.data.download.amc_sig53 import download_sig53
 
-        return generate_sig53(cache=cache)
+        return download_sig53(cache=cache)
     if dataset == "wisig":
         from rfbench.data.download.sei_wisig import download_wisig
 
@@ -460,13 +477,21 @@ def _download_dispatch(dataset: str, *, cache: str, source_url: str | None) -> P
         from rfbench.data.download.sei_oracle import download_oracle
 
         return download_oracle(source_url=source_url, cache=cache)
+    if dataset == "lora":
+        from rfbench.data.download.sei_lora import download_lora
+
+        return download_lora(source_url=source_url, cache=cache)
+    if dataset == "raddet":
+        from rfbench.data.download.detection_wbsig53 import download_raddet
+
+        return download_raddet(cache=cache)
     if dataset == "wbsig53":
         from rfbench.data.download.detection_wbsig53 import generate_wbsig53
 
         return generate_wbsig53(cache=cache)
     raise ValueError(
         f"no download function wired for {dataset!r} yet "
-        f"(known downloadable: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, wbsig53)."
+        "(known: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, lora, raddet, wbsig53)."
     )
 
 

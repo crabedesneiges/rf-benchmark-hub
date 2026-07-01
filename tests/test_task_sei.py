@@ -232,7 +232,7 @@ def test_dataset_rejects_mismatched_track() -> None:
 def test_dataset_unknown_dataset_and_track_raise() -> None:
     """Unknown dataset / track names raise at construction."""
     with pytest.raises(ValueError, match="unknown SEI dataset"):
-        SeiDataset("lora_rffi")
+        SeiDataset("nonexistent_dataset")
     with pytest.raises(ValueError, match="unknown SEI track"):
         SeiDataset("wisig", track="bogus")
     with pytest.raises(ValueError, match="does not support track"):

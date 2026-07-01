@@ -236,7 +236,7 @@ def test_task_metadata() -> None:
     assert task.version == "v1"
     assert task.default_split() == "test"
     assert task.metrics()[0].primary_key == "mAP"
-    assert task.datasets()[0].name == "wbsig53"
+    assert task.datasets()[0].name == "raddet"
 
 
 def test_task_tracks_kept_distinct() -> None:
@@ -286,8 +286,8 @@ def test_dataset_canonical_split_id_is_track_specific() -> None:
     """The canonical split id encodes the track and matches the schema id pattern."""
     det = WidebandDetectionTask(track=DETECTION_TRACK).datasets()[0]
     rec = WidebandDetectionTask(track=RECOGNITION_TRACK).datasets()[0]
-    assert det.canonical_split_id == "detect-wbsig53-detection-8010-seed42-v1"
-    assert rec.canonical_split_id == "detect-wbsig53-recognition-8010-seed42-v1"
+    assert det.canonical_split_id == "detect-raddet-detection-8010-seed42-v1"
+    assert rec.canonical_split_id == "detect-raddet-recognition-8010-seed42-v1"
     assert det.canonical_split_id != rec.canonical_split_id
 
 

@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0.0",
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "model": {
+    "name": "mcldnn",
+    "family": "baseline",
+    "n_params": 428011
+  },
+  "dataset": {
+    "name": "radioml_2016_10a"
+  },
+  "split": {
+    "canonical_split_id": "amc-strat-snr-seed42-v1",
+    "name": "test",
+    "seed": 42,
+    "checksum": "sha256:3b1f5c9e2a7d4f6081b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718"
+  },
+  "metrics": {
+    "primary": "top1_accuracy",
+    "values": {
+      "accuracy_overall": 0.6123,
+      "macro_f1": 0.5987
+    }
+  },
+  "verification": {
+    "status": "community_reviewed"
+  }
+}

@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/rf-benchmark-hub/rf-benchmark-hub/main/schemas/submission.schema.json",
+  "title": "RF-Benchmark-Hub reproducibility manifest",
+  "description": "Reproducibility manifest accompanying a result.json in a Tier-2 (official) leaderboard PR. Declares everything the maintainer needs to re-run the evaluation and flip verification.status to 'verified'. Without these fields a result can only stay 'self_reported' (SUBMISSION.md). Minimal required set = code_commit + command + (weights_url OR docker_image) + hardware + expected_metrics + tolerance.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "result_path",
+    "task",
+    "regime",
+    "code_commit",
+    "command",
+    "artifacts",
+    "hardware",
+    "expected_metrics",
+    "tolerance"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "SemVer of this submission schema. Frozen at Sprint-0.",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "const": "1.0.0"
+    },
+    "result_path": {
+      "type": "string",
+      "description": "Repo-relative path to the result.json this manifest reproduces. Regex-pinned so a PR self-locates under leaderboard/results/<task>/.",
+      "pattern": "^leaderboard/results/(amc|sei|wideband_detection|spectrum_sensing)/.+\\.json$",
+      "examples": ["leaderboard/results/amc/mcldnn.json"]
+    },
+    "task": {
+      "type": "object",
+      "description": "Must match the task block of the referenced result.json.",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": ["amc", "sei", "wideband_detection", "spectrum_sensing"]
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^v[0-9]+$",
+          "examples": ["v1"]
+        }
+      }
+    },
+    "regime": {
+      "type": "object",
+      "description": "Declared regime; MUST match the referenced result. Never inferred. `k_shot` REQUIRED iff few_shot, FORBIDDEN otherwise (allOf), mirroring result.schema.json.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": ["from_scratch", "full_finetune", "linear_probe", "few_shot"]
+        },
+        "k_shot": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"name": {"const": "few_shot"}}, "required": ["name"]},
+          "then": {"required": ["k_shot"]},
+          "else": {"not": {"required": ["k_shot"]}}
+        }
+      ]
+    },
+    "code_commit": {
+      "type": "string",
+      "description": "Exact git commit that produced the result. 'git@<sha>' or a bare 7-40 hex SHA (SUBMISSION.md). A dirty tree cannot be verified.",
+      "pattern": "^(git@)?[0-9a-f]{7,40}$",
+      "examples": ["git@1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"]
+    },
+    "repo": {
+      "type": "string",
+      "format": "uri",
+      "description": "Optional source repo URL if not this repo (fork)."
+    },
+    "command": {
+      "type": "string",
+      "description": "Exact shell command that reproduces the result, e.g. 'rfbench eval amc --model mcldnn --regime full_finetune --dataset radioml_2018_01a --seed 42'.",
+      "minLength": 1
+    },
+    "artifacts": {
+      "type": "object",
+      "description": "How the maintainer obtains the runnable environment. At least one of weights_url / docker_image is REQUIRED (anyOf): the default eval_only re-run needs fetchable weights; a full_retrain of a seed baseline may provide only a pinned image.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "weights_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Resolvable URL to the checkpoint used (release asset, HF, Zenodo...). Enables the default eval_only re-run."
+        },
+        "weights_checksum": {
+          "type": "string",
+          "description": "SHA-256 of the weights artifact so the maintainer fetches the exact file.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "docker_image": {
+          "type": "string",
+          "description": "Pinned, digest-addressed image that froze the eval environment (risk: fragile old stacks, e.g. MCLDNN/TF1). 'name@sha256:...' form preferred.",
+          "pattern": "^[^\\s]+(@sha256:[0-9a-f]{64}|:[A-Za-z0-9_.-]+)$"
+        }
+      },
+      "anyOf": [
+        {"required": ["weights_url"]},
+        {"required": ["docker_image"]}
+      ]
+    },
+    "hardware": {
+      "type": "string",
+      "description": "Hardware the submitter ran on, e.g. '1x NVIDIA A100 80GB'.",
+      "minLength": 1
+    },
+    "environment": {
+      "type": "object",
+      "description": "Optional env fingerprint to rebuild the stack when Docker is absent.",
+      "additionalProperties": false,
+      "properties": {
+        "python_version": {
+          "type": "string",
+          "pattern": "^3\\.(1[0-9]|[2-9][0-9])(\\.[0-9]+)?",
+          "examples": ["3.10.14"]
+        },
+        "platform": {
+          "type": "string",
+          "description": "OS/arch, e.g. 'linux-aarch64' (Dalia compute) or 'linux-x86_64'."
+        },
+        "rfbench_version": {"type": "string"},
+        "cuda": {"type": "string"},
+        "torch": {"type": "string"},
+        "pip_freeze_sha256": {
+          "type": "string",
+          "description": "SHA-256 of the frozen dependency list (pip freeze / uv lock) archived alongside the submission.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "expected_metrics": {
+      "type": "object",
+      "description": "Metric values the maintainer's re-run must reproduce within `tolerance`. Keys mirror result.metrics.values; the task's primary metric MUST be present.",
+      "minProperties": 1,
+      "additionalProperties": {"type": "number"},
+      "examples": [{"accuracy_overall": 0.7116, "macro_f1": 0.68}]
+    },
+    "tolerance": {
+      "type": "object",
+      "description": "Match criterion for the re-run. `absolute` (or `relative`) applies to the primary metric unless `per_metric` overrides. At least one bound required.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "absolute": {
+          "type": "number",
+          "description": "Absolute allowed delta on the primary metric, e.g. 0.005.",
+          "minimum": 0
+        },
+        "relative": {
+          "type": "number",
+          "description": "Relative tolerance (fraction) on the primary metric.",
+          "minimum": 0
+        },
+        "per_metric": {
+          "type": "object",
+          "description": "Optional per-metric absolute tolerances overriding the global bound.",
+          "additionalProperties": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "rerun_mode": {
+      "type": "string",
+      "description": "What the maintainer should do. Default eval_only (weights provided, D4 cost guard-rail); full_retrain for seed baselines.",
+      "enum": ["eval_only", "full_retrain"],
+      "default": "eval_only"
+    },
+    "data_provenance": {
+      "type": "object",
+      "description": "Ties the run to the canonical, non-redistributed data (D3): only split id + checksums, never raw data.",
+      "additionalProperties": false,
+      "properties": {
+        "canonical_split_id": {"type": "string"},
+        "split_checksum": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "manifest_checksum": {
+          "type": "string",
+          "description": "SHA-256 of the dataset manifest emitted by core/manifest.py.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "contact": {
+      "type": "string",
+      "description": "Optional submitter contact (name/handle/email) for verification questions."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional free-form notes (known caveats, dataset access instructions)."
+    }
+  }
+}

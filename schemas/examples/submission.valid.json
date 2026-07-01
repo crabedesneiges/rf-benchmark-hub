@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0.0",
+  "result_path": "leaderboard/results/amc/mcldnn.json",
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "full_finetune"
+  },
+  "code_commit": "git@1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+  "repo": "https://github.com/rf-benchmark-hub/rf-benchmark-hub",
+  "command": "rfbench eval amc --model mcldnn --regime full_finetune --dataset radioml_2016_10a --seed 42",
+  "artifacts": {
+    "weights_url": "https://zenodo.org/records/0000000/files/mcldnn-amc-radioml2016.pt",
+    "weights_checksum": "sha256:9f2c1e0a4b6d8f0123456789abcdef0123456789abcdef0123456789abcdef01",
+    "docker_image": "ghcr.io/rf-benchmark-hub/rfbench-mcldnn@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "hardware": "1x NVIDIA A100 80GB",
+  "environment": {
+    "python_version": "3.10.14",
+    "platform": "linux-x86_64",
+    "rfbench_version": "0.1.0",
+    "cuda": "12.4",
+    "torch": "2.4.0",
+    "pip_freeze_sha256": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  },
+  "expected_metrics": {
+    "accuracy_overall": 0.6123,
+    "macro_f1": 0.5987
+  },
+  "tolerance": {
+    "absolute": 0.005
+  },
+  "rerun_mode": "eval_only",
+  "data_provenance": {
+    "canonical_split_id": "amc-strat-snr-seed42-v1",
+    "split_checksum": "sha256:3b1f5c9e2a7d4f6081b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718",
+    "manifest_checksum": "sha256:c0ffee0000000000000000000000000000000000000000000000000000000000"
+  },
+  "contact": "maxence@example.org",
+  "notes": "Baseline MCLDNN on RadioML 2016.10a, full SNR range. eval_only re-run via provided weights + pinned image."
+}

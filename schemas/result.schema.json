@@ -1,0 +1,326 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/rf-benchmark-hub/rf-benchmark-hub/main/schemas/result.schema.json",
+  "title": "RF-Benchmark-Hub leaderboard result",
+  "description": "One evaluation run = one result.json = one leaderboard row: a single (task, model, regime, dataset, split, track) evaluation. Emitted ONLY by `rfbench eval` and validated against this schema before it may enter leaderboard/results/<task>/*.json. The regime is ALWAYS declared, never inferred (D5). Per-task metric keys stay normative in docs/EVALUATION_PROTOCOL.md: `metrics.values` is an open scalar map with a `primary` pointer, so adding a task/metric bumps only the task `version`, never this frozen schema. Closed objects use additionalProperties=false to catch typos; only genuinely open maps (metrics.values, metrics.curves, eval.conditions, per_class) stay open.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task",
+    "model",
+    "regime",
+    "dataset",
+    "split",
+    "metrics",
+    "verification"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "SemVer of THIS result schema. Frozen at Sprint-0; consumers pin the major. Lets the leaderboard reader migrate old rows.",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "const": "1.0.0"
+    },
+    "result_id": {
+      "type": "string",
+      "description": "Optional stable slug identifying this row, unique within a task (used as the leaderboard/results/<task>/<result_id>.json filename stem).",
+      "pattern": "^[a-z0-9][a-z0-9._-]{1,79}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp when the result was emitted by the harness."
+    },
+    "task": {
+      "type": "object",
+      "description": "Which canonical task and protocol version this result scores. `version` bumps when EVALUATION_PROTOCOL.md changes a metric or split (a breaking change).",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Registered task id (matches rfbench/tasks/<name>/ and the task registry).",
+          "enum": ["amc", "sei", "wideband_detection", "spectrum_sensing"]
+        },
+        "version": {
+          "type": "string",
+          "description": "Task protocol version from EVALUATION_PROTOCOL.md. Any metric/split change bumps this. Matches the '-v<N>' suffix of canonical_split_id.",
+          "pattern": "^v[0-9]+$",
+          "examples": ["v1"]
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "description": "Identity of the evaluated model. Only `name` is required for a self_reported row; the rest attribute and enrich the board.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Leaderboard/registry name, e.g. 'mcldnn', 'xcit-nano', 'iqfm-base'.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "family": {
+          "type": "string",
+          "description": "Coarse bucket for the board: 'baseline' (seeds the board) or 'foundation' (FM wrapper exposing embed()).",
+          "enum": ["baseline", "foundation"]
+        },
+        "n_params": {
+          "type": "integer",
+          "description": "Total parameter count of the evaluated model, including any adapter head (Model.n_params).",
+          "minimum": 0
+        },
+        "backbone": {
+          "type": "string",
+          "description": "Optional backbone/checkpoint id for foundation models (e.g. a pretrained RF encoder or EMA tag)."
+        },
+        "pretrained": {
+          "type": "boolean",
+          "description": "Whether the backbone weights were pretrained before applying the regime."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Optional link to a model card, paper, or repo."
+        }
+      }
+    },
+    "regime": {
+      "type": "object",
+      "description": "The adaptation regime (D5). ALWAYS declared, NEVER inferred. The board never mixes regimes in one column. `k_shot` is REQUIRED iff name=='few_shot' and FORBIDDEN otherwise (enforced by allOf).",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "One of the four locked regimes.",
+          "enum": ["from_scratch", "full_finetune", "linear_probe", "few_shot"]
+        },
+        "k_shot": {
+          "type": "integer",
+          "description": "Examples per class. REQUIRED for few_shot only.",
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"name": {"const": "few_shot"}}, "required": ["name"]},
+          "then": {"required": ["k_shot"]},
+          "else": {"not": {"required": ["k_shot"]}}
+        }
+      ]
+    },
+    "dataset": {
+      "type": "object",
+      "description": "Concrete dataset variant the split was drawn from.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Dataset id, e.g. 'radioml_2016_10a', 'radioml_2018_01a', 'sig53', 'wisig', 'oracle', 'lora_rffi', 'wbsig53', 'deepsense'.",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "description": "Optional dataset release/version tag."
+        }
+      }
+    },
+    "split": {
+      "type": "object",
+      "description": "The canonical, deterministic split actually evaluated. `canonical_split_id` + `checksum` tie the row to versioned split indices under leaderboard/splits/<dataset>/ (no raw data). `track` names the sub-protocol / evaluation condition where a task defines several; SEI reports closed_set/cross_receiver/cross_day (and open_set) as SEPARATE rows via this field, so the board never blends them.",
+      "required": ["canonical_split_id", "name", "seed", "checksum"],
+      "additionalProperties": false,
+      "properties": {
+        "canonical_split_id": {
+          "type": "string",
+          "description": "Deterministic split id, e.g. 'amc-strat-snr-seed42-v1' (EVALUATION_PROTOCOL.md).",
+          "pattern": "^[a-z0-9][a-z0-9-]*-v[0-9]+$",
+          "examples": ["amc-strat-snr-seed42-v1"]
+        },
+        "name": {
+          "type": "string",
+          "description": "Which partition was scored.",
+          "enum": ["test", "val"]
+        },
+        "track": {
+          "type": "string",
+          "description": "Sub-protocol / evaluation condition. Free-form so Wave-B tasks add tracks without a schema bump. SEI: closed_set|cross_receiver|cross_day|open_set. Wideband detection: detection|recognition. AMC/sensing typically omit it (single closed-set track).",
+          "examples": ["closed_set", "cross_receiver", "cross_day", "open_set", "detection", "recognition"]
+        },
+        "seed": {
+          "type": "integer",
+          "description": "Seed used to generate the split (42 by protocol convention).",
+          "minimum": 0
+        },
+        "checksum": {
+          "type": "string",
+          "description": "SHA-256 of the split-index file in leaderboard/splits/<dataset>/*.idx.json. Ties the score to exact indices.",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "examples": ["sha256:0000000000000000000000000000000000000000000000000000000000000000"]
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Computed metrics for this task. `primary` names the ranking metric (== Metric.primary_key) and MUST be a key of `values`. `values` is an OPEN scalar map so new tasks/metrics need no schema change; which scalars are MANDATORY per task stays normative in EVALUATION_PROTOCOL.md and is enforced by the task's Metric + `rfbench submit --check` (AMC: accuracy_overall + macro_f1; SEI closed-set: rank1_accuracy; SEI open-set: auroc, eer; detection: mAP, mAR, IoU; sensing: pd@pfa=0.1, latency_ms). `curves` holds non-scalar reportables (accuracy_vs_snr, ROC).",
+      "required": ["primary", "values"],
+      "additionalProperties": false,
+      "properties": {
+        "primary": {
+          "type": "string",
+          "description": "Name of the primary (ranking) metric; MUST also appear as a key in `values`. Per-task primaries (EVALUATION_PROTOCOL.md): amc->accuracy_overall, sei(closed)->rank1_accuracy, sei(open)->auroc, wideband_detection->mAP, spectrum_sensing->pd@pfa=0.1.",
+          "minLength": 1,
+          "examples": ["accuracy_overall", "rank1_accuracy", "auroc", "mAP", "pd@pfa=0.1"]
+        },
+        "values": {
+          "type": "object",
+          "description": "Scalar metric name -> value. Keys are drawn from the task protocol; `primary` MUST be present here. Documented keys are listed as properties but the map stays open (additionalProperties number) for extensibility.",
+          "minProperties": 1,
+          "additionalProperties": {"type": "number"},
+          "properties": {
+            "accuracy_overall": {"type": "number", "minimum": 0, "maximum": 1},
+            "macro_f1": {"type": "number", "minimum": 0, "maximum": 1},
+            "rank1_accuracy": {"type": "number", "minimum": 0, "maximum": 1},
+            "auroc": {"type": "number", "minimum": 0, "maximum": 1},
+            "eer": {"type": "number", "minimum": 0, "maximum": 1},
+            "mAP": {"type": "number", "minimum": 0, "maximum": 1},
+            "mAR": {"type": "number", "minimum": 0, "maximum": 1},
+            "IoU": {"type": "number", "minimum": 0, "maximum": 1},
+            "pd@pfa=0.1": {"type": "number", "minimum": 0, "maximum": 1},
+            "latency_ms": {"type": "number", "minimum": 0}
+          },
+          "examples": [{"accuracy_overall": 0.7116, "macro_f1": 0.68}]
+        },
+        "curves": {
+          "type": "object",
+          "description": "Optional non-scalar reportables keyed by name (e.g. 'accuracy_vs_snr' with x=snr_db,y=accuracy; 'roc' with x=pfa,y=pd). Each is an array of {x,y[,label]} points. Not used for ranking.",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["x", "y"],
+              "additionalProperties": false,
+              "properties": {
+                "x": {"type": "number"},
+                "y": {"type": "number"},
+                "label": {"type": "string"}
+              }
+            }
+          }
+        },
+        "per_class": {
+          "type": "object",
+          "description": "Optional per-class scalar scores keyed by class label.",
+          "additionalProperties": {"type": "number"}
+        }
+      }
+    },
+    "eval": {
+      "type": "object",
+      "description": "Full-protocol conditions of the run (EVALUATION_PROTOCOL.md 'Common rules': recorded in result.json.eval.conditions). Optional for a bare Tier-1 self_reported dump but REQUIRED for a Tier-2 verifiable submission (checked by `rfbench submit --check`). AMC MUST record the full SNR range (no cherry-picking) here.",
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "type": "object",
+          "description": "Open map of protocol conditions guarding comparability. AMC: {snr_db_min, snr_db_max, full_snr_range:true}. Sensing: {pfa:0.1}. Detection: {iou_threshold}. Kept open for extensibility.",
+          "additionalProperties": true,
+          "examples": [{"snr_db_min": -20, "snr_db_max": 18, "full_snr_range": true}]
+        },
+        "n_samples": {
+          "type": "integer",
+          "description": "Number of evaluated samples in the split.",
+          "minimum": 0
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "description": "Reproducibility fingerprint captured by evaluate(): seed, hardware, and software env. Optional for Tier-1; a Tier-2 submission also carries the full manifest (submission.schema.json) referenced by `submission_ref`.",
+      "additionalProperties": false,
+      "properties": {
+        "seed": {
+          "type": "integer",
+          "description": "Global seed (protocol default 42).",
+          "minimum": 0
+        },
+        "hardware": {
+          "type": "string",
+          "description": "Free-form hardware string, e.g. '4x NVIDIA GB200'."
+        },
+        "rfbench_version": {"type": "string"},
+        "python_version": {"type": "string"},
+        "framework": {
+          "type": "string",
+          "description": "e.g. 'torch 2.4.0+cu124'."
+        },
+        "code_commit": {
+          "type": "string",
+          "description": "git SHA of the code that produced this result.",
+          "pattern": "^[0-9a-f]{7,40}$"
+        }
+      }
+    },
+    "submission_ref": {
+      "type": "string",
+      "description": "Optional repo-relative path to the submission manifest (submission.schema.json) backing this result. Required by CI before a result may become 'verified'.",
+      "examples": ["leaderboard/results/amc/mcldnn.submission.json"]
+    },
+    "verification": {
+      "type": "object",
+      "description": "Two-tier verification state (D4 / SUBMISSION.md). Starts 'self_reported'; a maintainer re-run within tolerance flips it to 'verified'. verified_* fields are REQUIRED iff status=='verified' (enforced by allOf), so a verified row can never lack provenance.",
+      "required": ["status"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "'self_reported' (emitted locally, Tier-1) or 'verified' (maintainer re-ran within tolerance, Tier-2).",
+          "enum": ["self_reported", "verified"]
+        },
+        "verified_by": {
+          "type": "string",
+          "description": "Maintainer handle who re-ran and signed off."
+        },
+        "verified_date": {
+          "type": "string",
+          "format": "date",
+          "description": "ISO date of the verified re-run."
+        },
+        "verified_hardware": {
+          "type": "string",
+          "description": "Hardware the maintainer re-ran on."
+        },
+        "method": {
+          "type": "string",
+          "description": "How the maintainer reproduced: 'eval_only' (weights provided, default) or 'full_retrain' (seed baselines).",
+          "enum": ["eval_only", "full_retrain"]
+        },
+        "tolerance": {
+          "type": "number",
+          "description": "Absolute tolerance on the primary metric the re-run matched within.",
+          "minimum": 0
+        },
+        "observed_primary": {
+          "type": "number",
+          "description": "Primary-metric value the maintainer measured on re-run, compared to the submission's expected_metrics within tolerance."
+        },
+        "note": {"type": "string"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "verified"}}, "required": ["status"]},
+          "then": {"required": ["verified_by", "verified_date", "verified_hardware", "method"]}
+        }
+      ]
+    }
+  }
+}

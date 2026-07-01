@@ -1,0 +1,39 @@
+# --- Données & artefacts lourds : JAMAIS en git (voir CLAUDE.md) ---
+data/
+datasets/
+checkpoints/
+*.pt
+*.ckpt
+*.pth
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.tar
+*.tar.gz
+# résultats bruts (le result.json de soumission est versionné explicitement si besoin)
+outputs/
+logs/
+wandb/
+runs/
+
+# --- Python / uv ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# --- Env & secrets ---
+.env
+*.local
+
+# --- OS / éditeurs ---
+.DS_Store
+*.swp
+.idea/
+.vscode/

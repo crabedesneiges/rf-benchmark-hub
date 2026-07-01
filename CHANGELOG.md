@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Submission, publish, verify, FM wrappers (M5/M6)
+
+- **WP-51/52 — Submission & publish CI.** `.github/workflows/validate-submission.yml`
+  (`rfbench submit --check` + no-raw-data guard on PRs touching `leaderboard/results/**`) and
+  `build-leaderboard.yml` (build the site → deploy to GitHub Pages on push to main); issue-form
+  templates for submissions and task proposals.
+- **WP-53 — Verification pipeline.** `rfbench/verify.py` + `rfbench verify`: checks manifest
+  completeness and re-run metrics within tolerance, flips `verification.status → verified` with
+  `verified_by/at/hardware`; `submit --check` strengthened to validate the submission manifest.
+- **WP-60/61 — Foundation-model wrappers.** `rfbench/models/foundation/` generic wrapper (Model +
+  `embed()`), a dependency-free example FM running in all four regimes via `evaluate()`, a copy-me
+  template, and `docs/ADDING_A_MODEL.md`.
+- **WP-50 fix — Leaderboard by track.** The board now separates by (task, track) as well as regime,
+  so SEI (closed_set/cross_receiver/cross_day) and detection (detection/recognition) tracks are
+  reported in separate tables.
+- **Cluster recon.** `slurm/probe_torchsig*.sh`: `.[detection]` installs on aarch64 (torch 2.12+cu130,
+  torchsig 2.1.1); torchsig 2.x replaced named WBSig53 with a config-driven wideband API — informs the
+  real detection loader (still a lazy stub, pending a torchsig-1.x-vs-2.x decision).
+
 ### Added — Sprint 2 — Task adapters (M2)
 
 - **WP-20 — AMC task.** `rfbench/tasks/amc/`: `AmcTask` (registered `amc`) + metrics

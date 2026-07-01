@@ -129,12 +129,15 @@ def _make_collate(device: str) -> CollateFn:
     Each ``iq`` payload is a ``(2, L)`` array-like (numpy on the cluster, nested lists in a
     fixture); ``torch.as_tensor`` handles both. Produces ``(x (B, 2, L) float32, y (B,) long)``.
     """
+    import numpy as np  # noqa: PLC0415
     import torch  # noqa: PLC0415
 
     def collate(pairs: list[tuple[Any, int]]) -> tuple[torch.Tensor, torch.Tensor]:
         iqs = [iq for iq, _ in pairs]
         labels = [label for _, label in pairs]
-        x = torch.as_tensor(iqs, dtype=torch.float32, device=device)
+        # Stack into one ndarray first: torch.as_tensor over a LIST of ndarrays is very slow
+        # (and warns). np.asarray handles both real numpy (2, L) arrays and nested-list fixtures.
+        x = torch.as_tensor(np.asarray(iqs, dtype=np.float32), device=device)
         if x.ndim == 2:  # a single (2, L) sample slipped through -> add the batch axis
             x = x.unsqueeze(0)
         y = torch.as_tensor(labels, dtype=torch.long, device=device)

@@ -87,27 +87,28 @@ class MCLDNNNet(nn.Module):
         self.conv_filters = conv_filters
         self.lstm_hidden = lstm_hidden
 
-        pad2d = (0, _same_pad_1d(8))  # keep the time axis; the 2-row axis is handled per-branch
-        pad1d = _same_pad_1d(8)
-
+        # padding="same" (stride 1) keeps the TIME axis length identical across all branches even
+        # for the EVEN kernel width 8 -- a symmetric integer pad shrinks an even-kernel conv by 1,
+        # which desynchronised the branches (feat_iq 127 vs feat_iq_sep 126). Only conv_fuse reduces
+        # the 2-row axis to 1 (kernel height 2, no height padding).
         # Branch 1: combined I/Q -- a 2-D conv seeing both channels as one (1, 2, L) image.
         self.conv_iq = nn.Sequential(
-            nn.Conv2d(1, conv_filters, kernel_size=(2, 8), padding=pad2d),
+            nn.Conv2d(1, conv_filters, kernel_size=(2, 8), padding="same"),
             nn.ReLU(inplace=True),
         )
         # Branch 2/3: separate I and separate Q -- 1-D convs over each (1, L) row.
         self.conv_i = nn.Sequential(
-            nn.Conv1d(1, conv_filters, kernel_size=8, padding=pad1d),
+            nn.Conv1d(1, conv_filters, kernel_size=8, padding="same"),
             nn.ReLU(inplace=True),
         )
         self.conv_q = nn.Sequential(
-            nn.Conv1d(1, conv_filters, kernel_size=8, padding=pad1d),
+            nn.Conv1d(1, conv_filters, kernel_size=8, padding="same"),
             nn.ReLU(inplace=True),
         )
         # Fuse the separate-I/Q maps back into a 2-channel image, conv it, then combine with
         # the combined-I/Q branch and refine with a second 2-D conv (Xu et al.'s fusion path).
         self.conv_iq2 = nn.Sequential(
-            nn.Conv2d(conv_filters, conv_filters, kernel_size=(1, 8), padding=(0, _same_pad_1d(8))),
+            nn.Conv2d(conv_filters, conv_filters, kernel_size=(1, 8), padding="same"),
             nn.ReLU(inplace=True),
         )
         self.conv_fuse = nn.Sequential(
@@ -137,9 +138,9 @@ class MCLDNNNet(nn.Module):
         The fused ``(B, conv_filters, 1, L)`` map is squeezed and transposed into the
         ``(B, L, conv_filters)`` layout ``nn.LSTM(batch_first=True)`` expects.
         """
-        # Combined I/Q branch -> (B, F, 1, L) after the 2-row kernel collapses the channel axis.
+        # Combined I/Q branch -> (B, F, 2, L): padding="same" keeps both the 2-row and time axes.
         iq_img = x.unsqueeze(1)  # (B, 1, 2, L)
-        feat_iq = self.conv_iq(iq_img)  # (B, F, 1, L)
+        feat_iq = self.conv_iq(iq_img)  # (B, F, 2, L)
 
         # Separate I and Q 1-D branches -> (B, F, L) each; stack into a (B, F, 2, L) image.
         i_sig = x[:, 0:1, :]  # (B, 1, L)
@@ -149,8 +150,8 @@ class MCLDNNNet(nn.Module):
         feat_iq_sep = torch.stack((feat_i, feat_q), dim=2)  # (B, F, 2, L)
         feat_iq_sep = self.conv_iq2(feat_iq_sep)  # (B, F, 2, L) (1-row kernel keeps both rows)
 
-        # Combine the two 2-D feature maps (broadcast the collapsed combined branch across rows)
-        # and refine with the fusion conv, whose 2-row kernel collapses back to a single row.
+        # Combine the two aligned (B, F, 2, L) feature maps and refine with the fusion conv,
+        # whose 2-row kernel (no height padding) collapses the channel axis back to a single row.
         combined = feat_iq_sep + feat_iq  # (B, F, 2, L)
         fused = self.conv_fuse(combined)  # (B, F, 1, L)
 

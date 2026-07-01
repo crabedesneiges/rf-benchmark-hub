@@ -1,0 +1,43 @@
+# @package task
+# The AMC (automatic modulation classification) task (WP-20).
+# Normative protocol: docs/EVALUATION_PROTOCOL.md §AMC. Any metric/split change here bumps
+# `version` and is a breaking change. Task class: rfbench.tasks.amc.task.AmcTask (registered
+# as `amc`); `rfbench eval` drives rfbench.core.evaluate.evaluate(model, task, split, regime).
+name: amc
+version: v1
+
+# Dataset variants this task can be scored on. The first is the default when `dataset` is
+# unset on the CLI. Each maps to a canonical, deterministic split id (indices + checksum are
+# versioned under leaderboard/splits/<dataset>/; raw data is never committed, D3).
+datasets:
+  - name: radioml_2016_10a # 11 classes; 80/10/10 stratified by (modulation x snr), seed 42
+    canonical_split_id: amc-radioml2016-strat-snr-8010-seed42-v1
+  - name: radioml_2018_01a # 24 classes; 80/10/10 stratified by (modulation x snr), seed 42
+    canonical_split_id: amc-radioml2018-strat-snr-8010-seed42-v1
+  - name: sig53 # 53 classes; official TorchSig split adopted verbatim
+    canonical_split_id: amc-sig53-official-v1
+
+# Default partition scored on the board ({val, test} only; train is fit-only).
+default_split: test
+# Single closed-set track: AMC never blends tracks in one leaderboard column.
+tracks:
+  - closed_set
+
+# Metrics per EVALUATION_PROTOCOL.md §AMC. `accuracy_overall` is PRIMARY and is computed over
+# the FULL SNR range (no cherry-picking); `accuracy_vs_snr` is a per-SNR-bin curve;
+# `macro_f1` is the unweighted mean of per-class F1.
+metrics:
+  primary: accuracy_overall
+  scalars:
+    - accuracy_overall
+    - macro_f1
+  curves:
+    - accuracy_vs_snr
+
+# Full-protocol conditions recorded in result.json.eval.conditions (the RadioML SNR grid;
+# `full_snr_range: true` attests the whole range was scored). Metric.eval_conditions() is the
+# source of truth at eval time; these mirror it for documentation/composition.
+conditions:
+  snr_db_min: -20
+  snr_db_max: 18
+  full_snr_range: true

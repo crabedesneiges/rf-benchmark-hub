@@ -343,6 +343,7 @@ def _atomic_write_json(document: dict[str, Any], out_path: Path) -> None:
     into place so a reader never observes a partial file. ``sort_keys=True`` keeps the
     on-disk artifact byte-stable for a given result dict.
     """
+    out_path = Path(out_path)  # accept str paths from any caller
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(document, indent=2, sort_keys=True) + "\n"
     fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, prefix=out_path.name, suffix=".tmp")

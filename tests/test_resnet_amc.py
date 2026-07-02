@@ -147,6 +147,6 @@ def test_logits_depend_on_input() -> None:
     # Different inputs -> different outputs (not a constant map).
     assert not torch.allclose(logits_a, logits_b), "logits are input-independent (collapsed net)"
     # And within one batch the per-sample rows are not all identical either.
-    assert not torch.allclose(logits_a, logits_a[0:1].expand_as(logits_a)), (
-        "all rows identical -> feature map collapsed to a constant"
-    )
+    assert not torch.allclose(
+        logits_a, logits_a[0:1].expand_as(logits_a)
+    ), "all rows identical -> feature map collapsed to a constant"

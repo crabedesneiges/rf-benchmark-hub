@@ -234,6 +234,11 @@ def _as_vectors(embedded: Tensor) -> list[EmbeddingVector]:
     """
     if isinstance(embedded, Mapping):
         raise TypeError("model.embed must return per-sample vectors, not a mapping")
+    # torch tensor / numpy array -> nested Python lists in one shot (a (B, D) batch becomes a
+    # list of D-float rows; a (D,) single vector becomes a flat float list). Without this, a
+    # torch (B, D) embedding iterates to (D,)-tensor rows and float() blows up on them.
+    if hasattr(embedded, "tolist") and not isinstance(embedded, (list, tuple)):
+        embedded = embedded.tolist()
     as_list = list(embedded)
     if as_list and not isinstance(as_list[0], (list, tuple)):
         # A single flat vector -> one sample.

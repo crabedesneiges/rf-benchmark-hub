@@ -6,9 +6,10 @@
 # The dataset must already be downloaded + prepared (split indices committed):
 #   sbatch slurm/download_prepare_arm.sh radioml_2016_10a   # once
 # then:
-#   sbatch slurm/train_baseline_arm.sh [EPOCHS]             # EPOCHS default: 50
+#   sbatch slurm/train_baseline_arm.sh [MODEL] [EPOCHS]    # MODEL default mcldnn, EPOCHS default 50
+#     e.g. sbatch slurm/train_baseline_arm.sh resnet_amc 100
 #
-#SBATCH --job-name=rfbench_train_mcldnn
+#SBATCH --job-name=rfbench_train
 #SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/rfbench_train_mcldnn_%j.out
 #SBATCH --error=/lustre/work/pdl16831/udl79f933/logs/rfbench_train_mcldnn_%j.err
 #SBATCH --nodes=1
@@ -21,9 +22,9 @@ set -uo pipefail
 WORK=/lustre/work/pdl16831/udl79f933
 REPO="$WORK/projets/rf-benchmark-hub"
 VENV="$WORK/envs/rfbench-arm-gpu"          # .[dev,data,tasks,torch] — torch + CUDA present
-EPOCHS="${1:-50}"                          # small-but-real default; override as $1
+MODEL="${1:-mcldnn}"                        # baseline registry name; override as $1
+EPOCHS="${2:-50}"                          # small-but-real default; override as $2
 DATASET="radioml_2016_10a"
-MODEL="mcldnn"
 REGIME="from_scratch"
 OUT="$REPO/leaderboard/results/amc/${MODEL}.json"
 

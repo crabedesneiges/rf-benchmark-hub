@@ -33,6 +33,11 @@ EmbeddingVector = Sequence[float]
 
 
 @runtime_checkable
+#: Mini-batch size for streaming embeddings during probe fit (keeps a foundation backbone's
+#: activations within GPU memory when the train split is large, e.g. RadioML's 176k samples).
+_EMBED_BATCH = 256
+
+
 class Head(Protocol):
     """A fittable classification head over frozen embeddings.
 
@@ -192,19 +197,23 @@ class LinearProbeAdapter(RegimeAdapter):
         return train_split
 
     def _embed_samples(self, model: Model, samples: Sequence[Batch]) -> list[EmbeddingVector]:
-        """Collate ``samples`` and embed them, returning one vector per sample.
+        """Collate ``samples`` and embed them in MINI-BATCHES, one vector per sample.
 
-        ``model.embed`` is called on the collated batch (same field-agnostic contract as
-        ``forward``); its output is normalised to a list of per-sample float vectors so any
-        head sees a uniform ``Sequence[EmbeddingVector]``.
+        ``model.embed`` is called on each collated chunk (same field-agnostic contract as
+        ``forward``); outputs are normalised to per-sample float vectors so any head sees a
+        uniform ``Sequence[EmbeddingVector]``. Chunking is essential for real data: embedding
+        a whole train split (e.g. 176k RadioML samples) through a foundation backbone in one
+        call OOMs the GPU -- we stream it in ``_EMBED_BATCH``-sized chunks instead.
         """
-        collated = _collate(samples)
-        embedded = model.embed(collated)
-        vectors = _as_vectors(embedded)
-        if len(vectors) != len(samples):
-            raise ValueError(
-                f"model.embed returned {len(vectors)} vectors for {len(samples)} samples"
-            )
+        vectors: list[EmbeddingVector] = []
+        for start in range(0, len(samples), _EMBED_BATCH):
+            chunk = samples[start : start + _EMBED_BATCH]
+            chunk_vectors = _as_vectors(model.embed(_collate(chunk)))
+            if len(chunk_vectors) != len(chunk):
+                raise ValueError(
+                    f"model.embed returned {len(chunk_vectors)} vectors for {len(chunk)} samples"
+                )
+            vectors.extend(chunk_vectors)
         return vectors
 
 

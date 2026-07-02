@@ -31,13 +31,12 @@ from rfbench.regimes.base import FittedState, RegimeAdapter, TrainSplit
 #: A single embedding vector as the pure-stdlib head sees it: a sequence of floats.
 EmbeddingVector = Sequence[float]
 
-
-@runtime_checkable
 #: Mini-batch size for streaming embeddings during probe fit (keeps a foundation backbone's
 #: activations within GPU memory when the train split is large, e.g. RadioML's 176k samples).
 _EMBED_BATCH = 256
 
 
+@runtime_checkable
 class Head(Protocol):
     """A fittable classification head over frozen embeddings.
 

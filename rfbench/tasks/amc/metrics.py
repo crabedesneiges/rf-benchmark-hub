@@ -40,6 +40,11 @@ def _as_class_index(pred: Tensor) -> int:
     """
     if isinstance(pred, bool):  # bool is an int subclass; treat as the 0/1 class id
         return int(pred)
+    # torch tensor / numpy array (duck-typed via ``ndim`` + ``argmax``, no import needed): a
+    # 0-d value is already a class id; a 1-D per-class score vector -> its argmax.
+    ndim = getattr(pred, "ndim", None)
+    if ndim is not None and hasattr(pred, "argmax"):
+        return int(pred) if ndim == 0 else int(pred.argmax())
     if isinstance(pred, (list, tuple)):
         scores = list(pred)
         if not scores:

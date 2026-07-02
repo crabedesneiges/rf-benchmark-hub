@@ -321,3 +321,14 @@ def test_radioml2016_arrays_align_with_prepare_labels(tmp_path: Path) -> None:
     assert len(iq) == len(labels) == 6
     assert list(zip(mods, snrs, strict=True)) == labels  # identical order == index alignment
     assert iq[0].shape == (2, 128)
+
+
+def test_as_class_index_handles_numpy_arrays() -> None:
+    """_as_class_index decodes numpy/torch-style score vectors via argmax (WP-30 train fix)."""
+    np = pytest.importorskip("numpy")
+    from rfbench.tasks.amc.metrics import _as_class_index
+
+    assert _as_class_index(np.array([0.1, 0.9, 0.2, 0.0])) == 1  # 1-D scores -> argmax
+    assert _as_class_index(np.array(3)) == 3  # 0-D array -> already a class id
+    assert _as_class_index([0.5, 0.1, 0.9]) == 2  # python list path unchanged
+    assert _as_class_index(7) == 7  # scalar class id unchanged

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -346,3 +347,116 @@ def test_evaluate_writes_schema_valid_result_to_disk(tmp_path: Path) -> None:
     on_disk = json.loads(out_path.read_text(encoding="utf-8"))
     assert on_disk == result
     Draft202012Validator(_load_schema()).validate(on_disk)
+
+
+# --------------------------------------------------------------------------------------------------
+# On-disk WiSig loader: index alignment (regression guard)
+# --------------------------------------------------------------------------------------------------
+def _wisig_dataset_dict(np: ModuleType) -> dict[str, Any]:
+    """A tiny REAL WiSig ManyTx dict with distinct per-block row counts.
+
+    Uses the published axis-list layout (``tx_list`` / ``rx_list`` / ``capture_date_list`` /
+    ``equalized_list``) and a 5-level nested ``data`` tensor of ``ndarray(n, 256, 2)`` blocks
+    whose row counts differ per ``(tx, rx, day)`` cell, so a wrong flatten order would
+    reorder records and the alignment assertion would fail.
+    """
+    tx_list = ["tx-a", "tx-b"]
+    rx_list = [10, 11]
+    day_list = ["2021-01-01", "2021-01-02"]
+    eq_list = [0, 1]
+
+    counter = 0
+    data = []
+    for _tx in tx_list:
+        per_tx = []
+        for _rx in rx_list:
+            per_rx = []
+            for _day in day_list:
+                counter += 1
+                # eq slot 0 has `counter` rows filled with `counter`; eq slot 1 (unused) differs.
+                eq0 = np.full((counter, 256, 2), float(counter), dtype=np.float32)
+                eq1 = np.full((counter + 100, 256, 2), -1.0, dtype=np.float32)
+                per_rx.append([eq0, eq1])
+            per_tx.append(per_rx)
+        data.append(per_tx)
+
+    return {
+        "tx_list": tx_list,
+        "rx_list": rx_list,
+        "capture_date_list": day_list,
+        "equalized_list": eq_list,
+        "data": data,
+    }
+
+
+def test_wisig_arrays_align_with_prepare_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The on-disk IQ flatten order MUST equal prepare's record order (else indices corrupt).
+
+    numpy-guarded: skips in the dep-free venv, runs on the cluster [tasks]/[data] venv.
+    Builds a REAL ``ManyTx.pkl`` fixture, loads it through ``_load_wisig_arrays`` (the same
+    path ``SeiDataset._load_from_cache`` uses) and asserts the records line up element-for-
+    element with ``extract_wisig_records`` -- the invariant the committed split indices rely on.
+    """
+    np = pytest.importorskip("numpy")
+    import pickle
+
+    from rfbench.data.prepare.sei import extract_wisig_records
+    from rfbench.tasks.sei.dataset import _load_wisig_arrays
+
+    dataset = _wisig_dataset_dict(np)
+    ds_dir = tmp_path / "wisig"
+    ds_dir.mkdir(parents=True)
+    (ds_dir / "ManyTx.pkl").write_bytes(pickle.dumps(dataset))
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+
+    iq, records = _load_wisig_arrays("wisig")
+    expected = extract_wisig_records(dataset, equalized=0)
+
+    assert len(iq) == len(records) == len(expected)
+    assert records == expected  # identical order == index alignment with the committed idx.json
+    assert iq[0].shape == (256, 2)
+
+
+def test_wisig_flatten_matches_extract_records_row_for_row() -> None:
+    """Each flattened IQ row's fill value identifies its source block, proving row order.
+
+    numpy-guarded. Each ``(tx, rx, day)`` block is filled with a distinct constant equal to
+    its 1-based visit order; asserting the per-row fill sequence is non-decreasing in that
+    nested order confirms rows are appended block-by-block in the prepare walk (no shuffling
+    within or across blocks), which is what makes the split indices meaningful.
+    """
+    np = pytest.importorskip("numpy")
+
+    from rfbench.tasks.sei.dataset import _flatten_wisig
+
+    dataset = _wisig_dataset_dict(np)
+    iq, records = _flatten_wisig(np, dataset, equalized=0)
+
+    fills = [float(row[0, 0]) for row in iq]
+    assert fills == sorted(fills)  # blocks visited in strictly non-decreasing fill order
+    # First record is (tx_list[0], rx_list[0], capture_date_list[0]); last is the far cell.
+    assert records[0] == ("tx-a", 10, "2021-01-01")
+    assert records[-1] == ("tx-b", 11, "2021-01-02")
+
+
+def test_wisig_flatten_labels_map_to_dense_class_indices() -> None:
+    """The tx-id -> class-index map is dense, sorted and stable (mirrors AMC's class map).
+
+    numpy-guarded. Exercises the exact label logic ``_load_from_cache`` applies: sort the
+    distinct transmitter ids with the type-agnostic key and assign 0..K-1, so every split
+    load agrees on which integer each emitter gets.
+    """
+    np = pytest.importorskip("numpy")
+
+    from rfbench.tasks.sei.dataset import _flatten_wisig, _tx_key
+
+    dataset = _wisig_dataset_dict(np)
+    _iq, records = _flatten_wisig(np, dataset, equalized=0)
+
+    tx_ids = sorted({_tx_key(rec[0]) for rec in records})
+    class_of = {tx: i for i, tx in enumerate(tx_ids)}
+    labels = [class_of[_tx_key(rec[0])] for rec in records]
+    assert set(labels) == {0, 1}  # two transmitters -> dense {0, 1}
+    assert class_of[_tx_key("tx-a")] == 0 and class_of[_tx_key("tx-b")] == 1

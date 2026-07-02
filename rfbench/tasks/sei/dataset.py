@@ -6,11 +6,16 @@ canonical batches ``{"iq": ..., "label": tx_label, "meta": {"rx": ..., "day": ..
 given ``(split, track)``, where ``track`` selects one of the SEI conditions
 (``closed_set`` / ``cross_receiver`` / ``cross_day``) or the ``open_set`` protocol.
 
-The REAL loader (reading IQ from the WiSig/ORACLE files on the cluster) is lazy and never
-exercised in unit tests: it lives in :meth:`_load_from_cache`, which imports numpy behind a
-clear ``rfbench[tasks]`` hint and reads the canonical split indices produced by
-:mod:`rfbench.data.prepare.sei`. Unit tests inject an in-memory sample list via
-``samples=`` so the whole adapter runs dependency-free.
+The REAL loader (reading IQ from the WiSig files on the cluster) is lazy and never
+exercised in the dep-free unit venv: it lives in :meth:`_load_from_cache`, which reads the
+versioned canonical split indices produced by :mod:`rfbench.data.prepare.sei` and then the
+real IQ from ``$RFBENCH_CACHE/wisig/ManyTx.pkl``, importing numpy behind a clear
+``rfbench[tasks]`` hint. Crucially, the on-disk IQ is flattened in the SAME
+``data[tx_i][rx_i][day_i][eq_i]`` record order that
+:func:`rfbench.data.prepare.sei.extract_wisig_records` used, so the committed split indices
+line up with the materialised samples (mirrors the AMC on-disk adapter). Unit tests inject
+an in-memory sample list via ``samples=`` so the whole adapter runs dependency-free; a
+numpy-guarded regression test asserts the array/record order alignment.
 
 Module-top imports are stdlib + the frozen core contracts + the SEI split-id table only;
 numpy is imported lazily inside the real loader.
@@ -25,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 from rfbench.core.dataset import Dataset
 from rfbench.core.splits import SplitManifest
 from rfbench.core.types import Batch, SplitName, Track
-from rfbench.data.prepare.sei import CANONICAL_SPLIT_IDS
+from rfbench.data.prepare.sei import CANONICAL_SPLIT_IDS, SeiRecord
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import, never executed at runtime
     import torch.utils.data
@@ -138,24 +143,159 @@ class SeiDataset(Dataset):
 
     def _load_from_cache(
         self, split: SplitName
-    ) -> torch.utils.data.Dataset[Any]:  # pragma: no cover - cluster-only
+    ) -> _InMemorySplit:  # pragma: no cover - cluster-only
         """Real loader: read canonical indices + IQ from the cluster cache (lazy numpy).
 
-        Never called in unit tests. Imports numpy behind a clear ``rfbench[tasks]`` hint,
-        loads ``leaderboard/splits/<name>/<canonical_split_id>.idx.json`` for the requested
-        ``split`` partition, and materialises ``{"iq", "label", "meta"}`` per index. The
-        concrete IQ layout is wired on the cluster against the real files.
+        Never called in the dep-free unit venv. Reads the versioned
+        ``leaderboard/splits/<name>/<canonical_split_id>.idx.json`` for the requested
+        ``split`` partition, loads the real IQ arrays + ``(tx, rx, day)`` records from
+        ``$RFBENCH_CACHE/<name>/ManyTx.pkl`` in the SAME record order
+        :func:`rfbench.data.prepare.sei.extract_wisig_records` used (so the committed split
+        indices align), then materialises one ``{"iq", "label", "meta": {"rx", "day"}}``
+        canonical batch per index. ``label`` is the transmitter id mapped to a dense class
+        index via a deterministic (sorted-id) map, consistent across train/val/test loads
+        exactly like the AMC on-disk adapter.
         """
-        try:
-            import numpy as np  # noqa: F401 - surfaces the install hint early
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "Loading SEI IQ needs numpy; install it with `pip install rfbench[tasks]`."
-            ) from exc
+        indices = self._read_split_indices(split)
+        iq_all, records = _load_wisig_arrays(self.name)
+        tx_ids = sorted({_tx_key(rec[0]) for rec in records})
+        class_of = {tx: i for i, tx in enumerate(tx_ids)}
+        samples: list[Batch] = [
+            {
+                "iq": iq_all[i],
+                "label": class_of[_tx_key(records[i][0])],
+                "meta": {"rx": records[i][1], "day": records[i][2]},
+            }
+            for i in indices
+        ]
+        return _InMemorySplit(samples)
+
+    def _read_split_indices(self, split: SplitName) -> list[int]:  # pragma: no cover - cluster-only
+        """Return the item indices for ``split`` from the versioned ``.idx.json`` (repo tree)."""
+        import json
+
+        idx_path = _find_split_index(self.name, self.canonical_split_id)
+        if idx_path is None:
+            raise FileNotFoundError(
+                f"no split index for {self.name!r} ({self.canonical_split_id}); run "
+                "`rfbench data prepare` first so leaderboard/splits/<dataset>/*.idx.json exists."
+            )
+        doc = json.loads(idx_path.read_text(encoding="utf-8"))
+        self.checksum = doc.get("checksum", self.checksum)
+        indices = doc.get("indices", {}).get(split)
+        if indices is None:
+            raise KeyError(f"split {split!r} absent from {idx_path.name}")
+        return [int(i) for i in indices]
+
+
+def _find_split_index(name: str, split_id: str) -> Path | None:  # pragma: no cover - cluster-only
+    """Locate ``leaderboard/splits/<name>/<split_id>.idx.json`` by walking up from this file."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "leaderboard" / "splits" / name / f"{split_id}.idx.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _tx_key(tx_id: object) -> tuple[int, str]:
+    """Type-agnostic canonical key for a transmitter id (mixes int/str safely).
+
+    Maps each id to ``(type_rank, str_value)`` so a set of mixed int/str transmitter ids
+    has a deterministic total order and ``sorted(...)`` never raises ``TypeError`` -- the
+    same trick :func:`rfbench.data.prepare.sei._norm_group` uses for grouped conditions,
+    keeping the class-index assignment stable across train/val/test loads.
+    """
+    if isinstance(tx_id, str):
+        return (0, tx_id)
+    return (1, f"{tx_id!r}")
+
+
+def _load_wisig_arrays(
+    name: str,
+) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
+    """Load flat ``(iq_rows, records)`` from the cached WiSig ManyTx pickle (lazy numpy).
+
+    Reads ``$RFBENCH_CACHE/<name>/ManyTx.pkl`` and flattens the 5-level nested ``data``
+    tensor ``data[tx_i][rx_i][day_i][eq_i]`` -> ``ndarray(n_signals, 256, 2)`` into one
+    ``iq`` row + one ``(tx_id, rx_id, day_id)`` record per signal, walking ``(tx, rx, day)``
+    in the EXACT nested order :func:`rfbench.data.prepare.sei.extract_wisig_records` uses so
+    the committed split indices align element-for-element. ``eq_i`` is pinned to the
+    non-equalised captures (``equalized=0``) to match the default prepare extraction.
+    Cluster-only: needs the real dataset + numpy.
+    """
+    import pickle  # stdlib
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Loading SEI IQ needs numpy; install it with `pip install rfbench[tasks]`."
+        ) from exc
+
+    from rfbench.data.prepare._common import resolve_cache_dir
+
+    if name != "wisig":
         raise NotImplementedError(
-            f"SEI IQ loading for split {split!r} runs on the cluster against the real "
-            f"{self.name!r} files and the prepared {self.canonical_split_id!r} indices."
+            f"on-disk IQ loading is wired for WiSig only; {name!r} has no ManyTx.pkl layout."
         )
+
+    cache_dir = resolve_cache_dir(None)
+    path = cache_dir / name / "ManyTx.pkl"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"WiSig not found at {path}; run the download step first "
+            "(rfbench.data.download.sei_wisig)."
+        )
+    with path.open("rb") as fh:
+        dataset = pickle.load(fh)  # noqa: S301 - trusted local dataset file
+    return _flatten_wisig(np, dataset, equalized=0)
+
+
+def _flatten_wisig(
+    np_mod: object, dataset: Mapping[str, Any], *, equalized: int
+) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
+    """Flatten a loaded WiSig ManyTx ``dataset`` dict to ``(iq_rows, records)`` in prepare order.
+
+    Mirrors :func:`rfbench.data.prepare.sei.extract_wisig_records` exactly: it walks
+    ``data[tx_i][rx_i][day_i][eq_i]`` for the requested ``equalized`` slot using the real
+    ``tx_list`` / ``rx_list`` / ``capture_date_list`` axis labels, emitting one IQ row and
+    one ``(tx_id, rx_id, day_id)`` record per signal in the same ``(tx, rx, day)`` nesting.
+    Each block is coerced to a ``float32`` ``ndarray(n_signals, 256, 2)`` and iterated
+    row-wise so ``iq[k]`` corresponds to ``records[k]``.
+    """
+    tx_list = list(_require_seq(dataset, "tx_list"))
+    rx_list = list(_require_seq(dataset, "rx_list"))
+    day_list = list(_require_seq(dataset, "capture_date_list"))
+    eq_list = list(_require_seq(dataset, "equalized_list"))
+    if equalized not in eq_list:
+        raise ValueError(f"equalized={equalized!r} not in dataset equalized_list {eq_list!r}")
+    eq_i = eq_list.index(equalized)
+
+    data = dataset.get("data")
+    if not isinstance(data, Sequence):
+        raise ValueError("WiSig dataset 'data' must be a nested sequence")
+
+    iq: list[Any] = []
+    records: list[SeiRecord] = []
+    for tx_i, tx_id in enumerate(tx_list):
+        for rx_i, rx_id in enumerate(rx_list):
+            for day_i, day_id in enumerate(day_list):
+                block = np_mod.asarray(  # type: ignore[attr-defined]
+                    data[tx_i][rx_i][day_i][eq_i], dtype=np_mod.float32  # type: ignore[attr-defined]
+                )
+                for row in block:  # (256, 2) per signal
+                    iq.append(row)
+                    records.append((tx_id, rx_id, day_id))
+    return iq, records
+
+
+def _require_seq(dataset: Mapping[str, Any], key: str) -> Sequence[Any]:  # pragma: no cover
+    """Return ``dataset[key]`` as a sequence or raise a clear ``ValueError``."""
+    value = dataset.get(key)
+    if not isinstance(value, Sequence):
+        raise ValueError(f"WiSig dataset is missing sequence field {key!r}")
+    return value
 
 
 __all__ = ["SeiDataset"]

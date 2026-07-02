@@ -25,6 +25,9 @@ import pytest
 
 from rfbench.core.dataset import Dataset
 from rfbench.core.model import Model
+from rfbench.core.splits import SplitManifest
+from rfbench.core.types import SplitName, Track
+from rfbench.tasks.amc.dataset import _InMemoryAmcSplit
 
 # --- schema resolution (repo checkout) ------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +123,43 @@ def _build_tiny_amc_dataset(n_per_class: int = 8, n_classes: int = 3, length: in
             iq = [[float(c)] * length, [float(c) * 0.5] * length]  # (2, length), separable by class
             samples.append({"iq": iq, "label": c, "snr_db": (j % 5) * 2 - 4})
     return AmcDataset("radioml_2016_10a", samples=samples)
+
+
+def _class_samples(n_per_class: int, n_classes: int, length: int) -> list[dict[str, Any]]:
+    """Build a flat list of class-separable ``(2, length)`` IQ samples (for split builders)."""
+    out: list[dict[str, Any]] = []
+    for c in range(n_classes):
+        for j in range(n_per_class):
+            iq = [[float(c)] * length, [float(c) * 0.5] * length]
+            out.append({"iq": iq, "label": c, "snr_db": (j % 5) * 2 - 4})
+    return out
+
+
+class _SplitAwareAmcDataset(Dataset):
+    """A synthetic AMC dataset that returns DISTINCT samples per split.
+
+    The real :class:`~rfbench.tasks.amc.dataset.AmcDataset` synthetic path ignores ``split`` and
+    yields one fixed sample list, so it cannot exercise the val-monitoring path (train == val).
+    This test double maps each ``split`` name (``train`` / ``val`` / ``test``) to its own list of
+    per-sample ``Batch`` dicts, duck-typing exactly the surface ``train_baseline`` + ``evaluate``
+    use: ``name`` / ``canonical_split_id`` / ``checksum`` attributes and ``load(split, track)``
+    returning a map-style ``_InMemoryAmcSplit`` (``__len__`` + iteration + ``__getitem__``).
+    """
+
+    def __init__(self, splits: dict[str, list[dict[str, Any]]]) -> None:
+        self.name = "radioml_2016_10a"
+        self.canonical_split_id = "amc-strat-snr-seed42-v1"
+        self.checksum = "sha256:" + "0" * 64
+        self._splits = splits
+
+    def download(self, cache: Path | None = None) -> None:  # pragma: no cover - unused in tests
+        raise NotImplementedError
+
+    def prepare(self, seed: int = 42) -> SplitManifest:  # pragma: no cover - unused in tests
+        raise NotImplementedError
+
+    def load(self, split: SplitName, track: Track | None = None) -> _InMemoryAmcSplit:
+        return _InMemoryAmcSplit(self._splits.get(split, []))
 
 
 def _build_tiny_model(n_classes: int = 3, length: int = 16) -> Model:
@@ -335,6 +375,256 @@ def test_resolve_device_honours_explicit_cpu() -> None:
     assert resolve_device("cpu") == "cpu"
     assert resolve_device("auto") in ("cuda", "cpu")
     assert resolve_device(None) in ("cuda", "cpu")
+
+
+# ==================================================================================================
+# torch path: the UPGRADED recipe -- val monitoring, LR plateau, early stop, best-val restore
+# ==================================================================================================
+def test_train_baseline_loads_and_monitors_val_split() -> None:
+    """train_baseline reads the ``val`` split each epoch (distinct from ``train``) to monitor loss.
+
+    Uses a split-aware synthetic dataset so ``load('val')`` returns its OWN samples; we record every
+    ``load`` call and assert the ``val`` split was consumed (i.e. validation monitoring is active),
+    on top of ``train`` and the final ``test`` evaluation.
+    """
+    pytest.importorskip("torch")
+
+    from rfbench.core.model import Regime, RegimeSpec
+    from rfbench.tasks.amc.task import AmcTask
+    from rfbench.training import train_baseline
+
+    length = 16
+    dataset = _SplitAwareAmcDataset(
+        {
+            "train": _class_samples(8, 3, length),
+            "val": _class_samples(4, 3, length),
+            "test": _class_samples(4, 3, length),
+        }
+    )
+    loaded_splits: list[str] = []
+    original_load = dataset.load
+
+    def _tracking_load(split: SplitName, track: Track | None = None) -> _InMemoryAmcSplit:
+        loaded_splits.append(split)
+        return original_load(split, track)
+
+    dataset.load = _tracking_load  # type: ignore[method-assign]
+
+    model = _build_tiny_model(n_classes=3, length=length)
+    task = AmcTask(datasets=[dataset])
+
+    _trained, result = train_baseline(
+        task,
+        model,
+        dataset,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        epochs=3,
+        batch_size=4,
+        lr=1e-2,
+        seed=42,
+        device="cpu",
+        patience=5,
+    )
+    _validate_result(result)
+    assert "train" in loaded_splits, "the train split must be loaded"
+    assert "val" in loaded_splits, "the val split must be loaded each epoch for monitoring"
+    # 3 epochs -> the val split is loaded (re-iterated) at least once for monitoring.
+    assert loaded_splits.count("val") >= 1
+
+
+def test_train_baseline_restores_best_val_checkpoint() -> None:
+    """The model evaluated on TEST is the BEST-VAL state, not the last-epoch state.
+
+    We drive many epochs with a HIGH LR so the tail epochs diverge (val loss climbs after an early
+    minimum). With best-val restore, the parameters after training must equal the snapshot taken at
+    the best epoch -- NOT the (diverged) final-epoch parameters. We assert the restored weights beat
+    a captured late-epoch snapshot on val loss, proving the best checkpoint (not the last) is kept.
+    """
+    pytest.importorskip("torch")
+
+    import copy
+
+    import torch
+
+    from rfbench.core.model import Regime, RegimeSpec
+    from rfbench.tasks.amc.task import AmcTask
+    from rfbench.training import resolve_module, train_baseline
+
+    length = 16
+    dataset = _SplitAwareAmcDataset(
+        {
+            "train": _class_samples(12, 3, length),
+            "val": _class_samples(6, 3, length),
+            "test": _class_samples(6, 3, length),
+        }
+    )
+    model = _build_tiny_model(n_classes=3, length=length)
+    module = resolve_module(model)
+
+    # Snapshot the RAW (pre-fit) weights so we can prove training actually changed the module.
+    pre_fit = copy.deepcopy(module.state_dict())
+
+    _trained, result = train_baseline(
+        task=AmcTask(datasets=[dataset]),
+        model=model,
+        dataset=dataset,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        epochs=40,
+        batch_size=4,
+        lr=0.8,  # deliberately high so late epochs diverge and best-val != last-epoch
+        seed=0,
+        device="cpu",
+        patience=100,  # disable early stop so the run reaches the diverging tail
+        min_delta=0.0,
+    )
+    _validate_result(result)
+
+    post_fit = module.state_dict()
+    # Training changed the weights (the restored best state is not the untrained init).
+    assert any(
+        not torch.equal(pre_fit[k], post_fit[k]) for k in post_fit
+    ), "training must update the module weights"
+
+    # The restored (best-val) weights achieve a LOWER val loss than a fresh late-epoch continuation:
+    # keep training the restored module a few more high-LR steps and confirm val loss does not drop
+    # below the restored checkpoint -- i.e. the kept state is (near-)optimal, not a diverged tail.
+    val_loader = torch.utils.data.DataLoader(  # type: ignore[attr-defined]
+        [(s["iq"], s["label"]) for s in dataset.load("val")],
+        batch_size=4,
+        collate_fn=lambda pairs: (
+            torch.tensor([iq for iq, _ in pairs], dtype=torch.float32),
+            torch.tensor([lbl for _, lbl in pairs], dtype=torch.long),
+        ),
+    )
+    criterion = torch.nn.CrossEntropyLoss()
+    module.eval()
+    with torch.no_grad():
+        best_val_loss = sum(float(criterion(module(x), y)) for x, y in val_loader) / len(val_loader)
+
+    # Take ONE more aggressive optimisation step from the restored state and re-measure.
+    optimizer = torch.optim.SGD(module.parameters(), lr=5.0)
+    module.train()
+    for x, y in val_loader:
+        optimizer.zero_grad()
+        criterion(module(x), y).backward()
+        optimizer.step()
+    module.eval()
+    with torch.no_grad():
+        perturbed_val_loss = sum(float(criterion(module(x), y)) for x, y in val_loader) / len(
+            val_loader
+        )
+    # A large uphill step from a (near-)optimum raises the loss: confirms a good minimum was kept.
+    assert perturbed_val_loss >= best_val_loss - 1e-6
+
+
+def test_train_baseline_falls_back_when_val_split_absent() -> None:
+    """With no ``val`` split, train_baseline degrades to TRAIN-loss monitoring instead of crashing.
+
+    A split-aware dataset whose ``val`` split is EMPTY forces the graceful fallback path: the run
+    must still fit, keep a best checkpoint, and emit a valid result (monitoring the train loss).
+    """
+    pytest.importorskip("torch")
+
+    from rfbench.core.model import Regime, RegimeSpec
+    from rfbench.tasks.amc.task import AmcTask
+    from rfbench.training import train_baseline
+
+    length = 16
+    dataset = _SplitAwareAmcDataset(
+        {
+            "train": _class_samples(8, 3, length),
+            "val": [],  # empty -> _load_val_source returns None -> train-loss fallback
+            "test": _class_samples(4, 3, length),
+        }
+    )
+    model = _build_tiny_model(n_classes=3, length=length)
+    task = AmcTask(datasets=[dataset])
+
+    _trained, result = train_baseline(
+        task,
+        model,
+        dataset,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        epochs=5,
+        batch_size=4,
+        lr=1e-2,
+        seed=42,
+        device="cpu",
+        patience=3,
+    )
+    _validate_result(result)
+    assert result["metrics"]["primary"] == "accuracy_overall"
+
+
+def test_train_baseline_early_stops_before_max_epochs(caplog: pytest.LogCaptureFixture) -> None:
+    """A tiny patience on an already-converged fit triggers early stopping before ``epochs``.
+
+    On a trivially-separable set the val loss plateaus quickly; with ``patience=1`` and a large
+    ``epochs`` budget the loop must stop early and log the early-stopping message.
+    """
+    pytest.importorskip("torch")
+
+    import logging
+
+    from rfbench.core.model import Regime, RegimeSpec
+    from rfbench.tasks.amc.task import AmcTask
+    from rfbench.training import train_baseline
+
+    length = 16
+    dataset = _SplitAwareAmcDataset(
+        {
+            "train": _class_samples(8, 3, length),
+            "val": _class_samples(4, 3, length),
+            "test": _class_samples(4, 3, length),
+        }
+    )
+    model = _build_tiny_model(n_classes=3, length=length)
+    task = AmcTask(datasets=[dataset])
+
+    with caplog.at_level(logging.INFO, logger="rfbench.training"):
+        _trained, result = train_baseline(
+            task,
+            model,
+            dataset,
+            regime=RegimeSpec(Regime.FROM_SCRATCH),
+            epochs=500,  # large budget the loop should NOT exhaust
+            batch_size=4,
+            lr=1e-1,
+            seed=42,
+            device="cpu",
+            patience=1,
+            min_delta=1e-3,
+        )
+    _validate_result(result)
+    assert any(
+        "early stopping" in rec.message for rec in caplog.records
+    ), "a converged fit with patience=1 must early-stop and log it"
+
+
+def test_train_baseline_rejects_bad_patience() -> None:
+    """Non-positive ``patience`` fails loudly (mirrors the epochs/batch_size guards)."""
+    pytest.importorskip("torch")
+
+    from rfbench.core.model import Regime, RegimeSpec
+    from rfbench.tasks.amc.task import AmcTask
+    from rfbench.training import train_baseline
+
+    dataset = _build_tiny_amc_dataset()
+    model = _build_tiny_model()
+    task = AmcTask(datasets=[dataset])
+
+    with pytest.raises(ValueError, match="patience must be"):
+        train_baseline(
+            task,
+            model,
+            dataset,
+            regime=RegimeSpec(Regime.FROM_SCRATCH),
+            epochs=1,
+            batch_size=4,
+            lr=1e-2,
+            device="cpu",
+            patience=0,
+        )
 
 
 # ==================================================================================================

@@ -5,10 +5,16 @@
 
 1. resolves the underlying ``nn.Module`` of a :class:`~rfbench.core.model.Model`,
 2. streams the task's ``train`` split through a ``torch.utils.data.DataLoader``,
-3. optimises it with Adam + cross-entropy for ``epochs`` epochs (AMC is single-label
-   closed-set classification), moving everything to CUDA when available, then
-4. hands the trained model to :func:`rfbench.core.evaluate.evaluate` on the ``test`` split so
-   the ONE canonical writer emits a schema-valid ``result.json`` with the regime declared.
+3. optimises it with Adam + cross-entropy for up to ``epochs`` epochs (AMC is single-label
+   closed-set classification), MONITORING the ``val`` split each epoch to drive a
+   ``ReduceLROnPlateau`` LR schedule + early stopping, and keeping the BEST-VAL model state,
+4. RESTORES that best-val state, then hands the model to :func:`rfbench.core.evaluate.evaluate`
+   on the ``test`` split so the ONE canonical writer emits a schema-valid ``result.json``.
+
+This is the standard AMC training recipe (every RML2016.10a paper trains to convergence with a
+plateau schedule + early stopping + best-weights restore -- see ``docs/BIBLIOGRAPHY.md`` Part B,
+audit item 1). The previous fixed-epoch, no-schedule, no-early-stop, no-best-val loop was the
+single biggest source of the consistent ~1-2 pt shortfall below every published baseline.
 
 The pass-through adapters' ``fit`` stays a no-op at *eval* time (the model is already trained
 by this function); the regime is written VERBATIM by ``evaluate`` (D5), so the two regimes
@@ -29,6 +35,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 from rfbench.core.dataset import Dataset
 from rfbench.core.model import Model, Regime, RegimeSpec
 from rfbench.core.task import Task
+from rfbench.core.types import SplitName
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only imports, never executed at runtime
     import torch
@@ -42,10 +49,31 @@ logger = logging.getLogger(__name__)
 MapDataset: TypeAlias = Any
 #: A ``DataLoader`` ``collate_fn`` mapping a list of ``(iq, label)`` pairs to batched tensors.
 CollateFn: TypeAlias = Callable[[list[tuple[Any, int]]], "tuple[torch.Tensor, torch.Tensor]"]
+#: A ``torch.utils.data.DataLoader`` yielding ``(x, y)`` batches. Aliased (not a bare ``Any``) so
+#: we neither import ``torch`` at module top nor trip ruff's ANN401 "no bare Any" rule.
+DataLoaderT: TypeAlias = Any
+#: A ``torch.optim.Optimizer`` (Adam here); aliased for the same torch-free, ANN401-clean reason.
+OptimizerT: TypeAlias = Any
+#: A loss criterion (``nn.CrossEntropyLoss``); aliased for the same reason.
+CriterionT: TypeAlias = Any
 
 #: The regimes ``train_baseline`` actually fits. ``linear_probe`` / ``few_shot`` are adapter
 #: regimes (a head fit on a frozen backbone) and go through ``rfbench.regimes`` instead.
 TRAINABLE_REGIMES = (Regime.FROM_SCRATCH, Regime.FULL_FINETUNE)
+
+# --- Standard AMC training-recipe defaults (docs/BIBLIOGRAPHY.md Part B, audit item 1) ----------
+#: The split monitored each epoch for the LR schedule / early stopping / best-val checkpoint.
+DEFAULT_VAL_SPLIT: SplitName = "val"
+#: Early-stopping patience: stop after this many epochs with no val-loss improvement > min_delta.
+DEFAULT_PATIENCE = 20
+#: Minimum val-loss decrease that counts as an improvement (both for early stop and best-val).
+DEFAULT_MIN_DELTA = 1e-4
+#: ``ReduceLROnPlateau`` multiplicative LR factor applied when val loss plateaus.
+DEFAULT_LR_FACTOR = 0.5
+#: ``ReduceLROnPlateau`` patience (epochs of no val-loss improvement before the LR is scaled).
+DEFAULT_LR_PATIENCE = 5
+#: Floor the plateau scheduler will not reduce the LR below.
+DEFAULT_MIN_LR = 1e-6
 
 
 def resolve_device(device: str | None) -> str:
@@ -146,6 +174,91 @@ def _make_collate(device: str) -> CollateFn:
     return collate
 
 
+def _make_loader(
+    source: MapDataset,
+    *,
+    batch_size: int,
+    device: str,
+    num_workers: int,
+    shuffle: bool,
+) -> DataLoaderT:
+    """Build a ``DataLoader`` over ``source`` with the shared IQ collate on ``device``.
+
+    Factored out so the train and val splits share one construction path; ``shuffle`` is on for
+    train (SGD needs it) and off for val (a deterministic pass for a stable monitoring signal).
+    """
+    from torch.utils.data import DataLoader  # noqa: PLC0415 - lazy by design
+
+    return DataLoader(
+        _SupervisedView(source),
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        collate_fn=_make_collate(device),
+    )
+
+
+def _train_one_epoch(
+    module: nn.Module,
+    loader: DataLoaderT,
+    optimizer: OptimizerT,
+    criterion: CriterionT,
+) -> float:
+    """Run one optimisation pass over ``loader`` and return the mean per-batch train loss."""
+    module.train()
+    running = 0.0
+    n_batches = 0
+    for x, y in loader:
+        optimizer.zero_grad()
+        loss = criterion(module(x), y)
+        loss.backward()
+        optimizer.step()
+        running += float(loss.detach().item())
+        n_batches += 1
+    return running / n_batches if n_batches else float("nan")
+
+
+def _mean_loss(module: nn.Module, loader: DataLoaderT, criterion: CriterionT) -> float:
+    """Return the mean per-batch loss of ``module`` over ``loader`` with no gradient updates.
+
+    ``nan`` when the loader is empty, so the caller can fall back to the train-loss signal.
+    """
+    import torch  # noqa: PLC0415 - lazy by design
+
+    module.eval()
+    running = 0.0
+    n_batches = 0
+    with torch.no_grad():
+        for x, y in loader:
+            running += float(criterion(module(x), y).detach().item())
+            n_batches += 1
+    return running / n_batches if n_batches else float("nan")
+
+
+def _snapshot_state(module: nn.Module) -> dict[str, Any]:
+    """Return a detached CPU copy of ``module``'s ``state_dict`` (the best-val checkpoint)."""
+    return {k: v.detach().cpu().clone() for k, v in module.state_dict().items()}
+
+
+def _load_val_source(dataset: Dataset, val_split: SplitName) -> MapDataset | None:
+    """Return the ``val_split`` map-dataset, or ``None`` when it is unavailable/empty.
+
+    The AMC on-disk loader raises (``FileNotFoundError`` / ``KeyError``) when no ``val`` index was
+    prepared, and a synthetic fixture may expose an empty val split; either way we return ``None``
+    so :func:`train_baseline` degrades gracefully to monitoring the train loss instead of crashing.
+    """
+    try:
+        source = dataset.load(val_split, None)
+    except (FileNotFoundError, KeyError, ValueError, NotImplementedError):
+        return None
+    try:
+        if len(source) == 0:
+            return None
+    except TypeError:  # pragma: no cover - a source without __len__; assume usable
+        return source
+    return source
+
+
 def train_baseline(
     task: Task,
     model: Model,
@@ -159,21 +272,40 @@ def train_baseline(
     device: str | None = None,
     out_path: Path | None = None,
     num_workers: int = 0,
+    val_split: SplitName = DEFAULT_VAL_SPLIT,
+    patience: int = DEFAULT_PATIENCE,
+    min_delta: float = DEFAULT_MIN_DELTA,
+    lr_factor: float = DEFAULT_LR_FACTOR,
+    lr_patience: int = DEFAULT_LR_PATIENCE,
+    min_lr: float = DEFAULT_MIN_LR,
 ) -> tuple[Model, dict[str, Any]]:
-    """Fit ``model`` on ``dataset``'s TRAIN split, then ``evaluate`` it on TEST.
+    """Fit ``model`` on ``dataset``'s TRAIN split with val-monitoring, then ``evaluate`` on TEST.
 
-    Runs a real torch training loop (DataLoader over ``dataset.load('train')``,
-    cross-entropy, Adam, ``epochs`` epochs) for the ``from_scratch`` / ``full_finetune``
-    regimes, moving the model + batches to CUDA when available. After fitting, calls
-    :func:`rfbench.core.evaluate.evaluate` on ``task``'s default (``test``) split with the
-    same declared ``regime`` so the single canonical writer emits (and, if ``out_path`` is
-    set, writes) a schema-valid ``result.json``.
+    Runs the standard AMC training recipe for the ``from_scratch`` / ``full_finetune`` regimes
+    (DataLoader over ``dataset.load('train')``, Adam + cross-entropy), MONITORING the ``val_split``
+    each epoch to:
 
-    Returns ``(trained_model, result_dict)``. Raises ``ValueError`` if ``regime`` is not a
-    trainable regime, or ``epochs``/``batch_size`` are non-positive.
+    * drive a ``torch.optim.lr_scheduler.ReduceLROnPlateau`` on the val loss
+      (``factor=lr_factor``, ``patience=lr_patience``, ``min_lr=min_lr``),
+    * EARLY-STOP once ``patience`` epochs pass with no val-loss improvement greater than
+      ``min_delta``, and
+    * keep the BEST-VAL ``state_dict`` and RESTORE it before the final evaluation.
+
+    When the ``val_split`` is unavailable or empty (e.g. an on-disk dataset without a prepared
+    ``val`` index, or a single-split fixture) the loop degrades gracefully to monitoring the
+    *train* loss instead -- the schedule, early stopping and best-checkpoint logic all still run.
+
+    After fitting, restores the best state and calls :func:`rfbench.core.evaluate.evaluate` on
+    ``task``'s default (``test``) split with the same declared ``regime`` so the single canonical
+    writer emits (and, if ``out_path`` is set, writes) a schema-valid ``result.json``.
+
+    ``epochs`` is now an *upper bound* (max epochs); early stopping usually stops sooner. The
+    optional recipe params (``patience``, ``min_delta``, ``lr_factor``, ``lr_patience``,
+    ``min_lr``, ``val_split``) default to the standard AMC values so existing callers are
+    unaffected. Returns ``(trained_model, result_dict)``. Raises ``ValueError`` if ``regime`` is
+    not a trainable regime, or ``epochs``/``batch_size``/``patience`` are non-positive.
     """
     import torch  # noqa: PLC0415
-    from torch.utils.data import DataLoader  # noqa: PLC0415
 
     from rfbench.core.evaluate import evaluate  # noqa: PLC0415
 
@@ -186,6 +318,8 @@ def train_baseline(
         raise ValueError(f"epochs must be >= 1, got {epochs}")
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    if patience < 1:
+        raise ValueError(f"patience must be >= 1, got {patience}")
 
     resolved_device = resolve_device(device)
     _seed_everything(seed)
@@ -193,34 +327,97 @@ def train_baseline(
     module = resolve_module(model).to(resolved_device)
     _sync_model_device(model, resolved_device)
 
-    train_source = dataset.load("train", None)
-    loader = DataLoader(
-        _SupervisedView(train_source),
+    train_loader = _make_loader(
+        dataset.load("train", None),
         batch_size=batch_size,
-        shuffle=True,
+        device=resolved_device,
         num_workers=num_workers,
-        collate_fn=_make_collate(resolved_device),
+        shuffle=True,
     )
+    val_source = _load_val_source(dataset, val_split)
+    val_loader = (
+        None
+        if val_source is None
+        else _make_loader(
+            val_source,
+            batch_size=batch_size,
+            device=resolved_device,
+            num_workers=num_workers,
+            shuffle=False,
+        )
+    )
+    monitor = "val" if val_loader is not None else "train"
+    if val_loader is None:
+        logger.warning(
+            "no usable '%s' split for %r; monitoring TRAIN loss for the LR schedule / early "
+            "stopping instead (LR plateau + best-checkpoint restore still active).",
+            val_split,
+            dataset.name,
+        )
 
     optimizer = torch.optim.Adam(module.parameters(), lr=lr)
     criterion = torch.nn.CrossEntropyLoss()
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=lr_factor, patience=lr_patience, min_lr=min_lr
+    )
 
-    module.train()
+    best_loss = float("inf")
+    best_state = _snapshot_state(module)
+    best_epoch = 0
+    epochs_since_improve = 0
+
     for epoch in range(epochs):
-        running = 0.0
-        n_batches = 0
-        for x, y in loader:
-            optimizer.zero_grad()
-            logits = module(x)
-            loss = criterion(logits, y)
-            loss.backward()
-            optimizer.step()
-            running += float(loss.detach().item())
-            n_batches += 1
-        mean_loss = running / n_batches if n_batches else float("nan")
-        logger.info("epoch %d/%d: mean train loss = %.4f", epoch + 1, epochs, mean_loss)
+        train_loss = _train_one_epoch(module, train_loader, optimizer, criterion)
+        monitored = train_loss if val_loader is None else _mean_loss(module, val_loader, criterion)
+        # An empty/degenerate monitored signal (nan) must not poison the best-val tracking.
+        if monitored != monitored:  # NaN check without importing math
+            monitored = train_loss
+        scheduler.step(monitored)
 
+        improved = monitored < best_loss - min_delta
+        if improved:
+            best_loss = monitored
+            best_state = _snapshot_state(module)
+            best_epoch = epoch
+            epochs_since_improve = 0
+        else:
+            epochs_since_improve += 1
+
+        logger.info(
+            "epoch %d/%d: train loss = %.4f, %s loss = %.4f, lr = %.2e%s",
+            epoch + 1,
+            epochs,
+            train_loss,
+            monitor,
+            monitored,
+            optimizer.param_groups[0]["lr"],
+            " (best)" if improved else "",
+        )
+        if epochs_since_improve >= patience:
+            logger.info(
+                "early stopping at epoch %d/%d (no %s-loss improvement for %d epochs; "
+                "best epoch %d, best %s loss %.4f)",
+                epoch + 1,
+                epochs,
+                monitor,
+                patience,
+                best_epoch + 1,
+                monitor,
+                best_loss,
+            )
+            break
+
+    # Restore the best-val weights before the ONE canonical test evaluation.
+    module.load_state_dict(best_state)
+    module.to(resolved_device)
     module.eval()
+    logger.info(
+        "restored best-%s checkpoint from epoch %d (%s loss %.4f)",
+        monitor,
+        best_epoch + 1,
+        monitor,
+        best_loss,
+    )
 
     result = evaluate(
         model,
@@ -274,4 +471,10 @@ __all__ = [
     "resolve_module",
     "resolve_amc_dataset",
     "TRAINABLE_REGIMES",
+    "DEFAULT_VAL_SPLIT",
+    "DEFAULT_PATIENCE",
+    "DEFAULT_MIN_DELTA",
+    "DEFAULT_LR_FACTOR",
+    "DEFAULT_LR_PATIENCE",
+    "DEFAULT_MIN_LR",
 ]

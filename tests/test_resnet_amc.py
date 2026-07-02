@@ -21,10 +21,13 @@ torch = pytest.importorskip("torch")
 from rfbench.core.model import Model  # noqa: E402
 from rfbench.core.registry import MODELS  # noqa: E402
 from rfbench.models.baselines.resnet_amc import (  # noqa: E402
+    DEFAULT_ALPHA_DROPOUT,
     DEFAULT_NUM_CLASSES,
+    DEFAULT_NUM_STACKS,
     DEFAULT_WINDOW,
     ResNetAMC,
     ResNetAMCNet,
+    _unit_variance_normalize,
 )
 
 _BATCH = 4
@@ -150,3 +153,84 @@ def test_logits_depend_on_input() -> None:
     assert not torch.allclose(
         logits_a, logits_a[0:1].expand_as(logits_a)
     ), "all rows identical -> feature map collapsed to a constant"
+
+
+# --- Paper-exact fidelity (BIBLIOGRAPHY.md §B.3) -------------------------------------------------
+
+
+def test_uses_six_residual_stacks() -> None:
+    """O'Shea et al.'s L = 6 residual stacks (was 4); six halving pools take len-128 -> 2."""
+    assert DEFAULT_NUM_STACKS == 6
+    net = ResNetAMCNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    assert len(net.stacks) == 6
+    # 128 -> 64 -> 32 -> 16 -> 8 -> 4 -> 2 pooled samples, x conv_filters channels.
+    assert net.flat_dim == net.conv_filters * 2
+
+
+def test_unit_variance_normalize_standardises_each_window() -> None:
+    """Each (2, L) window is standardised to ~zero mean / unit variance over both channels."""
+    gen = torch.Generator().manual_seed(3)
+    # Per-sample offset + scale: normalization must remove both, per window independently.
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW, generator=gen) * 7.0 + 3.0
+    normed = _unit_variance_normalize(x)
+    mean = normed.mean(dim=(1, 2))
+    std = normed.std(dim=(1, 2), unbiased=False)
+    assert torch.allclose(mean, torch.zeros(_BATCH), atol=1e-5)
+    assert torch.allclose(std, torch.ones(_BATCH), atol=1e-4)
+
+
+def test_unit_variance_normalize_survives_constant_window() -> None:
+    """A degenerate all-constant (zero-variance) window is finite, not NaN (the eps guard)."""
+    x = torch.full((1, 2, DEFAULT_WINDOW), 5.0)
+    normed = _unit_variance_normalize(x)
+    assert torch.isfinite(normed).all()
+
+
+def test_input_normalization_makes_forward_scale_invariant() -> None:
+    """Per-window unit-variance norm -> scaling an input window barely moves the logits.
+
+    O'Shea et al.'s preprocessing removes the absolute capture scale (which carries no
+    modulation information). With eval-mode BatchNorm + the input norm, multiplying a window by a
+    positive constant is (up to the small BatchNorm eps) a no-op on the class scores.
+    """
+    net = ResNetAMCNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    net.eval()
+    gen = torch.Generator().manual_seed(11)
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW, generator=gen)
+    with torch.no_grad():
+        logits = net(x)
+        logits_scaled = net(x * 5.0)
+    assert torch.allclose(logits, logits_scaled, atol=1e-4)
+
+
+def test_head_has_alpha_dropout_and_two_denses() -> None:
+    """The head is SELU Dense -> SELU Dense with AlphaDropout (not a single dense)."""
+    assert 0.0 <= DEFAULT_ALPHA_DROPOUT < 1.0
+    net = ResNetAMCNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    denses = [m for m in net.modules() if isinstance(m, torch.nn.Linear)]
+    # fc_embed dense + fc_head dense + classifier = 3 Linear layers total.
+    assert len(denses) == 3
+    alpha_drops = [m for m in net.modules() if isinstance(m, torch.nn.AlphaDropout)]
+    assert len(alpha_drops) == 2
+    selus = [m for m in net.modules() if isinstance(m, torch.nn.SELU)]
+    assert len(selus) == 2
+
+
+def test_alpha_dropout_is_noop_in_eval() -> None:
+    """AlphaDropout is disabled in eval() -> forward is deterministic for the metrics."""
+    net = ResNetAMCNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    net.eval()
+    gen = torch.Generator().manual_seed(19)
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW, generator=gen)
+    with torch.no_grad():
+        first = net(x)
+        second = net(x)
+    assert torch.allclose(first, second)
+
+
+def test_batchnorm_retained() -> None:
+    """The load-bearing per-layer BatchNorm (fixed the chance-level collapse) is kept."""
+    net = ResNetAMCNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    bns = [m for m in net.modules() if isinstance(m, torch.nn.BatchNorm1d)]
+    # Per stack: 1 channel-mixing BN + 2 per residual unit x 2 units = 5 BN; x 6 stacks = 30.
+    assert len(bns) == 6 * 5

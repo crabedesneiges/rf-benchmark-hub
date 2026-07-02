@@ -46,8 +46,13 @@ DEFAULT_NUM_CLASSES = 11
 DEFAULT_WINDOW = 128
 #: Convolution feature width shared by the three input branches (Xu et al. use 50 filters).
 DEFAULT_CONV_FILTERS = 50
+#: Filter count of the fusion conv (Xu et al. use 100 -- twice the per-branch width); its output
+#: channel axis becomes the LSTM ``input_size``. See BIBLIOGRAPHY.md B.1 (fusion = 100 filters).
+DEFAULT_FUSE_FILTERS = 100
 #: Hidden width of each LSTM layer; also the penultimate feature width returned by :meth:`embed`.
 DEFAULT_LSTM_HIDDEN = 128
+#: Dropout probability in the dense head (Xu et al. place Dropout(0.5) after each SELU dense).
+DEFAULT_HEAD_DROPOUT = 0.5
 
 
 def _same_pad_1d(kernel: int) -> int:
@@ -60,9 +65,10 @@ class MCLDNNNet(nn.Module):
 
     Three parallel convolutional views of one IQ window -- combined I/Q (2-D conv over the
     ``(2, L)`` map), separate I and separate Q (1-D convs over each ``(1, L)`` row) -- are
-    fused, refined by a second 2-D conv, reshaped into a length-``L`` sequence of feature
-    vectors, and passed through a two-layer LSTM. The LSTM's final hidden state is projected
-    by a dense layer (the penultimate embedding) and a classifier to ``num_classes`` logits.
+    fused, refined by a wider (100-filter) 2-D fusion conv, reshaped into a length-``L`` sequence
+    of feature vectors, and passed through a two-layer LSTM. The LSTM's final hidden state feeds
+    Xu et al.'s dense head -- two SELU ``Dense(128)`` layers each followed by ``Dropout(0.5)`` (the
+    second dropout's output is the penultimate embedding) -- then a classifier to ``num_classes``.
 
     :meth:`forward` returns ``(B, num_classes)`` logits; :meth:`features` returns the
     ``(B, embed_dim)`` penultimate representation the probing regimes fit a head on.
@@ -74,7 +80,9 @@ class MCLDNNNet(nn.Module):
         *,
         window: int = DEFAULT_WINDOW,
         conv_filters: int = DEFAULT_CONV_FILTERS,
+        fuse_filters: int = DEFAULT_FUSE_FILTERS,
         lstm_hidden: int = DEFAULT_LSTM_HIDDEN,
+        head_dropout: float = DEFAULT_HEAD_DROPOUT,
     ) -> None:
         """Build the three-branch conv stack, the fusion conv, the LSTM and the dense head."""
         super().__init__()
@@ -85,7 +93,9 @@ class MCLDNNNet(nn.Module):
         self.num_classes = num_classes
         self.window = window
         self.conv_filters = conv_filters
+        self.fuse_filters = fuse_filters
         self.lstm_hidden = lstm_hidden
+        self.head_dropout = head_dropout
 
         # padding="same" (stride 1) keeps the TIME axis length identical across all branches even
         # for the EVEN kernel width 8 -- a symmetric integer pad shrinks an even-kernel conv by 1,
@@ -111,32 +121,42 @@ class MCLDNNNet(nn.Module):
             nn.Conv2d(conv_filters, conv_filters, kernel_size=(1, 8), padding="same"),
             nn.ReLU(inplace=True),
         )
+        # Xu et al.'s fusion conv widens to fuse_filters (100 = 2x the per-branch width); its
+        # 2-row kernel (no height padding) collapses the channel axis to a single row.
         self.conv_fuse = nn.Sequential(
-            nn.Conv2d(conv_filters, conv_filters, kernel_size=(2, 5), padding=(0, _same_pad_1d(5))),
+            nn.Conv2d(conv_filters, fuse_filters, kernel_size=(2, 5), padding=(0, _same_pad_1d(5))),
             nn.ReLU(inplace=True),
         )
 
-        # The fused (B, conv_filters, 1, L) map -> a length-L sequence of conv_filters features.
+        # The fused (B, fuse_filters, 1, L) map -> a length-L sequence of fuse_filters features.
         self.lstm = nn.LSTM(
-            input_size=conv_filters,
+            input_size=fuse_filters,
             hidden_size=lstm_hidden,
             num_layers=2,
             batch_first=True,
         )
-        # Penultimate dense layer (the embedding) + the classifier head.
+        # Paper dense head (Xu et al. 2020): Dense(selu)->Dropout(0.5)->Dense(selu)->Dropout(0.5).
+        # The final Dropout's output is the penultimate embedding features() / embed() return; the
+        # classifier maps it to num_classes logits. Restoring the two dropouts + the second dense
+        # matches the published head (see BIBLIOGRAPHY.md B.1).
         self.fc_embed = nn.Sequential(
             nn.Linear(lstm_hidden, lstm_hidden),
             nn.SELU(inplace=True),
+            nn.Dropout(head_dropout),
+            nn.Linear(lstm_hidden, lstm_hidden),
+            nn.SELU(inplace=True),
+            nn.Dropout(head_dropout),
         )
         self.classifier = nn.Linear(lstm_hidden, num_classes)
 
     def _fused_sequence(self, x: Tensor) -> Tensor:
-        """Run the three conv branches + fusion, returning a ``(B, L, conv_filters)`` sequence.
+        """Run the three conv branches + fusion, returning a ``(B, L, fuse_filters)`` sequence.
 
         ``x`` is a ``(B, 2, L)`` IQ batch (row 0 = I, row 1 = Q). The combined branch sees it as
         a ``(B, 1, 2, L)`` image; the separate branches see each row as a ``(B, 1, L)`` signal.
-        The fused ``(B, conv_filters, 1, L)`` map is squeezed and transposed into the
-        ``(B, L, conv_filters)`` layout ``nn.LSTM(batch_first=True)`` expects.
+        The three branches carry ``conv_filters`` (``F``) channels; the fusion conv widens to
+        ``fuse_filters`` (``G``). The fused ``(B, G, 1, L)`` map is squeezed and transposed into
+        the ``(B, L, G)`` layout ``nn.LSTM(batch_first=True)`` expects.
         """
         # Combined I/Q branch -> (B, F, 2, L): padding="same" keeps both the 2-row and time axes.
         iq_img = x.unsqueeze(1)  # (B, 1, 2, L)
@@ -150,13 +170,14 @@ class MCLDNNNet(nn.Module):
         feat_iq_sep = torch.stack((feat_i, feat_q), dim=2)  # (B, F, 2, L)
         feat_iq_sep = self.conv_iq2(feat_iq_sep)  # (B, F, 2, L) (1-row kernel keeps both rows)
 
-        # Combine the two aligned (B, F, 2, L) feature maps and refine with the fusion conv,
-        # whose 2-row kernel (no height padding) collapses the channel axis back to a single row.
+        # Combine the two aligned (B, F, 2, L) feature maps and refine with the fusion conv, whose
+        # 2-row kernel (no height padding) collapses the channel axis to a single row and widens
+        # the feature axis F -> G (fuse_filters).
         combined = feat_iq_sep + feat_iq  # (B, F, 2, L)
-        fused = self.conv_fuse(combined)  # (B, F, 1, L)
+        fused = self.conv_fuse(combined)  # (B, G, 1, L)
 
-        seq = fused.squeeze(2)  # (B, F, L)
-        return seq.transpose(1, 2)  # (B, L, F)
+        seq = fused.squeeze(2)  # (B, G, L)
+        return seq.transpose(1, 2)  # (B, L, G)
 
     def features(self, x: Tensor) -> Tensor:
         """Return the ``(B, lstm_hidden)`` penultimate embedding for a ``(B, 2, L)`` batch."""
@@ -255,5 +276,7 @@ __all__ = [
     "DEFAULT_NUM_CLASSES",
     "DEFAULT_WINDOW",
     "DEFAULT_CONV_FILTERS",
+    "DEFAULT_FUSE_FILTERS",
     "DEFAULT_LSTM_HIDDEN",
+    "DEFAULT_HEAD_DROPOUT",
 ]

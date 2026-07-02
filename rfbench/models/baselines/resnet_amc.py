@@ -6,11 +6,20 @@ AMC baseline on the RadioML corpora. It processes one IQ window through a stack 
 **residual stacks**, each of which is a 1x1 channel-mixing conv (+BatchNorm), two **residual
 units** (two Conv-BN blocks + an identity skip connection each), and a max-pool that halves the
 time axis. The per-layer BatchNorm is what keeps the deep ReLU stack trainable on raw IQ.
-Repeating the stack ``num_stacks`` times downsamples the ``(2, 128)`` window to a compact feature
-map, which is flattened and pushed through two fully-connected layers (the penultimate one is the
-embedding) to the 11 RML2016.10a modulation classes. The residual skips let the network go deep
-while staying a from-scratch baseline (~a low-million params), so it seeds the AMC board next to
-MCLDNN rather than acting as a heavy backbone.
+Repeating the stack ``num_stacks`` times (the paper's ``L = 6``) downsamples the ``(2, 128)``
+window to a compact feature map, which is flattened and pushed through the paper's **SELU
+Dense(128) -> Dense(128)** head with **AlphaDropout** (self-normalising regularisation) to the
+11 RML2016.10a modulation classes. The residual skips let the network go deep while staying a
+from-scratch baseline (~a low-million params), so it seeds the AMC board next to MCLDNN rather
+than acting as a heavy backbone.
+
+Paper-exact fidelity (see ``docs/BIBLIOGRAPHY.md`` §B.3). Three gaps against O'Shea et al. 2018
+are closed here: (1) **L = 6 residual stacks** (was 4); on len-128 the six halving max-pools take
+``128 -> 2`` (128/64/32/16/8/4/2), the deepest the window supports. (2) the paper's **unit-variance
+input normalization** -- each IQ window is standardised (zero-mean, unit-variance) BEFORE the first
+conv; its absence was a systematic scale offset that BatchNorm alone did not correct. (3) the
+**SELU Dense -> Dense head with AlphaDropout** (was a single dense, no dropout). The load-bearing
+per-layer BatchNorm that fixed the earlier chance-level (1/11) collapse is retained unchanged.
 
 Contract bridge (read ``rfbench/core/model.py``). ``forward`` / ``embed`` receive the COLLATED
 batch dict that :func:`rfbench.core.evaluate.evaluate` builds -- ``x["iq"]`` is a *list* of
@@ -47,14 +56,36 @@ DEFAULT_WINDOW = 128
 #: Convolution feature width shared by every residual stack (O'Shea et al. use 32 filters).
 DEFAULT_CONV_FILTERS = 32
 #: Number of stacked residual stacks; each halves the time axis via its trailing max-pool.
-DEFAULT_NUM_STACKS = 4
+#: O'Shea et al. 2018 use ``L = 6``; on the len-128 RML2016.10a window the six halving pools take
+#: ``128 -> 2`` (the deepest the window supports).
+DEFAULT_NUM_STACKS = 6
 #: Width of the two fully-connected head layers; the first is the penultimate embedding.
 DEFAULT_FC_DIM = 128
+#: AlphaDropout rate on the SELU dense head (O'Shea et al.'s self-normalising regularisation).
+DEFAULT_ALPHA_DROPOUT = 0.5
 
 
 def _same_pad_1d(kernel: int) -> int:
     """Return the symmetric ``padding`` that keeps a 1-D conv's length unchanged (odd kernel)."""
     return (kernel - 1) // 2
+
+
+def _unit_variance_normalize(x: Tensor, *, eps: float = 1e-8) -> Tensor:
+    """Standardise each ``(2, L)`` IQ window to zero mean and unit variance (O'Shea et al. 2018).
+
+    The paper's explicit input preprocessing: every IQ window is normalised BEFORE the first
+    convolution. The mean and standard deviation are taken over BOTH channels and the whole time
+    axis of each sample independently (per-window, not per-batch and not per-channel), so the
+    absolute scale of a capture -- which carries no modulation information -- is removed while the
+    relative I/Q geometry that does carry it is preserved. ``eps`` guards the (degenerate,
+    all-constant) zero-variance window against a divide-by-zero.
+
+    Operates on a ``(B, 2, L)`` batch, reducing over dims ``(1, 2)`` with ``keepdim`` so the
+    statistics broadcast back over both channels; returns the same shape and dtype.
+    """
+    mean = x.mean(dim=(1, 2), keepdim=True)
+    std = x.std(dim=(1, 2), keepdim=True, unbiased=False)
+    return cast("Tensor", (x - mean) / (std + eps))
 
 
 class ResidualUnit(nn.Module):
@@ -122,10 +153,12 @@ class ResidualStack(nn.Module):
 class ResNetAMCNet(nn.Module):
     """The O'Shea et al. 2018 residual-stack network for AMC.
 
-    A ``(B, 2, L)`` IQ window flows through ``num_stacks`` :class:`ResidualStack` blocks (the
+    A ``(B, 2, L)`` IQ window is first **unit-variance normalized** per sample (O'Shea et al.'s
+    input preprocessing), then flows through ``num_stacks`` :class:`ResidualStack` blocks (the
     first widens the 2 IQ channels to ``conv_filters``; each block halves the time axis), is
-    flattened, and pushed through two dense layers: the first (the penultimate embedding) and the
-    classifier to ``num_classes`` logits.
+    flattened, and pushed through the paper's **SELU Dense -> Dense head with AlphaDropout**: a
+    penultimate dense (the embedding) and a second dense, each SELU-activated and each preceded by
+    :class:`~torch.nn.AlphaDropout`, before the classifier to ``num_classes`` logits.
 
     :meth:`forward` returns ``(B, num_classes)`` logits; :meth:`features` returns the
     ``(B, fc_dim)`` penultimate representation the probing regimes fit a head on.
@@ -139,8 +172,9 @@ class ResNetAMCNet(nn.Module):
         conv_filters: int = DEFAULT_CONV_FILTERS,
         num_stacks: int = DEFAULT_NUM_STACKS,
         fc_dim: int = DEFAULT_FC_DIM,
+        alpha_dropout: float = DEFAULT_ALPHA_DROPOUT,
     ) -> None:
-        """Build the residual-stack backbone, the flatten and the two-layer dense head."""
+        """Build the residual backbone, the flatten and the SELU two-dense AlphaDropout head."""
         super().__init__()
         if num_classes < 1:
             raise ValueError(f"num_classes must be >= 1, got {num_classes}")
@@ -153,11 +187,14 @@ class ResNetAMCNet(nn.Module):
                 f"window {window} too small for {num_stacks} halving stacks "
                 f"(would collapse the time axis below length 1)"
             )
+        if not 0.0 <= alpha_dropout < 1.0:
+            raise ValueError(f"alpha_dropout must be in [0, 1), got {alpha_dropout}")
         self.num_classes = num_classes
         self.window = window
         self.conv_filters = conv_filters
         self.num_stacks = num_stacks
         self.fc_dim = fc_dim
+        self.alpha_dropout = alpha_dropout
 
         stacks: list[nn.Module] = []
         in_channels = 2  # the two IQ rows
@@ -172,23 +209,43 @@ class ResNetAMCNet(nn.Module):
             pooled_len //= 2
         self.flat_dim = conv_filters * pooled_len
 
-        # Penultimate dense layer (the embedding) + the classifier head.
+        # Paper head: SELU Dense(fc_dim) -> SELU Dense(fc_dim), each preceded by AlphaDropout (the
+        # SELU-matched dropout that preserves the self-normalising mean/variance). The FIRST dense's
+        # SELU output is the penultimate embedding; the second dense adds head capacity before the
+        # classifier. AlphaDropout is a no-op in eval() (dropout disabled), so it does not perturb
+        # the deterministic forward the metrics consume.
         self.fc_embed = nn.Sequential(
+            nn.AlphaDropout(p=alpha_dropout),
             nn.Linear(self.flat_dim, fc_dim),
+            nn.SELU(inplace=True),
+        )
+        self.fc_head = nn.Sequential(
+            nn.AlphaDropout(p=alpha_dropout),
+            nn.Linear(fc_dim, fc_dim),
             nn.SELU(inplace=True),
         )
         self.classifier = nn.Linear(fc_dim, num_classes)
 
     def features(self, x: Tensor) -> Tensor:
-        """Return the ``(B, fc_dim)`` penultimate embedding for a ``(B, 2, L)`` batch."""
-        feat = self.stacks(x)  # (B, conv_filters, L // 2**num_stacks)
+        """Return the ``(B, fc_dim)`` penultimate embedding for a ``(B, 2, L)`` batch.
+
+        The window is unit-variance normalized (O'Shea et al.'s input preprocessing) before the
+        residual backbone; the returned embedding is the SELU output of the FIRST head dense.
+        """
+        normed = _unit_variance_normalize(x)  # (B, 2, L) standardised per sample
+        feat = self.stacks(normed)  # (B, conv_filters, L // 2**num_stacks)
         flat = feat.flatten(start_dim=1)  # (B, flat_dim)
         embedded = self.fc_embed(flat)  # (B, fc_dim)
         return cast("Tensor", embedded)
 
     def forward(self, x: Tensor) -> Tensor:
-        """Return ``(B, num_classes)`` logits for a ``(B, 2, L)`` IQ batch."""
-        logits = self.classifier(self.features(x))
+        """Return ``(B, num_classes)`` logits for a ``(B, 2, L)`` IQ batch.
+
+        The penultimate embedding (first head dense) is passed through the second SELU dense
+        (with its AlphaDropout) before the classifier -- the paper's two-layer head.
+        """
+        head = self.fc_head(self.features(x))  # (B, fc_dim) -- second SELU dense
+        logits = self.classifier(head)
         return cast("Tensor", logits)
 
 
@@ -279,4 +336,5 @@ __all__ = [
     "DEFAULT_CONV_FILTERS",
     "DEFAULT_NUM_STACKS",
     "DEFAULT_FC_DIM",
+    "DEFAULT_ALPHA_DROPOUT",
 ]

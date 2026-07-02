@@ -10,6 +10,18 @@ LSTM (modelling temporal dependencies), and classifies the LSTM's last hidden st
 dense layers into the 11 RML2016.10a modulation classes. Like MCLDNN it is deliberately small
 (a few hundred k params), which is why it seeds the AMC board rather than a heavy backbone.
 
+Paper-exact fidelity (West & O'Shea 2017, DySPAN, arXiv:1703.09197). Two load-bearing features
+of the published CLDNN are reproduced here (see ``docs/BIBLIOGRAPHY.md`` §B.2):
+
+* the **raw-waveform bypass/skip** -- the paper concatenates the *raw* IQ waveform with the
+  convolutional feature maps before the recurrent stack, so the LSTM sees both the learned
+  local features AND the untouched signal (a DenseNet-style forward bypass), and
+* a **three-layer stacked LSTM** (the paper stacks THREE LSTMs; a lighter re-impl using two
+  loses ~1-2 pts of overall accuracy on RML2016.10a).
+
+The skip means the LSTM's per-timestep input width is ``conv_filters + 2`` (conv features plus
+the two raw IQ channels), not ``conv_filters``.
+
 Contract bridge (read ``rfbench/core/model.py``). ``forward`` / ``embed`` receive the
 COLLATED batch dict that :func:`rfbench.core.evaluate.evaluate` builds -- ``x["iq"]`` is a
 *list* of per-sample IQ payloads, one per sample. :class:`~rfbench.tasks.amc.dataset.AmcDataset`
@@ -48,8 +60,12 @@ DEFAULT_CONV_FILTERS = 64
 DEFAULT_CONV_LAYERS = 3
 #: 1-D conv kernel length along the time axis (odd -> length-preserving with "same" padding).
 DEFAULT_KERNEL = 7
+#: Number of stacked LSTM layers. West & O'Shea (2017) stack THREE; a two-layer re-impl underfits.
+DEFAULT_LSTM_LAYERS = 3
 #: Hidden width of each LSTM layer; also the penultimate feature width returned by :meth:`embed`.
 DEFAULT_LSTM_HIDDEN = 128
+#: Number of raw IQ channels concatenated onto the conv features by the raw-waveform skip (I, Q).
+_RAW_IQ_CHANNELS = 2
 
 
 def _same_pad_1d(kernel: int) -> int:
@@ -61,9 +77,11 @@ class CLDNNNet(nn.Module):
     """The CLDNN convolutional-LSTM-DNN network (Sainath et al. 2015; West & O'Shea 2017).
 
     One IQ window (the two channels as a ``(B, 2, L)`` signal) is run through a short stack of
-    length-preserving 1-D convolutions, transposed into a length-``L`` sequence of feature
-    vectors, and passed through a two-layer LSTM. The LSTM's final hidden state is projected by
-    a dense layer (the penultimate embedding) and a classifier to ``num_classes`` logits.
+    length-preserving 1-D convolutions; the **raw waveform is then concatenated back onto the
+    conv feature sequence** (the paper's forward bypass/skip) and the combined length-``L``
+    sequence is passed through a **three-layer stacked LSTM** (West & O'Shea 2017). The LSTM's
+    final hidden state is projected by a dense layer (the penultimate embedding) and a
+    classifier to ``num_classes`` logits.
 
     :meth:`forward` returns ``(B, num_classes)`` logits; :meth:`features` returns the
     ``(B, embed_dim)`` penultimate representation the probing regimes fit a head on.
@@ -78,8 +96,9 @@ class CLDNNNet(nn.Module):
         conv_layers: int = DEFAULT_CONV_LAYERS,
         kernel: int = DEFAULT_KERNEL,
         lstm_hidden: int = DEFAULT_LSTM_HIDDEN,
+        lstm_layers: int = DEFAULT_LSTM_LAYERS,
     ) -> None:
-        """Build the 1-D conv stack, the LSTM and the dense head."""
+        """Build the 1-D conv stack, the raw-waveform skip, the stacked LSTM and the dense head."""
         super().__init__()
         if num_classes < 1:
             raise ValueError(f"num_classes must be >= 1, got {num_classes}")
@@ -87,11 +106,14 @@ class CLDNNNet(nn.Module):
             raise ValueError(f"window must be >= 1, got {window}")
         if conv_layers < 1:
             raise ValueError(f"conv_layers must be >= 1, got {conv_layers}")
+        if lstm_layers < 1:
+            raise ValueError(f"lstm_layers must be >= 1, got {lstm_layers}")
         self.num_classes = num_classes
         self.window = window
         self.conv_filters = conv_filters
         self.conv_layers = conv_layers
         self.lstm_hidden = lstm_hidden
+        self.lstm_layers = lstm_layers
 
         # Convolutional front end: a stack of length-preserving 1-D convs over the (2, L) IQ.
         # The first layer maps the 2 IQ channels to ``conv_filters``; the rest keep that width.
@@ -104,11 +126,15 @@ class CLDNNNet(nn.Module):
             in_ch = conv_filters
         self.conv = nn.Sequential(*conv_blocks)
 
-        # The (B, conv_filters, L) conv map -> a length-L sequence of conv_filters features.
+        # Raw-waveform bypass/skip (West & O'Shea 2017): the untouched IQ waveform is concatenated
+        # onto the conv feature sequence before the LSTM, so each timestep the LSTM consumes is
+        # ``conv_filters`` learned features PLUS the two raw IQ channels -> width conv_filters + 2.
+        self.lstm_input_size = conv_filters + _RAW_IQ_CHANNELS
+        # The combined (B, L, conv_filters + 2) sequence -> a three-layer stacked LSTM (paper: 3).
         self.lstm = nn.LSTM(
-            input_size=conv_filters,
+            input_size=self.lstm_input_size,
             hidden_size=lstm_hidden,
-            num_layers=2,
+            num_layers=lstm_layers,
             batch_first=True,
         )
         # Penultimate dense layer (the embedding) + the classifier head.
@@ -119,18 +145,23 @@ class CLDNNNet(nn.Module):
         self.classifier = nn.Linear(lstm_hidden, num_classes)
 
     def _conv_sequence(self, x: Tensor) -> Tensor:
-        """Run the conv stack, returning a ``(B, L, conv_filters)`` sequence for the LSTM.
+        """Run the conv stack + raw-waveform skip, returning the ``(B, L, F+2)`` LSTM sequence.
 
         ``x`` is a ``(B, 2, L)`` IQ batch (row 0 = I, row 1 = Q). The 1-D conv stack keeps the
-        time axis at length ``L`` and produces ``(B, conv_filters, L)``, which is transposed into
-        the ``(B, L, conv_filters)`` layout ``nn.LSTM(batch_first=True)`` expects.
+        time axis at length ``L`` and produces ``(B, conv_filters, L)``. Following West & O'Shea
+        (2017), the **raw IQ waveform is concatenated back onto** these features along the channel
+        axis (the forward bypass/skip) before the whole thing is transposed into the
+        ``(B, L, conv_filters + 2)`` layout ``nn.LSTM(batch_first=True)`` expects -- so the LSTM
+        sees both the learned local features and the untouched signal at every timestep.
         """
         feat = self.conv(x)  # (B, conv_filters, L)
-        return feat.transpose(1, 2)  # (B, L, conv_filters)
+        # Raw-waveform bypass: concat the untouched (B, 2, L) IQ onto the conv channels.
+        fused = torch.cat((feat, x), dim=1)  # (B, conv_filters + 2, L)
+        return fused.transpose(1, 2)  # (B, L, conv_filters + 2)
 
     def features(self, x: Tensor) -> Tensor:
         """Return the ``(B, lstm_hidden)`` penultimate embedding for a ``(B, 2, L)`` batch."""
-        seq = self._conv_sequence(x)  # (B, L, conv_filters)
+        seq = self._conv_sequence(x)  # (B, L, conv_filters + 2) -- conv features + raw-IQ skip
         _out, (h_n, _c_n) = self.lstm(seq)
         last = h_n[-1]  # (B, lstm_hidden) -- final layer's last hidden state
         embedded = self.fc_embed(last)  # (B, lstm_hidden)
@@ -231,5 +262,6 @@ __all__ = [
     "DEFAULT_CONV_FILTERS",
     "DEFAULT_CONV_LAYERS",
     "DEFAULT_KERNEL",
+    "DEFAULT_LSTM_LAYERS",
     "DEFAULT_LSTM_HIDDEN",
 ]

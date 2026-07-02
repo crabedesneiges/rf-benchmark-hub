@@ -22,6 +22,8 @@ from rfbench.core.model import Model  # noqa: E402
 from rfbench.core.registry import MODELS  # noqa: E402
 from rfbench.models.baselines.cldnn import (  # noqa: E402
     CLDNN,
+    DEFAULT_CONV_FILTERS,
+    DEFAULT_LSTM_LAYERS,
     DEFAULT_NUM_CLASSES,
     DEFAULT_WINDOW,
     CLDNNNet,
@@ -124,3 +126,43 @@ def test_net_forward_shape_directly() -> None:
     with torch.no_grad():
         assert net(x).shape == (_BATCH, DEFAULT_NUM_CLASSES)
         assert net.features(x).ndim == 2
+
+
+def test_lstm_has_three_stacked_layers() -> None:
+    """Paper-exact (West & O'Shea 2017 §B.2): the recurrent stack is THREE LSTM layers, not two."""
+    net = CLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    assert DEFAULT_LSTM_LAYERS == 3
+    assert net.lstm.num_layers == 3
+
+
+def test_raw_waveform_skip_widens_lstm_input() -> None:
+    """Paper-exact (§B.2): the raw-IQ bypass concatenates the 2 IQ channels onto conv features.
+
+    The recurrent stack therefore consumes ``conv_filters + 2`` features per timestep -- proof
+    the raw waveform is fused in, not dropped -- and the fused conv sequence carries that width.
+    """
+    net = CLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    expected = DEFAULT_CONV_FILTERS + 2
+    assert net.lstm_input_size == expected
+    assert net.lstm.input_size == expected
+
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        seq = net._conv_sequence(x)
+    # (B, L, conv_filters + 2): time axis preserved, raw IQ concatenated onto the feature axis.
+    assert seq.shape == (_BATCH, DEFAULT_WINDOW, expected)
+
+
+def test_raw_waveform_skip_preserves_raw_iq_tail() -> None:
+    """The skip concatenates the UNTOUCHED IQ: the last 2 feature columns equal the raw waveform.
+
+    ``_conv_sequence`` returns ``(B, L, conv_filters + 2)`` with the raw IQ appended after the
+    conv channels, so transposing the raw ``(B, 2, L)`` input must match the trailing 2 columns
+    exactly -- guarding against a future refactor that silently reorders or drops the bypass.
+    """
+    net = CLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        seq = net._conv_sequence(x)
+    raw_tail = seq[:, :, DEFAULT_CONV_FILTERS:]  # (B, L, 2)
+    assert torch.equal(raw_tail, x.transpose(1, 2))

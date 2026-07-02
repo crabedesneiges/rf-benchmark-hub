@@ -21,6 +21,10 @@ torch = pytest.importorskip("torch")
 from rfbench.core.model import Model  # noqa: E402
 from rfbench.core.registry import MODELS  # noqa: E402
 from rfbench.models.baselines.mcldnn import (  # noqa: E402
+    DEFAULT_CONV_FILTERS,
+    DEFAULT_FUSE_FILTERS,
+    DEFAULT_HEAD_DROPOUT,
+    DEFAULT_LSTM_HIDDEN,
     DEFAULT_NUM_CLASSES,
     DEFAULT_WINDOW,
     MCLDNN,
@@ -67,14 +71,17 @@ def test_forward_returns_class_logits() -> None:
 
 
 def test_embed_returns_2d_feature() -> None:
-    """embed returns a 2-D (B, D) penultimate feature vector, one row per sample."""
+    """embed returns the (B, lstm_hidden) penultimate feature vector, one row per sample.
+
+    The paper dense head keeps the penultimate width at ``lstm_hidden`` (128): the two SELU
+    ``Dense(128)`` layers preserve the 128-d embedding the probing regimes fit a head on.
+    """
     model = MCLDNN(device="cpu")
     batch = _synthetic_iq_batch()
     features = model.embed(batch)
     assert isinstance(features, torch.Tensor)
     assert features.ndim == 2
-    assert features.shape[0] == _BATCH
-    assert features.shape[1] > 0
+    assert features.shape == (_BATCH, DEFAULT_LSTM_HIDDEN)
     assert torch.isfinite(features).all()
 
 
@@ -124,3 +131,48 @@ def test_net_forward_shape_directly() -> None:
     with torch.no_grad():
         assert net(x).shape == (_BATCH, DEFAULT_NUM_CLASSES)
         assert net.features(x).ndim == 2
+
+
+def test_fusion_conv_uses_100_filters() -> None:
+    """Paper-exact fusion conv outputs 100 filters (Xu et al.), not the 50 per-branch width.
+
+    BIBLIOGRAPHY.md B.1 flags the 50-filter fusion as a MISMATCH; the paper's ``Conv2D(100,(2,5))``
+    then drives the LSTM ``input_size``, so both must be 100.
+    """
+    net = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    fuse_conv = net.conv_fuse[0]
+    assert isinstance(fuse_conv, torch.nn.Conv2d)
+    assert fuse_conv.out_channels == DEFAULT_FUSE_FILTERS == 100
+    assert fuse_conv.in_channels == DEFAULT_CONV_FILTERS == 50
+    # The widened fusion feeds the LSTM: input_size must track fuse_filters.
+    assert net.lstm.input_size == DEFAULT_FUSE_FILTERS
+
+
+def test_dense_head_has_two_dense_and_two_dropout() -> None:
+    """The restored head is Dense -> Dropout(0.5) -> Dense -> Dropout(0.5) (Xu et al. 2020).
+
+    B.1 flagged the head as a gap driver: it had lost its two ``Dropout(0.5)`` layers and its
+    second ``Dense``. Assert exactly two ``Linear`` and two ``Dropout(p=0.5)`` in ``fc_embed``.
+    """
+    net = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    linears = [m for m in net.fc_embed if isinstance(m, torch.nn.Linear)]
+    dropouts = [m for m in net.fc_embed if isinstance(m, torch.nn.Dropout)]
+    assert len(linears) == 2
+    assert all(lin.in_features == lin.out_features == DEFAULT_LSTM_HIDDEN for lin in linears)
+    assert len(dropouts) == 2
+    assert all(d.p == DEFAULT_HEAD_DROPOUT == 0.5 for d in dropouts)
+
+
+def test_dropout_is_inactive_at_eval() -> None:
+    """Head dropout is a no-op under eval: forward is deterministic across repeated calls.
+
+    The Model contract evaluates in ``.eval()`` with grads disabled, so the restored dropouts
+    must not perturb inference; they only regularize the M3 from-scratch training loop.
+    """
+    net = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    net.eval()
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        first = net(x)
+        second = net(x)
+    assert torch.allclose(first, second)

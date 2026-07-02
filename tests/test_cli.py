@@ -39,7 +39,7 @@ from rfbench.cli import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SAMPLE_RESULTS = _REPO_ROOT / "leaderboard" / "results"
-_VALID_RESULT = _SAMPLE_RESULTS / "amc" / "mcldnn-radioml2016-full_finetune.json"
+_VALID_RESULT = _SAMPLE_RESULTS / "amc" / "mcldnn.json"
 
 
 # --- synthetic fixtures (pure stdlib; no numpy) -------------------------------------
@@ -375,8 +375,8 @@ def test_leaderboard_build_renders_sample_results(
     assert rc == EXIT_OK
     index = out_site / "index.html"
     assert index.is_file()
-    assert (out_site / "amc.html").is_file()
-    assert (out_site / "sei.html").is_file()
+    assert (out_site / "amc.html").is_file()  # AMC has real results (mcldnn/cldnn/resnet_amc/lwm)
+    # (no sei.html: the fabricated SEI demo row was removed; a real SEI result lands later.)
     assert "wrote static site" in capsys.readouterr().out
 
 

@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use RF-Benchmark-Hub, please cite it."
+title: "RF-Benchmark-Hub"
+abstract: >-
+  Reproducible benchmarks and a leaderboard for downstream machine-learning tasks on terrestrial
+  RF signals (automatic modulation classification, specific emitter identification / RF
+  fingerprinting, wideband detection, spectrum sensing), comparing specialized baselines against
+  fine-tuned foundation models under a common, canonical protocol. Datasets are never
+  redistributed; only deterministic split indices are versioned.
+type: software
+authors:
+  - family-names: Albert
+    given-names: Maxence
+license: Apache-2.0
+repository-code: "https://github.com/crabedesneiges/rf-benchmark-hub"
+keywords:
+  - radio-frequency
+  - benchmark
+  - modulation-classification
+  - RF-fingerprinting
+  - foundation-models

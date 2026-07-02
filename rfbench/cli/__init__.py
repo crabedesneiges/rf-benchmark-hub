@@ -669,10 +669,12 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 # `train` handler (real from-scratch / full-finetune training, WP-30)
 # --------------------------------------------------------------------------------------------------
 _MODEL_MODULES: dict[str, str] = {
-    # Baseline models register on explicit import of their (torch) module; map name -> module.
+    # Baseline + foundation models register on explicit import of their (torch) module.
     "mcldnn": "rfbench.models.baselines.mcldnn",
     "resnet_amc": "rfbench.models.baselines.resnet_amc",
     "cldnn": "rfbench.models.baselines.cldnn",
+    "lwm-spectro": "rfbench.models.foundation.lwm_spectro",
+    "dummy-fm": "rfbench.models.foundation.dummy",
 }
 
 

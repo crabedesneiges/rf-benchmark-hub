@@ -124,3 +124,29 @@ def test_net_forward_shape_directly() -> None:
     with torch.no_grad():
         assert net(x).shape == (_BATCH, DEFAULT_NUM_CLASSES)
         assert net.features(x).ndim == 2
+
+
+def test_logits_depend_on_input() -> None:
+    """Distinct inputs must yield distinct logits -- the regression guard for exact-chance.
+
+    A network that collapses to an input-independent (dead / constant) feature map produces the
+    SAME logits for every sample, so training can only fit the uniform class prior and eval pins
+    at exactly 1/num_classes (chance). This is precisely how the un-normalised ReLU-only variant
+    of this ResNet failed. Asserting that two different batches produce different logits (and that
+    rows within one random batch are not all identical) catches that collapse -- the plain
+    shape/finiteness checks above pass even on a constant network.
+    """
+    net = ResNetAMCNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    net.eval()
+    gen = torch.Generator().manual_seed(7)
+    x_a = torch.randn(_BATCH, 2, DEFAULT_WINDOW, generator=gen)
+    x_b = torch.randn(_BATCH, 2, DEFAULT_WINDOW, generator=gen)
+    with torch.no_grad():
+        logits_a = net(x_a)
+        logits_b = net(x_b)
+    # Different inputs -> different outputs (not a constant map).
+    assert not torch.allclose(logits_a, logits_b), "logits are input-independent (collapsed net)"
+    # And within one batch the per-sample rows are not all identical either.
+    assert not torch.allclose(logits_a, logits_a[0:1].expand_as(logits_a)), (
+        "all rows identical -> feature map collapsed to a constant"
+    )

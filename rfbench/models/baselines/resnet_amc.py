@@ -3,8 +3,9 @@
 The residual-stack architecture from O'Shea, Roy & Clancy ("Over-the-Air Deep Learning Based
 Radio Signal Classification", IEEE J. Sel. Topics Signal Process. 2018) is the canonical deep
 AMC baseline on the RadioML corpora. It processes one IQ window through a stack of identical
-**residual stacks**, each of which is a 1x1 channel-mixing conv, two **residual units** (two
-convolutions + an identity skip connection each), and a max-pool that halves the time axis.
+**residual stacks**, each of which is a 1x1 channel-mixing conv (+BatchNorm), two **residual
+units** (two Conv-BN blocks + an identity skip connection each), and a max-pool that halves the
+time axis. The per-layer BatchNorm is what keeps the deep ReLU stack trainable on raw IQ.
 Repeating the stack ``num_stacks`` times downsamples the ``(2, 128)`` window to a compact feature
 map, which is flattened and pushed through two fully-connected layers (the penultimate one is the
 embedding) to the 11 RML2016.10a modulation classes. The residual skips let the network go deep
@@ -57,26 +58,36 @@ def _same_pad_1d(kernel: int) -> int:
 
 
 class ResidualUnit(nn.Module):
-    """One residual unit: two same-length 1-D convs with a ReLU'd identity skip (O'Shea et al.).
+    """One residual unit: two BN-normalised 1-D convs with a ReLU'd identity skip (O'Shea et al.).
 
     Both convolutions preserve the ``channels`` width and the time length (same-padding), so the
-    input can be added straight back onto the second conv's output. The sum is passed through a
-    final ReLU, matching the residual-unit block of the 2018 residual-stack classifier.
+    input can be added straight back onto the second conv's output. Each convolution is followed
+    by a :class:`~torch.nn.BatchNorm1d` (Conv->BN->ReLU on the first, Conv->BN on the second) and
+    the residual sum is passed through a final ReLU -- the canonical Conv-BN-ReLU residual unit of
+    the 2018 residual-stack classifier.
+
+    The BatchNorm is load-bearing, NOT cosmetic: without it a ~20-conv ReLU-only stack over raw,
+    un-standardised RML2016.10a IQ collapses to an all-dead / constant feature map, so the
+    classifier can only fit the uniform class prior and eval pins at exactly 1/11 (chance). BN
+    re-standardises the activations at every layer and keeps the deep stack trainable.
     """
 
     def __init__(self, channels: int, *, kernel: int = 3) -> None:
-        """Build the two same-width convolutions and their activations."""
+        """Build the two same-width convolutions, their BatchNorms and activations."""
         super().__init__()
         pad = _same_pad_1d(kernel)
         self.conv1 = nn.Conv1d(channels, channels, kernel_size=kernel, padding=pad)
+        self.bn1 = nn.BatchNorm1d(channels)
         self.conv2 = nn.Conv1d(channels, channels, kernel_size=kernel, padding=pad)
-        self.act = nn.ReLU(inplace=True)
+        self.bn2 = nn.BatchNorm1d(channels)
+        # A fresh (non-inplace) ReLU: the identity skip must reach the add un-clobbered.
+        self.act = nn.ReLU()
 
     def forward(self, x: Tensor) -> Tensor:
-        """Return ``ReLU(x + conv2(ReLU(conv1(x))))`` -- shape-preserving over ``(B, C, L)``."""
+        """Return ``ReLU(x + BN(conv2(ReLU(BN(conv1(x))))))`` -- preserves ``(B, C, L)``."""
         residual = x
-        out = self.act(self.conv1(x))
-        out = self.conv2(out)
+        out = self.act(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
         return cast("Tensor", self.act(out + residual))
 
 
@@ -90,16 +101,19 @@ class ResidualStack(nn.Module):
     """
 
     def __init__(self, in_channels: int, out_channels: int, *, kernel: int = 3) -> None:
-        """Build the channel-mixing conv, the two residual units and the halving max-pool."""
+        """Build the channel-mixing conv (+BN), the two residual units and the halving max-pool."""
         super().__init__()
         self.conv_in = nn.Conv1d(in_channels, out_channels, kernel_size=1)
+        # BN on the channel-mixing conv standardises the raw IQ statistics on the FIRST stack
+        # (where the input is the un-normalised 2-row IQ window) before the residual units.
+        self.bn_in = nn.BatchNorm1d(out_channels)
         self.unit1 = ResidualUnit(out_channels, kernel=kernel)
         self.unit2 = ResidualUnit(out_channels, kernel=kernel)
         self.pool = nn.MaxPool1d(kernel_size=2)
 
     def forward(self, x: Tensor) -> Tensor:
         """Map ``(B, in_channels, L)`` to ``(B, out_channels, L // 2)``."""
-        out = self.conv_in(x)
+        out = self.bn_in(self.conv_in(x))
         out = self.unit1(out)
         out = self.unit2(out)
         return cast("Tensor", self.pool(out))

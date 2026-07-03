@@ -6,16 +6,19 @@ AMC baseline on the RadioML corpora. It processes one IQ window through a stack 
 **residual stacks**, each of which is a 1x1 channel-mixing conv (+BatchNorm), two **residual
 units** (two Conv-BN blocks + an identity skip connection each), and a max-pool that halves the
 time axis. The per-layer BatchNorm is what keeps the deep ReLU stack trainable on raw IQ.
-Repeating the stack ``num_stacks`` times (the paper's ``L = 6``) downsamples the ``(2, 128)``
-window to a compact feature map, which is flattened and pushed through the paper's **SELU
+Repeating the stack ``num_stacks`` times (``L = 3`` here -- the len-128 equivalent of the paper's
+``L = 6`` on len-1024, keeping ~16 final time steps) downsamples the ``(2, 128)`` window to a
+compact feature map, which is flattened and pushed through the paper's **SELU
 Dense(128) -> Dense(128)** head with **AlphaDropout** (self-normalising regularisation) to the
 11 RML2016.10a modulation classes. The residual skips let the network go deep while staying a
 from-scratch baseline (~a low-million params), so it seeds the AMC board next to MCLDNN rather
 than acting as a heavy backbone.
 
 Paper-exact fidelity (see ``docs/BIBLIOGRAPHY.md`` §B.3). Three gaps against O'Shea et al. 2018
-are closed here: (1) **L = 6 residual stacks** (was 4); on len-128 the six halving max-pools take
-``128 -> 2`` (128/64/32/16/8/4/2), the deepest the window supports. (2) the paper's **unit-variance
+are closed here: (1) **L = 3 residual stacks** -- the paper picks ``L`` so the final map keeps
+~16 time steps (its len-1024 RML2018 uses ``L = 6``: ``1024/2**6 = 16``); the len-128 RML2016.10a
+equivalent is ``L = 3`` (``128/2**3 = 16``, so ``flat_dim = 32*16 = 512``). ``L = 6`` here would
+over-pool ``128 -> 2`` and collapse the penultimate map. (2) the paper's **unit-variance
 input normalization** -- each IQ window is standardised (zero-mean, unit-variance) BEFORE the first
 conv; its absence was a systematic scale offset that BatchNorm alone did not correct. (3) the
 **SELU Dense -> Dense head with AlphaDropout** (was a single dense, no dropout). The load-bearing
@@ -56,13 +59,16 @@ DEFAULT_WINDOW = 128
 #: Convolution feature width shared by every residual stack (O'Shea et al. use 32 filters).
 DEFAULT_CONV_FILTERS = 32
 #: Number of stacked residual stacks; each halves the time axis via its trailing max-pool.
-#: O'Shea et al. 2018 use ``L = 6``; on the len-128 RML2016.10a window the six halving pools take
-#: ``128 -> 2`` (the deepest the window supports).
-DEFAULT_NUM_STACKS = 6
+#: O'Shea et al. 2018 pick ``L`` so the final map keeps ~16 time steps (their len-1024 RML2018
+#: uses ``L = 6``: ``1024 / 2**6 = 16``). The len-128 RML2016.10a equivalent is ``L = 3``:
+#: ``128 / 2**3 = 16``, giving ``flat_dim = 32 * 16 = 512`` -- the paper-faithful adaptation for the
+#: shorter window (``L = 6`` here would over-pool ``128 -> 2`` and collapse the penultimate map).
+DEFAULT_NUM_STACKS = 3
 #: Width of the two fully-connected head layers; the first is the penultimate embedding.
 DEFAULT_FC_DIM = 128
 #: AlphaDropout rate on the SELU dense head (O'Shea et al.'s self-normalising regularisation).
-DEFAULT_ALPHA_DROPOUT = 0.5
+#: The canonical reference rate.
+DEFAULT_ALPHA_DROPOUT = 0.3
 
 
 def _same_pad_1d(kernel: int) -> int:

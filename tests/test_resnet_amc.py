@@ -158,13 +158,14 @@ def test_logits_depend_on_input() -> None:
 # --- Paper-exact fidelity (BIBLIOGRAPHY.md §B.3) -------------------------------------------------
 
 
-def test_uses_six_residual_stacks() -> None:
-    """O'Shea et al.'s L = 6 residual stacks (was 4); six halving pools take len-128 -> 2."""
-    assert DEFAULT_NUM_STACKS == 6
+def test_uses_three_residual_stacks() -> None:
+    """L = 3 residual stacks: the len-128 equivalent of O'Shea et al.'s ~16 final time steps."""
+    assert DEFAULT_NUM_STACKS == 3
     net = ResNetAMCNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
-    assert len(net.stacks) == 6
-    # 128 -> 64 -> 32 -> 16 -> 8 -> 4 -> 2 pooled samples, x conv_filters channels.
-    assert net.flat_dim == net.conv_filters * 2
+    assert len(net.stacks) == 3
+    # 128 -> 64 -> 32 -> 16 pooled samples, x conv_filters channels -> flat_dim = 32 * 16 = 512.
+    assert net.flat_dim == net.conv_filters * 16
+    assert net.flat_dim == 512
 
 
 def test_unit_variance_normalize_standardises_each_window() -> None:
@@ -232,5 +233,5 @@ def test_batchnorm_retained() -> None:
     """The load-bearing per-layer BatchNorm (fixed the chance-level collapse) is kept."""
     net = ResNetAMCNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
     bns = [m for m in net.modules() if isinstance(m, torch.nn.BatchNorm1d)]
-    # Per stack: 1 channel-mixing BN + 2 per residual unit x 2 units = 5 BN; x 6 stacks = 30.
-    assert len(bns) == 6 * 5
+    # Per stack: 1 channel-mixing BN + 2 per residual unit x 2 units = 5 BN; x 3 stacks = 15.
+    assert len(bns) == DEFAULT_NUM_STACKS * 5

@@ -137,15 +137,38 @@ def test_fusion_conv_uses_100_filters() -> None:
     """Paper-exact fusion conv outputs 100 filters (Xu et al.), not the 50 per-branch width.
 
     BIBLIOGRAPHY.md B.1 flags the 50-filter fusion as a MISMATCH; the paper's ``Conv2D(100,(2,5))``
-    then drives the LSTM ``input_size``, so both must be 100.
+    then drives the LSTM ``input_size``, so both must be 100. The official wzjialang/MCLDNN repo
+    fuses by CONCATENATE on the channel axis, so the fusion conv consumes ``2*conv_filters`` (100)
+    input channels, and its VALID time padding (0, 0) is the paper's; the LSTM ``input_size`` still
+    tracks the ``fuse_filters`` (100) output channels.
     """
     net = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
     fuse_conv = net.conv_fuse[0]
     assert isinstance(fuse_conv, torch.nn.Conv2d)
     assert fuse_conv.out_channels == DEFAULT_FUSE_FILTERS == 100
-    assert fuse_conv.in_channels == DEFAULT_CONV_FILTERS == 50
+    # Channel-axis concatenation feeds 2*conv_filters channels into the fusion conv.
+    assert fuse_conv.in_channels == 2 * DEFAULT_CONV_FILTERS == 100
+    # VALID time padding: no zero-pad, so the kernel-5 time axis shrinks L -> L-4.
+    assert fuse_conv.padding == (0, 0)
     # The widened fusion feeds the LSTM: input_size must track fuse_filters.
     assert net.lstm.input_size == DEFAULT_FUSE_FILTERS
+
+
+def test_fused_sequence_has_valid_time_length() -> None:
+    """The concatenated fusion conv (VALID time padding, kernel 5) shrinks L=128 -> L-4=124.
+
+    The official wzjialang/MCLDNN repo concatenates the branch feature maps and applies
+    ``Conv2D(100, (2, 5))`` with VALID padding, so the length-128 window becomes a length-124
+    sequence of ``fuse_filters`` (100) feature vectors before the LSTM. The LSTM's final hidden
+    state is length-independent, so this does not change the ``forward`` / ``embed`` output shapes.
+    """
+    net = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    net.eval()
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        seq = net._fused_sequence(x)
+    assert seq.shape == (_BATCH, DEFAULT_WINDOW - 4, DEFAULT_FUSE_FILTERS)
+    assert seq.shape[1] == 124
 
 
 def test_dense_head_has_two_dense_and_two_dropout() -> None:

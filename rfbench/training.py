@@ -64,16 +64,17 @@ TRAINABLE_REGIMES = (Regime.FROM_SCRATCH, Regime.FULL_FINETUNE)
 # --- Standard AMC training-recipe defaults (docs/BIBLIOGRAPHY.md Part B, audit item 1) ----------
 #: The split monitored each epoch for the LR schedule / early stopping / best-val checkpoint.
 DEFAULT_VAL_SPLIT: SplitName = "val"
-#: Early-stopping patience: stop after this many epochs with no val-loss improvement > min_delta.
-DEFAULT_PATIENCE = 20
-#: Minimum val-loss decrease that counts as an improvement (both for early stop and best-val).
-DEFAULT_MIN_DELTA = 1e-4
+#: Early-stopping patience: stop after this many epochs with no val-ACCURACY gain > min_delta.
+DEFAULT_PATIENCE = 40
+#: Minimum val-ACCURACY increase that counts as an improvement (for early stop). ``0.0`` -> any
+#: strictly-higher accuracy resets patience (RadioML best-accuracy restore, no dead-band).
+DEFAULT_MIN_DELTA = 0.0
 #: ``ReduceLROnPlateau`` multiplicative LR factor applied when val loss plateaus.
 DEFAULT_LR_FACTOR = 0.5
 #: ``ReduceLROnPlateau`` patience (epochs of no val-loss improvement before the LR is scaled).
-DEFAULT_LR_PATIENCE = 5
+DEFAULT_LR_PATIENCE = 10
 #: Floor the plateau scheduler will not reduce the LR below.
-DEFAULT_MIN_LR = 1e-6
+DEFAULT_MIN_LR = 1e-7
 
 
 def resolve_device(device: str | None) -> str:
@@ -218,21 +219,37 @@ def _train_one_epoch(
     return running / n_batches if n_batches else float("nan")
 
 
-def _mean_loss(module: nn.Module, loader: DataLoaderT, criterion: CriterionT) -> float:
-    """Return the mean per-batch loss of ``module`` over ``loader`` with no gradient updates.
+def _mean_accuracy(
+    module: nn.Module, loader: DataLoaderT, criterion: CriterionT
+) -> tuple[float, float]:
+    """Return ``(mean loss, top-1 accuracy)`` of ``module`` over ``loader``, no gradient updates.
 
-    ``nan`` when the loader is empty, so the caller can fall back to the train-loss signal.
+    The accuracy uses the SAME argmax/label-decoding convention as
+    :func:`rfbench.core.evaluate.evaluate` -> ``rfbench.tasks.amc.metrics``: the predicted class
+    is the ``argmax`` over the per-class logits axis (dim 1 of the ``(B, num_classes)`` model
+    output) and the true class is the integer label, so val and test agree on what "correct" means.
+    Both scalars are ``nan`` when the loader is empty, so the caller can fall back to the train
+    signal. Computed in one pass so the LR schedule keeps stepping on val LOSS while checkpoint
+    selection / early stopping key on val ACCURACY.
     """
     import torch  # noqa: PLC0415 - lazy by design
 
     module.eval()
-    running = 0.0
+    running_loss = 0.0
     n_batches = 0
+    correct = 0
+    total = 0
     with torch.no_grad():
         for x, y in loader:
-            running += float(criterion(module(x), y).detach().item())
+            outputs = module(x)
+            running_loss += float(criterion(outputs, y).detach().item())
             n_batches += 1
-    return running / n_batches if n_batches else float("nan")
+            predicted = outputs.argmax(dim=1)
+            correct += int((predicted == y).sum().item())
+            total += int(y.numel())
+    if n_batches == 0 or total == 0:
+        return float("nan"), float("nan")
+    return running_loss / n_batches, correct / total
 
 
 def _snapshot_state(module: nn.Module) -> dict[str, Any]:
@@ -285,15 +302,21 @@ def train_baseline(
     (DataLoader over ``dataset.load('train')``, Adam + cross-entropy), MONITORING the ``val_split``
     each epoch to:
 
-    * drive a ``torch.optim.lr_scheduler.ReduceLROnPlateau`` on the val loss
-      (``factor=lr_factor``, ``patience=lr_patience``, ``min_lr=min_lr``),
-    * EARLY-STOP once ``patience`` epochs pass with no val-loss improvement greater than
-      ``min_delta``, and
-    * keep the BEST-VAL ``state_dict`` and RESTORE it before the final evaluation.
+    * drive a ``torch.optim.lr_scheduler.ReduceLROnPlateau`` on the val LOSS
+      (``mode="min"``, ``factor=lr_factor``, ``patience=lr_patience``, ``min_lr=min_lr``),
+    * keep the BEST-VAL-ACCURACY ``state_dict`` and RESTORE it before the final evaluation, and
+    * EARLY-STOP once ``patience`` epochs pass with no val-ACCURACY improvement greater than
+      ``min_delta``.
+
+    Checkpoint selection and early stopping key on val ACCURACY (higher is better) using the same
+    argmax/label decoding as :func:`rfbench.core.evaluate.evaluate`, so the restored checkpoint is
+    the accuracy-peak epoch (on RadioML the CE-loss minimum precedes the accuracy peak, so a
+    loss-min checkpoint restored a suboptimal model). The LR schedule still steps on val LOSS.
 
     When the ``val_split`` is unavailable or empty (e.g. an on-disk dataset without a prepared
     ``val`` index, or a single-split fixture) the loop degrades gracefully to monitoring the
-    *train* loss instead -- the schedule, early stopping and best-checkpoint logic all still run.
+    *train* loss instead (loss-min checkpoint selection) -- the schedule, early stopping and
+    best-checkpoint logic all still run.
 
     After fitting, restores the best state and calls :func:`rfbench.core.evaluate.evaluate` on
     ``task``'s default (``test``) split with the same declared ``regime`` so the single canonical
@@ -302,8 +325,9 @@ def train_baseline(
     ``epochs`` is now an *upper bound* (max epochs); early stopping usually stops sooner. The
     optional recipe params (``patience``, ``min_delta``, ``lr_factor``, ``lr_patience``,
     ``min_lr``, ``val_split``) default to the standard AMC values so existing callers are
-    unaffected. Returns ``(trained_model, result_dict)``. Raises ``ValueError`` if ``regime`` is
-    not a trainable regime, or ``epochs``/``batch_size``/``patience`` are non-positive.
+    unaffected. Note ``min_delta`` now applies to val ACCURACY (an accuracy gain, not a loss
+    drop). Returns ``(trained_model, result_dict)``. Raises ``ValueError`` if ``regime`` is not a
+    trainable regime, or ``epochs``/``batch_size``/``patience`` are non-positive.
     """
     import torch  # noqa: PLC0415
 
@@ -346,11 +370,10 @@ def train_baseline(
             shuffle=False,
         )
     )
-    monitor = "val" if val_loader is not None else "train"
     if val_loader is None:
         logger.warning(
             "no usable '%s' split for %r; monitoring TRAIN loss for the LR schedule / early "
-            "stopping instead (LR plateau + best-checkpoint restore still active).",
+            "stopping / best-checkpoint restore instead (val-accuracy selection unavailable).",
             val_split,
             dataset.name,
         )
@@ -361,63 +384,102 @@ def train_baseline(
         optimizer, mode="min", factor=lr_factor, patience=lr_patience, min_lr=min_lr
     )
 
-    best_loss = float("inf")
+    # Checkpoint selection / early stopping key on val ACCURACY (higher is better) when a val
+    # loader exists; with no val split we degrade to the train-LOSS signal (lower is better). The
+    # LR schedule always steps on a LOSS (val loss when available, else train loss).
+    best_acc = -1.0  # any real accuracy in [0, 1] beats this -> epoch 0 always snapshots
+    best_loss = float("inf")  # only used in the no-val (train-loss) fallback branch
     best_state = _snapshot_state(module)
     best_epoch = 0
     epochs_since_improve = 0
 
     for epoch in range(epochs):
         train_loss = _train_one_epoch(module, train_loader, optimizer, criterion)
-        monitored = train_loss if val_loader is None else _mean_loss(module, val_loader, criterion)
-        # An empty/degenerate monitored signal (nan) must not poison the best-val tracking.
-        if monitored != monitored:  # NaN check without importing math
-            monitored = train_loss
-        scheduler.step(monitored)
 
-        improved = monitored < best_loss - min_delta
-        if improved:
-            best_loss = monitored
-            best_state = _snapshot_state(module)
-            best_epoch = epoch
-            epochs_since_improve = 0
-        else:
-            epochs_since_improve += 1
-
-        logger.info(
-            "epoch %d/%d: train loss = %.4f, %s loss = %.4f, lr = %.2e%s",
-            epoch + 1,
-            epochs,
-            train_loss,
-            monitor,
-            monitored,
-            optimizer.param_groups[0]["lr"],
-            " (best)" if improved else "",
-        )
-        if epochs_since_improve >= patience:
+        if val_loader is not None:
+            val_loss, val_acc = _mean_accuracy(module, val_loader, criterion)
+            # An empty/degenerate val signal (nan) must not poison the schedule or selection: fall
+            # back to the train loss for the plateau step and skip the (nan) accuracy improvement.
+            step_loss = train_loss if val_loss != val_loss else val_loss  # NaN check w/o math
+            scheduler.step(step_loss)
+            improved = val_acc == val_acc and val_acc > best_acc + min_delta
+            if improved:
+                best_acc = val_acc
+                best_state = _snapshot_state(module)
+                best_epoch = epoch
+                epochs_since_improve = 0
+            else:
+                epochs_since_improve += 1
             logger.info(
-                "early stopping at epoch %d/%d (no %s-loss improvement for %d epochs; "
-                "best epoch %d, best %s loss %.4f)",
+                "epoch %d/%d: train loss = %.4f, val loss = %.4f, val acc = %.4f, lr = %.2e%s",
                 epoch + 1,
                 epochs,
-                monitor,
-                patience,
-                best_epoch + 1,
-                monitor,
-                best_loss,
+                train_loss,
+                val_loss,
+                val_acc,
+                optimizer.param_groups[0]["lr"],
+                " (best)" if improved else "",
             )
+        else:
+            # No usable val split: monitor the TRAIN loss (lower is better) for both the LR
+            # plateau and the best-checkpoint / early-stop decision (accuracy analog unavailable).
+            scheduler.step(train_loss)
+            improved = train_loss < best_loss - min_delta
+            if improved:
+                best_loss = train_loss
+                best_state = _snapshot_state(module)
+                best_epoch = epoch
+                epochs_since_improve = 0
+            else:
+                epochs_since_improve += 1
+            logger.info(
+                "epoch %d/%d: train loss = %.4f, lr = %.2e%s",
+                epoch + 1,
+                epochs,
+                train_loss,
+                optimizer.param_groups[0]["lr"],
+                " (best)" if improved else "",
+            )
+
+        if epochs_since_improve >= patience:
+            if val_loader is not None:
+                logger.info(
+                    "early stopping at epoch %d/%d (no val-accuracy improvement for %d epochs; "
+                    "best epoch %d, best val acc %.4f)",
+                    epoch + 1,
+                    epochs,
+                    patience,
+                    best_epoch + 1,
+                    best_acc,
+                )
+            else:
+                logger.info(
+                    "early stopping at epoch %d/%d (no train-loss improvement for %d epochs; "
+                    "best epoch %d, best train loss %.4f)",
+                    epoch + 1,
+                    epochs,
+                    patience,
+                    best_epoch + 1,
+                    best_loss,
+                )
             break
 
-    # Restore the best-val weights before the ONE canonical test evaluation.
+    # Restore the best checkpoint before the ONE canonical test evaluation.
     module.load_state_dict(best_state)
     module.to(resolved_device)
     module.eval()
-    logger.info(
-        "restored best-%s checkpoint from epoch %d (%s loss %.4f)",
-        monitor,
-        best_epoch + 1,
-        monitor,
-        best_loss,
-    )
+    if val_loader is not None:
+        logger.info(
+            "restored best-val-accuracy checkpoint from epoch %d (val acc %.4f)",
+            best_epoch + 1,
+            best_acc,
+        )
+    else:
+        logger.info(
+            "restored best-train-loss checkpoint from epoch %d (train loss %.4f)",
+            best_epoch + 1,
+            best_loss,
+        )
 
     result = evaluate(
         model,

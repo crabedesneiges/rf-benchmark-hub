@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — AMC baseline paper-conformance + training-recipe fix (M3)
+
+- **Regression root-caused** (4-way audit + adversarial verification): the `training.py` rewrite selected
+  the best checkpoint on **validation loss**, whose minimum precedes the accuracy peak on RadioML, so it
+  restored a suboptimal checkpoint and dragged every baseline down (CLDNN −8 pt). `train_baseline()` now
+  selects/restores the best checkpoint on **validation accuracy** (same argmax/label convention as
+  `core.evaluate`), keeps `ReduceLROnPlateau` on val loss, and early-stops on accuracy. Recipe loosened:
+  patience 20→40, `min_delta` 1e-4→0, `lr_patience` 5→10, `min_lr` 1e-6→1e-7.
+- **MCLDNN fusion made paper-exact**: element-wise add → channel-axis **concatenate** (`conv_fuse`
+  in-channels 50→100, VALID padding → post-fusion length 124), matching the official `wzjialang/MCLDNN`.
+- **ResNet depth adapted to the len-128 window**: `num_stacks` 6→3 (6 MaxPools over-pool 128→2; L=3 keeps
+  the paper's ~16 final time steps, `flat_dim` 64→512), `alpha_dropout` 0.5→0.3.
+- CLDNN left unchanged to isolate the recipe fix. Tests updated; suite green. Baselines to be re-trained
+  from scratch (seed 42, 150 epochs) on the cluster to refresh the board.
+
 ### Changed — Leaderboard site redesign (generic, per-metric)
 
 - **WP-50 rewrite.** `leaderboard/site/generate.py` is now fully data-driven: it renders **every** task

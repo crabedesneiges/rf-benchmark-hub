@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — educational content on the leaderboard site (data-driven)
+
+- **Enriched task manifest** (`leaderboard/tasks.json`): each task now merges optional
+  educational fields alongside the existing `id/title/status/priority/blurb` —
+  `description` (what/why), a `dataset` card object (`name`, `source`, `n_classes`,
+  `modality`, `real_or_synthetic`, `conditions`, `license`, `split`), a `primary_metric`
+  (`{name, definition}`) and a `secondary_metrics` list. All new fields are optional; the
+  `$comment` documents the shape.
+- **Per-task explanatory header** (`leaderboard/site/generate.py`): every task page — full
+  leaderboard AND minimal WIP/planned page — is topped by a manifest-driven header
+  (`_render_task_header`): the description, a compact dataset card and the primary +
+  secondary metric definitions. Purely additive and generic (`DeclaredTask` extended with
+  the optional fields, parsed in `load_manifest` via `_parse_metric_def`/`_parse_dataset`);
+  a task missing any piece simply omits it, and an undeclared-but-has-results task renders
+  no header — the existing generic per-metric/per-regime/WIP rendering is untouched.
+- **Guide page** (`guide.html`, `render_guide`): renders the shared educational content
+  (embedded `_GUIDE` constant) — a "What is I/Q?" section, the four evaluation regimes,
+  verified-vs-self_reported, the data policy, the split policy, and a metrics glossary
+  (name + definition + an up/down arrow for higher/lower-is-better). Linked as a **Guide**
+  nav chip on every page (nav-chip mechanism extended; chip goes active on the Guide page).
+- **Tests** (`tests/test_site.py`): asserts the Guide page is written with the I/Q section +
+  metrics glossary (both arrow directions), a task page carries its dataset card + metric
+  definitions above the tables, WIP pages still render the header, the header is omitted for
+  undeclared tasks, and the manifest's educational fields load (and stay optional). All 16+
+  existing site tests kept passing. `ruff`/`black --line-length 100`/`mypy` clean.
+
 ### Added — `protocol_tech_id` task (WiFi 802.11 standard recognition, P2)
 
 - **New downstream task** `protocol_tech_id`: single-label closed-set classification of a raw-IQ

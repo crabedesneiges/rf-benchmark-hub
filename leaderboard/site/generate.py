@@ -25,6 +25,16 @@ The renderer is **data-driven, never task-specific**:
   detection (mAP/mAR/IoU), sensing (pd@pfa=0.1/latency + ROC) etc. therefore render
   automatically the moment their result JSONs appear -- nothing about their metric names
   is baked in.
+* EDUCATIONAL header: every task page (full leaderboard OR minimal WIP page) is topped by an
+  explanatory header assembled from the manifest's OPTIONAL educational fields --
+  ``description`` (what/why), a compact ``dataset`` card (source, #classes, modality,
+  real/synthetic, conditions, license, split) and metric definitions (``primary_metric`` +
+  ``secondary_metrics``). Every field is optional and rendered generically, so a task
+  missing any piece simply omits it; nothing about a specific task is hardcoded.
+* A ``guide.html`` page renders the shared educational content (``_GUIDE`` below): what I/Q
+  is, the four evaluation regimes, verified-vs-self_reported, the data + split policies and a
+  metrics glossary (each entry an up/down arrow for higher/lower-is-better). It is linked from
+  the top nav of every page.
 
 Protocol invariants (docs/EVALUATION_PROTOCOL.md / D5), enforced structurally:
 
@@ -152,6 +162,142 @@ _FAMILY_CHIP: dict[str, tuple[str, str]] = {
     "foundation": ("foundation", "chip-foundation"),
 }
 
+#: Shared educational content for the Guide page (guide.html). Embedded as a module constant
+#: (not read from a file) so the generator stays a single self-contained, stdlib-only module.
+#: Each metrics-glossary entry carries ``higher_is_better`` -> an up/down arrow on the page.
+_GUIDE: dict[str, Any] = {
+    "iq_explainer": (
+        "RF receivers sample the radio wave as complex baseband: each sample has an "
+        "in-phase (I) part and a quadrature (Q) part, together capturing the signal's "
+        "amplitude and phase. Across this board a signal window is stored as a real-valued "
+        "(2, L) array — row 0 is the I stream, row 1 is the Q stream, for L time samples "
+        "(e.g. (2, 128) on RadioML, (2, 256) on WiSig, (2, 1024)). RF ML models consume this "
+        "raw I/Q directly because the modulation and hardware-imprint information lives in the "
+        "fine time-domain structure, so most tasks (AMC, SEI, interference/protocol ID) feed "
+        "the (2, L) waveform straight in. Spectrograms (a 2-channel real/imag time-frequency "
+        "image, e.g. (2, 512, 512)) are used instead for wideband time-frequency detection, "
+        "and CSI/channel representations are used for the separate channel-domain tasks."
+    ),
+    "regimes": (
+        (
+            "from_scratch",
+            "A task-specific model is trained from random initialization on the task's "
+            "training split (the standard setting for the specialized baselines).",
+        ),
+        (
+            "linear_probe",
+            "The pretrained backbone is frozen and only a linear head is fit on its "
+            "per-sample embed() features.",
+        ),
+        (
+            "full_finetune",
+            "The whole pretrained model, backbone plus head, is updated end-to-end on the "
+            "task's training data.",
+        ),
+        (
+            "few_shot",
+            "A frozen-backbone probe fit on only k labelled examples per class (a k-shot "
+            "support set).",
+        ),
+    ),
+    "verification": (
+        "A score marked verified means a maintainer independently re-ran the evaluation on a "
+        "multi-GPU station (eval-only when weights and a Docker image are provided, or a full "
+        "re-train for seed baselines) and the result matched the submitted numbers within the "
+        "declared tolerance, then signed it with verified_by/date/hardware. Everything else "
+        "stays self_reported: it is the author's own number to cite, and confidence on the "
+        "board comes from the verified track, not from the volume of self-reported entries."
+    ),
+    "data_policy": (
+        "No raw data is ever redistributed: datasets are downloaded from their official "
+        "source and rebuilt locally via rfbench data prepare, and only the split-index files "
+        "plus dataset checksums (and provenance) are versioned in the repo "
+        "(leaderboard/splits/). Raw formats (.h5/.npy/.bin/.sigmf-data) are git-ignored and "
+        "blocked in CI, so redistribution licensing is never an issue."
+    ),
+    "split_policy": (
+        "If a dataset ships a split already used by the literature, the board adopts it "
+        "verbatim and records its provenance in the manifest (e.g. Sig53 uses the official "
+        "TorchSig split; RadDet/DeepSense adopt their official splits if provided). Otherwise "
+        "it generates a deterministic 80/10/10 train/val/test split stratified by the task's "
+        "label structure (e.g. modulation x SNR for AMC, class for interference/protocol ID) "
+        "with seed 42; the ratios and seed are baked into the canonical_split_id, and changing "
+        "either is a breaking change that bumps the task version."
+    ),
+    "metrics_glossary": (
+        (
+            "accuracy_overall",
+            "Top-1 classification accuracy over the whole test split; for AMC it is computed "
+            "over the full SNR range with no cherry-picking of high-SNR points. Primary metric "
+            "for AMC, interference_id, and protocol_tech_id.",
+            True,
+        ),
+        (
+            "accuracy_vs_snr",
+            "The accuracy-versus-SNR curve reported alongside overall accuracy on datasets "
+            "that carry an SNR grid (AMC only; sets with no SNR grid omit it).",
+            True,
+        ),
+        (
+            "macro_f1",
+            "Unweighted mean of the per-class F1 scores, so every class counts equally "
+            "regardless of frequency.",
+            True,
+        ),
+        (
+            "rank1_accuracy",
+            "Closed-set specific-emitter-identification accuracy: fraction of signals whose "
+            "top-1 predicted device is correct. Primary SEI metric, reported separately on the "
+            "closed_set, cross_receiver, and cross_day tracks (which are never merged).",
+            True,
+        ),
+        (
+            "auroc",
+            "Area under the ROC curve for open-set SEI (detecting whether an emitter is in the "
+            "known set).",
+            True,
+        ),
+        (
+            "eer",
+            "Equal-error rate for open-set SEI, the operating point where false-accept and "
+            "false-reject rates are equal.",
+            False,
+        ),
+        (
+            "mAP",
+            "Mean average precision (COCO-style) for wideband time-frequency detection, "
+            "averaged over classes/IoU thresholds. Primary detection metric on RadDet.",
+            True,
+        ),
+        (
+            "mAR",
+            "Mean average recall for wideband detection, reported alongside mAP.",
+            True,
+        ),
+        (
+            "IoU",
+            "Intersection-over-union between predicted and ground-truth time-frequency boxes; "
+            "measures localization quality for detection.",
+            True,
+        ),
+        (
+            "pd@pfa",
+            "Probability of detection at a fixed probability of false alarm for spectrum-"
+            "sensing occupancy; the board's primary sensing operating point is pd@pfa=0.1.",
+            True,
+        ),
+        (
+            "inference_latency_ms",
+            "Per-window inference latency in milliseconds, reported for the spectrum-sensing "
+            "(Wave B) track.",
+            False,
+        ),
+    ),
+}
+
+#: The Guide's fixed slug (rendered to ``<guide>.html`` + linked in the nav on every page).
+_GUIDE_SLUG: str = "guide"
+
 #: Distinct (color, dash-pattern) pairs cycled across model lines in a curve plot. Chosen
 #: for contrast in both light and dark themes; the dash pattern makes lines distinguishable
 #: without relying on color alone (accessibility).
@@ -225,6 +371,26 @@ def _warn(message: str) -> None:
 # --------------------------------------------------------------------------------------------------
 # Declared-task manifest (data-driven task list: every declared task appears on the board)
 # --------------------------------------------------------------------------------------------------
+#: Ordered (key, human-label) pairs of the compact dataset card. Only keys PRESENT in the
+#: manifest's ``dataset`` object render a row, so a partial dataset object degrades cleanly.
+_DATASET_FIELDS: tuple[tuple[str, str], ...] = (
+    ("source", "source"),
+    ("n_classes", "classes"),
+    ("modality", "modality"),
+    ("real_or_synthetic", "real / synthetic"),
+    ("conditions", "conditions"),
+    ("license", "license"),
+    ("split", "split"),
+)
+
+
+class MetricDef(NamedTuple):
+    """A metric name + its human-readable definition (from the manifest / guide)."""
+
+    name: str
+    definition: str
+
+
 class DeclaredTask(NamedTuple):
     """One declared downstream task from the manifest (``leaderboard/tasks.json``).
 
@@ -233,6 +399,12 @@ class DeclaredTask(NamedTuple):
     current scope). A task renders its full leaderboard only when it actually has result
     rows; otherwise -- whatever its declared status -- it renders a WIP page/card so the
     board never shows a broken empty table.
+
+    Educational fields are OPTIONAL and drive the explanatory header on the task page:
+    ``description`` (one-paragraph what/why), ``dataset`` (a name -> value map rendered as a
+    compact card), ``primary_metric`` (a ``MetricDef``) and ``secondary_metrics`` (a list of
+    ``MetricDef``). Any of them may be empty/None, in which case that piece of the header is
+    simply omitted.
 
     A ``NamedTuple`` (not a ``@dataclass``) so this module stays safe to load BY PATH via
     ``importlib`` without pre-registering it in ``sys.modules`` (the CLI + tests load it that
@@ -245,6 +417,10 @@ class DeclaredTask(NamedTuple):
     status: str
     priority: str | None
     blurb: str
+    description: str = ""
+    dataset: dict[str, str] = {}  # noqa: RUF012 - NamedTuple default, never mutated
+    primary_metric: MetricDef | None = None
+    secondary_metrics: tuple[MetricDef, ...] = ()
 
     def status_label(self) -> str:
         """Human label for the declared status (falls back to a de-underscored form)."""
@@ -268,6 +444,34 @@ def _resolve_manifest_path() -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def _parse_metric_def(raw: object) -> MetricDef | None:
+    """Parse a manifest metric object ``{name, definition}`` into a ``MetricDef``.
+
+    Returns ``None`` unless the object is a dict carrying a non-empty ``name`` (the
+    ``definition`` is optional and defaults to an empty string), so a malformed or absent
+    entry is silently skipped rather than crashing the build.
+    """
+    if not isinstance(raw, dict):
+        return None
+    name = raw.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    definition = raw.get("definition")
+    return MetricDef(name=name, definition=str(definition) if definition else "")
+
+
+def _parse_dataset(raw: object) -> dict[str, str]:
+    """Parse a manifest ``dataset`` object into a flat name -> string-value map.
+
+    Non-dict input yields an empty map; every value is coerced to ``str`` so the card
+    renderer can treat them uniformly. ``name`` is kept alongside the card fields (used as
+    the card's title).
+    """
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
 
 
 def load_manifest(manifest_path: str | Path | None = None) -> dict[str, DeclaredTask]:
@@ -309,12 +513,25 @@ def load_manifest(manifest_path: str | Path | None = None) -> dict[str, Declared
         if status not in _STATUS_BADGE:
             status = _DEFAULT_STATUS
         priority = entry.get("priority")
+        secondary_raw = entry.get("secondary_metrics")
+        secondary = tuple(
+            md
+            for md in (
+                _parse_metric_def(item)
+                for item in (secondary_raw if isinstance(secondary_raw, list) else [])
+            )
+            if md is not None
+        )
         declared[task_id] = DeclaredTask(
             id=task_id,
             title=str(entry.get("title") or TASK_TITLES.get(task_id, task_id)),
             status=str(status),
             priority=str(priority) if isinstance(priority, str) and priority else None,
             blurb=str(entry.get("blurb") or ""),
+            description=str(entry.get("description") or ""),
+            dataset=_parse_dataset(entry.get("dataset")),
+            primary_metric=_parse_metric_def(entry.get("primary_metric")),
+            secondary_metrics=secondary,
         )
     return declared
 
@@ -898,6 +1115,83 @@ def _render_status_badge(entry: DeclaredTask) -> str:
     return f'<span class="status-badge {css_class}">{_esc(label)}{priority}</span>'
 
 
+def _render_metric_def(md: MetricDef, *, primary: bool) -> str:
+    """Render one metric definition line (name + its definition; primary is emphasised)."""
+    marker = '<span class="metric-def-tag">primary</span>' if primary else ""
+    definition = f" &mdash; {_esc(md.definition)}" if md.definition else ""
+    css = "metric-def metric-def-primary" if primary else "metric-def"
+    return (
+        f'<li class="{css}"><code class="metric-def-name">{_esc(md.name)}</code>'
+        f"{marker}{definition}</li>"
+    )
+
+
+def _render_dataset_card(dataset: dict[str, str]) -> str:
+    """Render the compact dataset card (a definition list of the present dataset fields).
+
+    Only fields present in ``dataset`` render a row (from the fixed ``_DATASET_FIELDS``
+    order), so a partial dataset object degrades cleanly. Returns an empty string if the
+    object carries none of the card fields (a bare ``name`` alone still shows as the title).
+    """
+    name = dataset.get("name", "")
+    rows: list[str] = []
+    for key, label in _DATASET_FIELDS:
+        value = dataset.get(key)
+        if not value:
+            continue
+        rows.append(
+            f'<div class="ds-row"><dt class="ds-key">{_esc(label)}</dt>'
+            f'<dd class="ds-val">{_esc(value)}</dd></div>'
+        )
+    if not name and not rows:
+        return ""
+    title = (
+        f'<p class="ds-title"><span class="ds-label">Dataset</span> '
+        f"<strong>{_esc(name)}</strong></p>"
+        if name
+        else '<p class="ds-title"><span class="ds-label">Dataset</span></p>'
+    )
+    body = f'<dl class="ds-grid">{"".join(rows)}</dl>' if rows else ""
+    return f'<div class="dataset-card">{title}{body}</div>'
+
+
+def _render_metrics_block(entry: DeclaredTask) -> str:
+    """Render the primary + secondary metric-definition block for a task header."""
+    items: list[str] = []
+    if entry.primary_metric is not None:
+        items.append(_render_metric_def(entry.primary_metric, primary=True))
+    for md in entry.secondary_metrics:
+        items.append(_render_metric_def(md, primary=False))
+    if not items:
+        return ""
+    return (
+        '<div class="metrics-block"><p class="metrics-block-title">Metrics</p>'
+        f'<ul class="metric-def-list">{"".join(items)}</ul></div>'
+    )
+
+
+def _render_task_header(entry: DeclaredTask | None) -> str:
+    """Render the explanatory header (description + dataset card + metric defs) for a task.
+
+    Every piece is optional and driven by the manifest, so an ``entry`` of ``None`` (task
+    not in the manifest) or an entry missing any educational field simply omits that piece.
+    Returns an empty string when there is nothing educational to show, so the generic
+    leaderboard rendering below is never disturbed.
+    """
+    if entry is None:
+        return ""
+    parts: list[str] = []
+    if entry.description:
+        parts.append(f'<p class="task-desc">{_esc(entry.description)}</p>')
+    card = _render_dataset_card(entry.dataset)
+    metrics = _render_metrics_block(entry)
+    if card or metrics:
+        parts.append(f'<div class="task-header-grid">{card}{metrics}</div>')
+    if not parts:
+        return ""
+    return f'<section class="task-header">{"".join(parts)}</section>'
+
+
 def render_wip_page(entry: DeclaredTask, nav_task_ids: list[str]) -> str:
     """Render a minimal "work in progress" page for a declared task with no results.
 
@@ -908,11 +1202,13 @@ def render_wip_page(entry: DeclaredTask, nav_task_ids: list[str]) -> str:
     """
     title = entry.title
     badge = _render_status_badge(entry)
+    header = _render_task_header(entry)
     blurb = f'<p class="wip-blurb">{_esc(entry.blurb)}</p>' if entry.blurb else ""
     body = (
         '<section class="task">'
         f'<h2 class="task-title">{_esc(title)}</h2>'
         f'<p class="task-meta">{badge}</p>'
+        f"{header}"
         '<div class="wip-card">'
         '<p class="wip-state"><strong>Work in progress</strong> &mdash; no baseline yet.</p>'
         '<p class="note">This task is declared in the benchmark but has no submitted '
@@ -945,6 +1241,7 @@ def render_task_page(
     declared = declared or {}
     title = _task_title(task_name, declared)
     dataset_line = _task_meta_line(task_name, rows)
+    header = _render_task_header(declared.get(task_name))
 
     # (regime, track) -> rows, preserving input order within each leaf group.
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -962,6 +1259,7 @@ def render_task_page(
         '<section class="task">'
         f'<h2 class="task-title">{_esc(title)}</h2>'
         f'<p class="task-meta">{dataset_line}</p>'
+        f"{header}"
         f'<p class="note">Each (regime, track) is ranked separately &mdash; a table or plot '
         "never mixes two regimes nor two tracks (protocol invariant). Badges mark "
         "maintainer-verified rows vs self-reported ones.</p>"
@@ -1062,13 +1360,111 @@ def render_index(
     return _page("RF-Benchmark-Hub Leaderboard", body, task_nav=_task_nav(ordered_tasks, None))
 
 
+def _render_regimes_section() -> str:
+    """Render the four evaluation regimes as a definition list (from ``_GUIDE``)."""
+    rows: list[str] = []
+    for name, definition in _GUIDE["regimes"]:
+        rows.append(
+            f'<div class="guide-def"><dt><code>{_esc(name)}</code></dt>'
+            f"<dd>{_esc(definition)}</dd></div>"
+        )
+    return (
+        '<section class="guide-section" id="regimes">'
+        "<h2>Evaluation regimes</h2>"
+        '<p class="note">The declared regime lives in every result.json and is never '
+        "inferred; the board never mixes two regimes in one comparison.</p>"
+        f'<dl class="guide-deflist">{"".join(rows)}</dl>'
+        "</section>"
+    )
+
+
+def _render_glossary_section() -> str:
+    """Render the metrics glossary: name + definition + an up/down arrow per metric.
+
+    ``higher_is_better`` picks the arrow (▲ up = higher is better, ▼ down = lower is
+    better) and a matching aria-label so the direction is not conveyed by glyph alone.
+    """
+    rows: list[str] = []
+    for name, definition, higher in _GUIDE["metrics_glossary"]:
+        if higher:
+            arrow, label, css = "&#9650;", "higher is better", "arrow-up"
+        else:
+            arrow, label, css = "&#9660;", "lower is better", "arrow-down"
+        rows.append(
+            "<tr>"
+            f'<td class="glossary-name"><code>{_esc(name)}</code></td>'
+            f'<td class="glossary-dir"><span class="dir-arrow {css}" '
+            f'role="img" aria-label="{_esc(label)}">{arrow}</span></td>'
+            f'<td class="glossary-def">{_esc(definition)}</td>'
+            "</tr>"
+        )
+    return (
+        '<section class="guide-section" id="metrics-glossary">'
+        "<h2>Metrics glossary</h2>"
+        '<p class="note">The arrow marks the optimisation direction: '
+        '<span class="dir-arrow arrow-up" aria-hidden="true">&#9650;</span> higher is better, '
+        '<span class="dir-arrow arrow-down" aria-hidden="true">&#9660;</span> lower is '
+        "better.</p>"
+        '<table class="glossary"><thead><tr>'
+        '<th>Metric</th><th class="glossary-dir">Dir.</th><th>Definition</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+        "</section>"
+    )
+
+
+def render_guide(nav_task_ids: list[str] | None = None) -> str:
+    """Render the standalone Guide page (``guide.html``) from the shared ``_GUIDE`` content.
+
+    Sections: what I/Q is, the four evaluation regimes, verified-vs-self_reported, the data
+    policy, the split policy and a metrics glossary (name + definition + an up/down arrow for
+    higher/lower-is-better). Self-contained -- shares the site theme and the same task nav as
+    every other page (``nav_task_ids`` -- the declared/has-results task ids).
+    """
+    body = (
+        '<section class="task guide">'
+        '<h1 class="task-title">Guide</h1>'
+        '<p class="note">How to read this board: the signal representation, the evaluation '
+        "regimes, what verification means, how data and splits are handled, and what each "
+        "metric measures.</p>"
+        '<section class="guide-section" id="what-is-iq">'
+        "<h2>What is I/Q?</h2>"
+        f'<p>{_esc(_GUIDE["iq_explainer"])}</p>'
+        "</section>"
+        f"{_render_regimes_section()}"
+        '<section class="guide-section" id="verification">'
+        "<h2>Verified vs self-reported</h2>"
+        f'<p>{_esc(_GUIDE["verification"])}</p>'
+        "</section>"
+        '<section class="guide-section" id="data-policy">'
+        "<h2>Data policy</h2>"
+        f'<p>{_esc(_GUIDE["data_policy"])}</p>'
+        "</section>"
+        '<section class="guide-section" id="split-policy">'
+        "<h2>Split policy</h2>"
+        f'<p>{_esc(_GUIDE["split_policy"])}</p>'
+        "</section>"
+        f"{_render_glossary_section()}"
+        "</section>"
+    )
+    nav_ids = nav_task_ids if nav_task_ids is not None else []
+    return _page("Guide — RF-Benchmark-Hub", body, task_nav=_task_nav(nav_ids, _GUIDE_SLUG))
+
+
 def _task_nav(task_names: list[str], current: str | None) -> str:
-    """Render the header task navigation chips (linking each task to its page)."""
+    """Render the header nav chips: Home, one per task, plus the Guide link.
+
+    ``current`` marks the active chip; it may be a task id, the Guide slug (``_GUIDE_SLUG``)
+    or ``None`` (index). The Guide chip is always present on every page.
+    """
     chips: list[str] = ['<a class="nav-chip" href="index.html">Home</a>']
     for task in sorted(task_names, key=_task_sort_key):
         title = TASK_TITLES.get(task, task)
         active = " nav-chip-active" if task == current else ""
         chips.append(f'<a class="nav-chip{active}" href="{_esc(task)}.html">{_esc(title)}</a>')
+    guide_active = " nav-chip-active" if current == _GUIDE_SLUG else ""
+    chips.append(
+        f'<a class="nav-chip nav-chip-guide{guide_active}" ' f'href="{_GUIDE_SLUG}.html">Guide</a>'
+    )
     return f'<nav class="nav">{"".join(chips)}</nav>'
 
 
@@ -1317,6 +1713,68 @@ td.num.primary .metric-val { font-weight: 700; }
 .wip-state { font-size: 1rem; margin: 0 0 0.5rem; }
 .wip-blurb { color: var(--fg); font-size: 0.9rem; margin: 0.75rem 0 0; }
 
+/* Explanatory task header (description + dataset card + metric definitions). */
+.task-header { margin: 0 0 1.25rem; }
+.task-desc { font-size: 0.95rem; color: var(--fg); margin: 0 0 1rem; max-width: 68ch; }
+.task-header-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem; align-items: start;
+}
+.dataset-card, .metrics-block {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+  padding: 0.9rem 1.1rem;
+}
+.ds-title { margin: 0 0 0.6rem; font-size: 0.95rem; }
+.ds-label, .metrics-block-title {
+  display: inline-block; font-size: 0.68rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--accent);
+}
+.metrics-block-title { margin: 0 0 0.5rem; }
+.ds-grid { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.3rem 0.75rem; }
+.ds-row { display: contents; }
+.ds-key {
+  color: var(--muted); font-size: 0.78rem; white-space: nowrap;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+.ds-val { margin: 0; font-size: 0.82rem; color: var(--fg); }
+.metric-def-list { margin: 0; padding: 0; list-style: none;
+  display: flex; flex-direction: column; gap: 0.5rem; }
+.metric-def { font-size: 0.82rem; color: var(--fg); }
+.metric-def-name {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.8rem; color: var(--accent);
+}
+.metric-def-tag {
+  display: inline-block; margin-left: 0.4rem; padding: 0.02rem 0.4rem; border-radius: 999px;
+  font-size: 0.62rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent);
+}
+
+/* Guide page. */
+.guide-section { margin: 1.5rem 0; }
+.guide-section h2 {
+  font-size: 1.15rem; margin: 0 0 0.5rem; padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--line);
+}
+.guide-section p { max-width: 74ch; font-size: 0.92rem; }
+.guide-deflist { margin: 0.5rem 0 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.guide-def dt { margin: 0 0 0.15rem; }
+.guide-def dt code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85rem; color: var(--accent); font-weight: 600;
+}
+.guide-def dd { margin: 0; font-size: 0.9rem; color: var(--fg); max-width: 74ch; }
+.glossary { margin-top: 0.75rem; }
+.glossary-name code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.82rem; color: var(--accent);
+}
+.glossary-def { font-size: 0.88rem; color: var(--fg); }
+.glossary-dir, th.glossary-dir { text-align: center; width: 3rem; white-space: nowrap; }
+.dir-arrow { font-size: 0.9rem; line-height: 1; }
+.arrow-up { color: var(--badge-verified-fg); }
+.arrow-down { color: var(--badge-self-fg); }
+
 .site-footer { border-top: 1px solid var(--line); background: var(--surface); }
 .site-footer p { max-width: 1080px; margin: 0 auto; padding: 1rem 1.5rem;
   color: var(--muted); font-size: 0.78rem; }
@@ -1334,8 +1792,9 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
     (``leaderboard/tasks.json``). Writes ``index.html`` -- a card for EVERY declared task --
     plus one ``<task>.html`` page per task: a full leaderboard for tasks that have results, a
     minimal "work in progress" page for declared tasks without results (never a broken empty
-    table). Returns the path to the written ``index.html``. Signature is intentionally
-    unchanged (manifest is auto-located from the source tree).
+    table). Also writes ``guide.html`` (the shared educational Guide, linked from every page's
+    nav). Returns the path to the written ``index.html``. Signature is intentionally unchanged
+    (manifest is auto-located from the source tree).
     """
     results_path = Path(results_dir)
     out_path = Path(out_dir)
@@ -1358,6 +1817,9 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
             continue
         page = render_wip_page(entry, nav_task_ids=nav_ids)
         (out_path / f"{task_id}.html").write_text(page, encoding="utf-8")
+
+    # Shared educational Guide page (linked from the nav on every page).
+    (out_path / f"{_GUIDE_SLUG}.html").write_text(render_guide(nav_ids), encoding="utf-8")
 
     index_path = out_path / "index.html"
     index_path.write_text(render_index(grouped, declared), encoding="utf-8")

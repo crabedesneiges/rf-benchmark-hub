@@ -18,7 +18,11 @@ assert the acceptance criteria for the generic generator:
   ``data-track`` pair; two rows sharing a regime but declaring different tracks land in
   SEPARATE tables, and two different regimes never share a table,
 * both verification states surface as distinguishable badges,
-* invalid result JSONs are skipped (not rendered) instead of crashing the build.
+* invalid result JSONs are skipped (not rendered) instead of crashing the build,
+* the EDUCATIONAL header (description + dataset card + metric definitions) is rendered on a
+  task page (and on a WIP page) from the manifest's optional fields,
+* a ``guide.html`` page is written, carries the "What is I/Q?" section + the metrics glossary
+  (with up/down arrows), and is linked from every page's nav.
 
 The generator module lives at ``leaderboard/site/generate.py``; it is loaded by file
 path so the test does not depend on ``leaderboard`` being an importable package.
@@ -749,3 +753,169 @@ def test_load_manifest_bad_status_defaults_to_wip(tmp_path: Path) -> None:
     )
     declared = generate.load_manifest(manifest)
     assert declared["amc"].status == "wip"
+
+
+# --------------------------------------------------------------------------------------------------
+# Educational content: per-task explanatory header + shared Guide page.
+# --------------------------------------------------------------------------------------------------
+def test_committed_manifest_carries_educational_fields() -> None:
+    """The committed manifest merges description + dataset card + metric defs into each task."""
+    declared = generate.load_manifest()
+    amc = declared["amc"]
+    # Description + dataset card (name + fields) + primary/secondary metric definitions.
+    assert "modulation scheme" in amc.description
+    assert amc.dataset.get("name") == "RadioML 2016.10a"
+    assert "raw IQ" in amc.dataset.get("modality", "")
+    assert amc.primary_metric is not None
+    assert amc.primary_metric.name == "accuracy_overall"
+    assert "SNR" in amc.primary_metric.definition
+    secondary_names = {md.name for md in amc.secondary_metrics}
+    assert {"accuracy_vs_snr", "macro_f1"} <= secondary_names
+    # A regression-metric task still parses (primary present, no secondary metrics).
+    pos = declared["positioning"]
+    assert pos.primary_metric is not None
+    assert pos.primary_metric.name == "mean_positioning_error"
+    assert pos.secondary_metrics == ()
+
+
+def test_load_manifest_educational_fields_optional(tmp_path: Path) -> None:
+    """A manifest entry WITHOUT educational fields loads with empty/None educational data."""
+    manifest = tmp_path / "tasks.json"
+    manifest.write_text(
+        json.dumps({"tasks": [{"id": "amc", "title": "AMC", "status": "implemented"}]}),
+        encoding="utf-8",
+    )
+    declared = generate.load_manifest(manifest)
+    amc = declared["amc"]
+    assert amc.description == ""
+    assert amc.dataset == {}
+    assert amc.primary_metric is None
+    assert amc.secondary_metrics == ()
+
+
+def test_task_page_renders_dataset_card_and_metric_defs(tmp_path: Path) -> None:
+    """A task page renders its explanatory header: description + dataset card + metric defs.
+
+    The header is driven by the COMMITTED manifest (auto-located from the source tree), so
+    building AMC with a real result row must surface AMC's description, its RadioML dataset
+    card and the accuracy_overall primary-metric definition above the leaderboard tables.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    # The explanatory header section + a dataset card with the RadioML name and fields.
+    assert '<section class="task-header">' in amc_html
+    assert '<div class="dataset-card">' in amc_html
+    assert "RadioML 2016.10a" in amc_html
+    assert ">modality<" in amc_html
+    assert ">license<" in amc_html
+    # The primary metric definition renders (name + primary tag + its definition text).
+    assert '<code class="metric-def-name">accuracy_overall</code>' in amc_html
+    assert '<span class="metric-def-tag">primary</span>' in amc_html
+    assert "no high-SNR cherry-picking" in amc_html
+    # A secondary metric definition renders too.
+    assert '<code class="metric-def-name">macro_f1</code>' in amc_html
+    # The header sits ABOVE the results (before the first leaderboard table).
+    assert amc_html.index('<section class="task-header">') < amc_html.index("<table")
+
+
+def test_wip_page_renders_educational_header(tmp_path: Path) -> None:
+    """A WIP/planned task page still shows the explanatory header (informative with no results).
+
+    ``spectrum_sensing`` is declared wip with educational content but has no result fixtures;
+    its page must carry the description + dataset card + primary metric definition ABOVE the
+    WIP card, yet still contain no results table.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    page = (out / "spectrum_sensing.html").read_text(encoding="utf-8")
+    assert '<section class="task-header">' in page
+    assert "DeepSense" in page
+    assert '<code class="metric-def-name">pd@pfa=0.1</code>' in page
+    # Header is above the WIP card, and there is still no results table.
+    assert page.index('<section class="task-header">') < page.index('<div class="wip-card">')
+    assert "<table" not in page
+
+
+def test_task_header_omitted_for_undeclared_task(tmp_path: Path) -> None:
+    """A task with results but ABSENT from the manifest renders no educational header.
+
+    ``render_task_page`` with an empty ``declared`` map must not invent a header (the header
+    is purely manifest-driven), so the generic leaderboard rendering is untouched.
+    """
+    row = _amc_row("row-x", "x-net", "linear_probe", 0.5, "self_reported")
+    html_text = generate.render_task_page("amc", [row], nav_task_ids=["amc"], declared={})
+    assert '<section class="task-header">' not in html_text
+    # The generic table still renders.
+    assert "<table" in html_text
+    assert "x-net" in html_text
+
+
+def test_guide_page_written_with_iq_and_glossary(tmp_path: Path) -> None:
+    """build_site writes guide.html with the I/Q section and the metrics glossary.
+
+    The Guide must carry the "What is I/Q?" explainer, the four evaluation regimes, the
+    verified-vs-self_reported note, the data + split policies and a metrics glossary that
+    lists each metric with an up/down (higher/lower-is-better) arrow.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    guide = out / "guide.html"
+    assert guide.is_file()
+    guide_html = guide.read_text(encoding="utf-8")
+    # What is I/Q? section + its explainer.
+    assert "What is I/Q?" in guide_html
+    assert "in-phase (I)" in guide_html
+    # The four evaluation regimes are each defined.
+    for regime in ("from_scratch", "linear_probe", "full_finetune", "few_shot"):
+        assert f"<code>{regime}</code>" in guide_html
+    # Verification, data + split policies.
+    assert "Verified vs self-reported" in guide_html
+    assert "Data policy" in guide_html
+    assert "Split policy" in guide_html
+    # Metrics glossary with named metrics AND both arrow directions.
+    assert "Metrics glossary" in guide_html
+    assert "<code>accuracy_overall</code>" in guide_html
+    assert "<code>eer</code>" in guide_html
+    # Up arrow (higher-is-better) and down arrow (lower-is-better) both appear.
+    assert "&#9650;" in guide_html  # ▲
+    assert "&#9660;" in guide_html  # ▼
+    assert "higher is better" in guide_html
+    assert "lower is better" in guide_html
+
+
+def test_guide_linked_in_nav_on_every_page(tmp_path: Path) -> None:
+    """Every generated page's nav links the Guide; the Guide page marks its own chip active."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    # Index, a full task page, and a WIP page all link guide.html in the nav.
+    for name in ("index.html", "amc.html", "spectrum_sensing.html"):
+        page = (out / name).read_text(encoding="utf-8")
+        assert 'href="guide.html">Guide</a>' in page
+    # On the Guide page itself, the Guide chip is the active one.
+    guide_html = (out / "guide.html").read_text(encoding="utf-8")
+    assert "nav-chip nav-chip-guide nav-chip-active" in guide_html
+
+
+def test_render_guide_is_self_contained() -> None:
+    """render_guide produces a standalone HTML page (doctype + theme) with the I/Q section."""
+    html_text = generate.render_guide(["amc", "sei"])
+    assert "<!DOCTYPE html>" in html_text
+    assert "Guide — RF-Benchmark-Hub" in html_text
+    assert "What is I/Q?" in html_text
+    assert "Metrics glossary" in html_text
+    # It shares the site nav (task chips passed through) + the Guide chip.
+    assert 'href="amc.html"' in html_text
+    assert 'href="guide.html">Guide</a>' in html_text

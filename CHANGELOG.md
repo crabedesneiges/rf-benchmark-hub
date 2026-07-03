@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — AMC board updated with the final-recipe retrain (MCLDNN, ResNet)
+
+- Re-trained from scratch (RadioML 2016.10a, seed 42, 150 epochs) under the fixed recipe
+  (val-accuracy best-checkpoint + gradient clipping + paper-exact archs): **MCLDNN 0.6008 → 0.6171**
+  and **ResNet 0.5606 → 0.5661**. Both now exceed their prior board scores.
+- **KNOWN ISSUE — CLDNN collapses to chance (0.0909) under the new recipe.** Gradient clipping ruled
+  out the LSTM-explosion/NaN hypothesis (no divergence logged); the 3-LSTM CLDNN instead stays stuck
+  at chance throughout training, even though the same architecture reached 0.5072 under the earlier
+  50-epoch val-loss recipe. Under investigation (per-epoch val-accuracy/LR trajectory diagnostic
+  pending). The board retains the last reproducible CLDNN figure until the fix lands.
+
 ### Added — Downstream-task prioritization mined from the FM bibliography
 
 - `docs/DOWNSTREAM_TASKS.md`: mined the 9 foundation-model papers in `docs/BIBLIOGRAPHY.md` for the

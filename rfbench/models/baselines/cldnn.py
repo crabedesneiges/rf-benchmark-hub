@@ -22,6 +22,21 @@ of the published CLDNN are reproduced here (see ``docs/BIBLIOGRAPHY.md`` §B.2):
 The skip means the LSTM's per-timestep input width is ``conv_filters + 2`` (conv features plus
 the two raw IQ channels), not ``conv_filters``.
 
+From-scratch conditioning (chance-collapse fix, ``input_norm``, default on). The paper does not
+specify input scaling, and the naive choice makes this exact architecture *fragile* on RML2016.10a:
+the IQ is ~unit-power, so raw per-sample values are tiny (~1e-2 RMS), and with no BatchNorm that
+near-zero signal -- fed through the conv front end AND, via the skip, straight into a THREE-layer
+stacked LSTM -- lets the deep recurrent stack collapse to a class-independent (constant-class, 1/11)
+output for *some* weight-init draws under the long-schedule recipe (verified: the un-normalized net
+collapsed on the board's unseeded init, yet learns on seed 42). **Per-sample unit-variance input
+normalization** (the same transform ResNet uses, which cured ResNet's identical 1/11 collapse; see
+:func:`_unit_variance_normalize`) removes the fragility -- with a real input scale the LSTM cannot
+ignore the (tiny) input, so it learns robustly regardless of the init draw. A per-epoch diagnostic
+(``slurm/diagnose_cldnn.py``) confirmed normalization is necessary AND sufficient (val-acc 0.58 vs
+0.09 without it); it also **ruled out** a forget-gate-bias/orthogonal LSTM re-init, which is inert
+once the input is normalized and actively *causes* the collapse when applied without it.
+MCLDNN/ResNet are untouched.
+
 Contract bridge (read ``rfbench/core/model.py``). ``forward`` / ``embed`` receive the
 COLLATED batch dict that :func:`rfbench.core.evaluate.evaluate` builds -- ``x["iq"]`` is a
 *list* of per-sample IQ payloads, one per sample. :class:`~rfbench.tasks.amc.dataset.AmcDataset`
@@ -73,6 +88,30 @@ def _same_pad_1d(kernel: int) -> int:
     return (kernel - 1) // 2
 
 
+def _unit_variance_normalize(x: Tensor, *, eps: float = 1e-8) -> Tensor:
+    """Standardise each ``(2, L)`` IQ window to zero mean and unit variance (per-sample).
+
+    RML2016.10a is distributed with each example normalised to ~unit average POWER, so the raw
+    per-sample IQ is tiny (RMS on the order of 1e-2), and CLDNN has neither BatchNorm nor any input
+    scaling. Feeding that near-zero-scale signal straight into a 3-layer stacked LSTM (and, via the
+    raw-waveform skip, again alongside the equally-tiny conv features) starts the recurrence in a
+    dead-gate regime from which the deep stack settles into a constant-class (chance, 1/11) output
+    it never leaves under the long-schedule recipe. Standardising each window to unit variance --
+    the SAME transform ``resnet_amc._unit_variance_normalize`` applies, which cured ResNet's
+    identical 1/11 collapse -- restores a healthy activation scale. The statistics are taken over
+    BOTH channels and the whole time axis of each sample independently (dims ``(1, 2)``), so the
+    absolute capture scale (which carries no modulation information) is removed while the I/Q
+    geometry that does is preserved. ``eps`` guards an all-constant (zero-variance) window.
+
+    Duplicated here (rather than imported from the ResNet baseline) so this module stays standalone
+    and never depends on a sibling baseline's import side effects -- the same rationale as
+    :func:`_iq_to_tensor`.
+    """
+    mean = x.mean(dim=(1, 2), keepdim=True)
+    std = x.std(dim=(1, 2), keepdim=True, unbiased=False)
+    return cast("Tensor", (x - mean) / (std + eps))
+
+
 class CLDNNNet(nn.Module):
     """The CLDNN convolutional-LSTM-DNN network (Sainath et al. 2015; West & O'Shea 2017).
 
@@ -97,8 +136,15 @@ class CLDNNNet(nn.Module):
         kernel: int = DEFAULT_KERNEL,
         lstm_hidden: int = DEFAULT_LSTM_HIDDEN,
         lstm_layers: int = DEFAULT_LSTM_LAYERS,
+        input_norm: bool = True,
     ) -> None:
-        """Build the 1-D conv stack, the raw-waveform skip, the stacked LSTM and the dense head."""
+        """Build the 1-D conv stack, the raw-waveform skip, the stacked LSTM and the dense head.
+
+        ``input_norm`` (default ``True``, the CLDNN-scoped chance-collapse fix) per-sample
+        unit-variance normalises the IQ window before the conv AND the raw-waveform skip (see
+        :func:`_unit_variance_normalize`); set it ``False`` to reproduce the earlier fragile
+        (raw-IQ) behaviour used by the diagnostic ablation.
+        """
         super().__init__()
         if num_classes < 1:
             raise ValueError(f"num_classes must be >= 1, got {num_classes}")
@@ -114,6 +160,7 @@ class CLDNNNet(nn.Module):
         self.conv_layers = conv_layers
         self.lstm_hidden = lstm_hidden
         self.lstm_layers = lstm_layers
+        self.input_norm = input_norm
 
         # Convolutional front end: a stack of length-preserving 1-D convs over the (2, L) IQ.
         # The first layer maps the 2 IQ channels to ``conv_filters``; the rest keep that width.
@@ -153,9 +200,15 @@ class CLDNNNet(nn.Module):
         axis (the forward bypass/skip) before the whole thing is transposed into the
         ``(B, L, conv_filters + 2)`` layout ``nn.LSTM(batch_first=True)`` expects -- so the LSTM
         sees both the learned local features and the untouched signal at every timestep.
+
+        When ``input_norm`` is set the window is first per-sample unit-variance normalised, so BOTH
+        the conv front end and the raw-waveform skip see a healthy ~unit-scale IQ rather than the
+        raw ~1e-2-RMS signal that stalls the deep LSTM at chance (:func:`_unit_variance_normalize`).
         """
+        if self.input_norm:
+            x = _unit_variance_normalize(x)
         feat = self.conv(x)  # (B, conv_filters, L)
-        # Raw-waveform bypass: concat the untouched (B, 2, L) IQ onto the conv channels.
+        # Raw-waveform bypass: concat the (normalised) (B, 2, L) IQ onto the conv channels.
         fused = torch.cat((feat, x), dim=1)  # (B, conv_filters + 2, L)
         return fused.transpose(1, 2)  # (B, L, conv_filters + 2)
 
@@ -221,8 +274,15 @@ class CLDNN(Model):
         num_classes: int = DEFAULT_NUM_CLASSES,
         window: int = DEFAULT_WINDOW,
         device: str | None = None,
+        input_norm: bool = True,
     ) -> None:
-        """Build the network and move it to ``device`` (auto: CUDA when available, else CPU)."""
+        """Build the network and move it to ``device`` (auto: CUDA when available, else CPU).
+
+        ``input_norm`` (default ``True``) is the CLDNN-scoped chance-collapse fix, passed through to
+        :class:`CLDNNNet`; the no-arg registry path ``MODELS.get("cldnn")()`` therefore builds the
+        fixed model. Pass ``False`` to reproduce the earlier fragile (raw-IQ) configuration (the
+        diagnostic does this for its ``broken`` variant).
+        """
         if not name:
             raise ValueError("CLDNN needs a non-empty name")
         self.name = name
@@ -232,7 +292,7 @@ class CLDNN(Model):
         else:
             resolved = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(resolved)
-        self.net = CLDNNNet(num_classes, window=window).to(self.device)
+        self.net = CLDNNNet(num_classes, window=window, input_norm=input_norm).to(self.device)
 
     def forward(self, x: Batch) -> Tensor:
         """Return ``(B, num_classes)`` class logits for the collated AMC batch ``x``."""

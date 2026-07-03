@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — CLDNN chance-collapse root-caused (CLDNN-scoped fix: per-sample input normalization)
+
+- **Root cause (multi-agent workflow → per-epoch cluster diagnostic).** The earlier grad-clip "fix"
+  only masked the NaN *symptom*; CLDNN still pinned at chance (0.0909). The real cause is a
+  **CLDNN-specific input-conditioning fragility**: RadioML 2016.10a is ~unit-average-power, so raw
+  per-sample IQ is tiny (RMS ~1e-2), and CLDNN has **no input normalization and no BatchNorm** —
+  that near-zero-scale signal, fed through the conv front end AND (via the raw-waveform skip)
+  straight into the 3-layer stacked LSTM, lets the deep recurrence collapse to a constant-class
+  output **for some weight-init draws**. The diagnostic showed the un-normalized model **collapsed
+  on the board's unseeded init yet learns on seed 42** — a fragility, not a deterministic bug.
+  ResNet hit the *identical* exact-1/11 collapse earlier and was cured by exactly this normalization.
+- **Fix — one change inside `rfbench/models/baselines/cldnn.py`** (cannot touch MCLDNN/ResNet;
+  `training.py` recipe byte-for-byte unchanged): **per-sample unit-variance input normalization**
+  (`_unit_variance_normalize`, the same transform `resnet_amc` uses) at the top of
+  `CLDNNNet._conv_sequence`, before the conv **and** the raw skip, so both see ~unit-scale IQ. With
+  a real input scale the LSTM cannot ignore the (tiny) input, so it learns robustly regardless of
+  the init draw. Gated by `input_norm` (default **True**) → `MODELS.get("cldnn")()` builds the fixed
+  model with no CLI change; `input_norm=False` reproduces the fragile config for ablation.
+- **Diagnostic-driven (this is why we ran the short job first).** The per-epoch diagnostic
+  (`slurm/diagnose_cldnn.py`, job 86194, seed 42, 20 ep) compared four variants and **overturned
+  the workflow's proposed second half**: `broken` 0.5659 · **`norm` 0.5848** · `init` (forget-bias-1
+  + orthogonal LSTM re-init, no norm) **0.0909 — collapsed** · `norm_init` 0.5848. So normalization
+  is **necessary and sufficient**, and the LSTM re-init is **inert with norm and actively harmful
+  without it** (the deep LSTM ignores the tiny input) — it was therefore **dropped** from the model.
+  It logs, per epoch, val-accuracy · LR · pre-clip grad-norm · clip-bite · prediction entropy /
+  top-class fraction · conv & LSTM activation std; a `--seed` sweep confirms `norm` is init-robust
+  before the 150-epoch retrain (`slurm/retrain_cldnn_arm.sh`).
+- **Follow-up flagged (not in this fix):** `training.py` val-accuracy checkpoint selection with
+  `best_acc=-1.0` silently reports the untrained epoch-0 snapshot for a run that never beats chance —
+  a robustness gap (not the CLDNN root cause) worth hardening separately.
+- **Board:** CLDNN figure retained pending the seed-robustness confirmation + 150-epoch retrain
+  (target ≥ 0.50; `norm` already reached 0.5848 at 20 ep). Tests (`tests/test_cldnn.py`:
+  normalization applied on the default path, raw-skip identity under `input_norm=False`) +
+  `ruff`/`black`/`mypy` green.
+
 ### Added — educational content on the leaderboard site (data-driven)
 
 - **Enriched task manifest** (`leaderboard/tasks.json`): each task now merges optional

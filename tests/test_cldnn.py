@@ -154,15 +154,50 @@ def test_raw_waveform_skip_widens_lstm_input() -> None:
 
 
 def test_raw_waveform_skip_preserves_raw_iq_tail() -> None:
-    """The skip concatenates the UNTOUCHED IQ: the last 2 feature columns equal the raw waveform.
+    """The skip concatenates the UNTOUCHED IQ: with input_norm off the tail equals the raw waveform.
 
     ``_conv_sequence`` returns ``(B, L, conv_filters + 2)`` with the raw IQ appended after the
     conv channels, so transposing the raw ``(B, 2, L)`` input must match the trailing 2 columns
-    exactly -- guarding against a future refactor that silently reorders or drops the bypass.
+    exactly -- guarding against a future refactor that silently reorders or drops the bypass. Built
+    with ``input_norm=False`` so the normalization (default on) does not rescale the tail.
     """
-    net = CLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    net = CLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW, input_norm=False)
     x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
     with torch.no_grad():
         seq = net._conv_sequence(x)
     raw_tail = seq[:, :, DEFAULT_CONV_FILTERS:]  # (B, L, 2)
     assert torch.equal(raw_tail, x.transpose(1, 2))
+
+
+def test_input_norm_default_on_normalizes_skip_tail() -> None:
+    """The chance-collapse fix is default-on: the skip carries the per-sample unit-variance IQ.
+
+    With ``input_norm`` defaulting True, ``_conv_sequence`` standardises the window before the
+    skip, so the trailing 2 columns equal the NORMALISED input (zero-mean/unit-variance per sample),
+    not the raw waveform -- proving the fix is applied on the default (registry) construction path.
+    """
+    from rfbench.models.baselines.cldnn import _unit_variance_normalize
+
+    net = CLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)  # defaults: input_norm on
+    assert net.input_norm is True
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        seq = net._conv_sequence(x)
+    raw_tail = seq[:, :, DEFAULT_CONV_FILTERS:]  # (B, L, 2)
+    assert torch.allclose(raw_tail, _unit_variance_normalize(x).transpose(1, 2), atol=1e-5)
+    # The normalised tail is genuinely rescaled (unit-ish variance), not the raw ~1e-2 signal.
+    assert raw_tail.std().item() > 0.5
+
+
+def test_input_norm_toggle_off_leaves_input_raw() -> None:
+    """With ``input_norm=False`` the conv sequence sees the raw window (no per-sample rescaling).
+
+    Guards the ablation path the diagnostic relies on: the fragile raw-IQ configuration must be
+    reachable so broken-vs-fixed can be compared. The raw skip tail then equals the untouched input.
+    """
+    net = CLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW, input_norm=False)
+    assert net.input_norm is False
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        seq = net._conv_sequence(x)
+    assert torch.equal(seq[:, :, DEFAULT_CONV_FILTERS:], x.transpose(1, 2))

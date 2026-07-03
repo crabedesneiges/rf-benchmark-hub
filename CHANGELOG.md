@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `protocol_tech_id` task (WiFi 802.11 standard recognition, P2)
+
+- **New downstream task** `protocol_tech_id`: single-label closed-set classification of a raw-IQ
+  window into 4 IEEE 802.11 standards (`802.11b`, `802.11g`, `802.11n`, `802.11ax`). Mirrors the
+  AMC / interference_id skeleton exactly. `rfbench/tasks/protocol_tech_id/`
+  (`ProtocolTechIdTask` registered `protocol_tech_id`), primary `accuracy_overall` + `macro_f1`
+  (single-label classification metrics reused from AMC; the primary metric mirrors AMC's minus the
+  SNR `eval_conditions` so `eval.conditions` stays clean). `configs/task/protocol_tech_id.yaml`.
+  Distinct from `amc`: recognises the WiFi *standard*, not the modulation scheme.
+- **Dataset** `tprime_wifi4` (split id base `proto-tprime-wifi4-8010-seed42-v1`): T-PRIME OTA WiFi
+  set (Genesys Lab / Northeastern; paper arXiv:2401.04837, code github.com/genesys-neu/t-prime,
+  data on Northeastern DRS collection `neu:h989s847q`) — **real over-the-air** raw interleaved-IQ
+  `.bin` captures, 4 classes, ~66 GB, 20 MHz. No official split ships in the repo → 80/10/10
+  stratified by class, seed 42. `rfbench/data/prepare/protocol.py` +
+  `rfbench/data/download/protocol_tprime.py` (heavy deps lazy, `$RFBENCH_CACHE`, split indices +
+  checksums only — never raw IQ, D3). **License**: DRS is openly downloadable but the dataset's
+  redistribution terms are **unstated** (flagged in the dataset card). **Cluster-confirm TODOs**:
+  the direct DRS artifact URL (item-specific, pass `source_url=`) and the exact `.bin` dtype /
+  window tiling.
+- **Baseline** `tprime` (`rfbench/models/baselines/tprime.py`): the T-PRIME transformer over raw
+  interleaved IQ with NO learned input embedding — a `(2, N)` window sliced into `M` tokens of
+  `(2, S)`, each flattened to a `1×2S` token fed to a 2-layer transformer encoder. Default **SM**
+  (`M=24`, `S=64`, `N=1536`, ~1.6M params); **LG** (`M=64`, `S=128`, `N=8192`, ~6.8M) via
+  `variant="LG"` / `model.variant=LG`. Registered + CLI-reachable
+  (`--task protocol_tech_id --model tprime`). Cites T-PRIME (arXiv:2401.04837).
+- **FROZEN-CONTRACT edit (reviewed)**: added `"protocol_tech_id"` to the `task.name` enum in
+  BOTH `schemas/result.schema.json` and `schemas/submission.schema.json` (+ the `result_path`
+  pattern), mirrored in `rfbench/core/types.py` `TaskName`. `schema_version` stays `1.0.0`; the
+  new task owns `version: v1`.
+- **Docs/site/CLI**: `docs/EVALUATION_PROTOCOL.md` §protocol_tech_id (normative), `TASK_TITLES`
+  /`TASK_ORDER` in the site generator, CLI enum tables + prepare/download dispatch + `tprime`
+  model module.
+- **Tests**: `tests/test_task_protocol_tech_id.py` (dep-free metric/registry/end-to-end +
+  numpy-guarded index-alignment regression) and `tests/test_tprime.py` (torch-gated). Both
+  skip cleanly in the dep-free venv.
+
+### Added — `interference_id` task (GNSS jamming classification, P2)
+
+- **New downstream task** `interference_id`: single-label closed-set classification of a raw-IQ
+  window into 6 GNSS-jamming classes (`DME`, `narrowband`, `single_am`, `single_chirp`,
+  `single_fm`, `no_jamming`). Mirrors the AMC skeleton exactly. `rfbench/tasks/interference_id/`
+  (`InterferenceIdTask` registered `interference_id`), primary `accuracy_overall` + `macro_f1`
+  (single-label classification metrics reused from AMC; the primary metric mirrors AMC's minus the
+  SNR `eval_conditions` so `eval.conditions` stays clean). `configs/task/interference_id.yaml`.
+- **Dataset** `interf_gnss6` (split id base `interf-gnss6-8010-seed42-v1`): Swinney & Woods 2021
+  raw-IQ set (Zenodo record 4629685, DOI 10.5281/zenodo.4629685, CC-BY-4.0,
+  `Raw_IQ_Dataset.zip` ~1.9 GB, no login). 80/10/10 stratified by class, seed 42.
+  `rfbench/data/prepare/interference.py` + `rfbench/data/download/interference_gnss.py` (heavy deps
+  lazy, `$RFBENCH_CACHE`, split indices + checksums only — never raw data, D3). **Honesty**: the
+  signals are MATLAB-synthesised but distributed as a downloadable raw-IQ archive, so this is a
+  public-download dataset, not a generation-only blocker.
+- **Baseline** `interf_cnn` (`rfbench/models/baselines/interf_cnn.py`): compact 1-D IQ CNN over
+  `(2, L)` windows (conv-BN-ReLU blocks + global pool + linear head), registered + CLI-reachable
+  (`--task interference_id --model interf_cnn`). Cites Morales-Ferre et al. 2019 and
+  Swinney & Woods 2021 as literature SOTA.
+- **FROZEN-CONTRACT edit (reviewed)**: added `"interference_id"` to the `task.name` enum in
+  BOTH `schemas/result.schema.json` and `schemas/submission.schema.json` (+ the `result_path`
+  pattern), mirrored in `rfbench/core/types.py` `TaskName`. `schema_version` stays `1.0.0`; the
+  new task owns `version: v1`.
+- **Docs/site/CLI**: `docs/EVALUATION_PROTOCOL.md` §interference_id (normative), `TASK_TITLES`
+  /`TASK_ORDER` in the site generator, CLI enum tables + prepare/download dispatch.
+- **Tests**: `tests/test_task_interference_id.py` (dep-free metric/registry/end-to-end +
+  numpy-guarded index-alignment regression) and `tests/test_interf_cnn.py` (torch-gated). Both
+  skip cleanly in the dep-free venv.
+
 ### Changed — AMC board updated with the final-recipe retrain (MCLDNN, ResNet)
 
 - Re-trained from scratch (RadioML 2016.10a, seed 42, 150 epochs) under the fixed recipe

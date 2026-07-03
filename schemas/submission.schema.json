@@ -27,7 +27,7 @@
     "result_path": {
       "type": "string",
       "description": "Repo-relative path to the result.json this manifest reproduces. Regex-pinned so a PR self-locates under leaderboard/results/<task>/.",
-      "pattern": "^leaderboard/results/(amc|sei|wideband_detection|spectrum_sensing)/.+\\.json$",
+      "pattern": "^leaderboard/results/(amc|sei|wideband_detection|spectrum_sensing|interference_id|protocol_tech_id)/.+\\.json$",
       "examples": ["leaderboard/results/amc/mcldnn.json"]
     },
     "task": {
@@ -38,7 +38,7 @@
       "properties": {
         "name": {
           "type": "string",
-          "enum": ["amc", "sei", "wideband_detection", "spectrum_sensing"]
+          "enum": ["amc", "sei", "wideband_detection", "spectrum_sensing", "interference_id", "protocol_tech_id"]
         },
         "version": {
           "type": "string",

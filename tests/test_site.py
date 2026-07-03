@@ -29,6 +29,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import sys
 from html.parser import HTMLParser
 from pathlib import Path
 from types import ModuleType
@@ -39,10 +40,15 @@ GENERATE_PATH = REPO_ROOT / "leaderboard" / "site" / "generate.py"
 
 
 def _load_generate() -> ModuleType:
-    """Import ``leaderboard/site/generate.py`` by path (no package install needed)."""
+    """Import ``leaderboard/site/generate.py`` by path (no package install needed).
+
+    The loaded module is registered in ``sys.modules`` under its spec name -- standard
+    practice for a path-based import so the module can resolve itself by name if needed.
+    """
     spec = importlib.util.spec_from_file_location("lb_generate", GENERATE_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -550,12 +556,15 @@ def test_invalid_result_is_skipped(tmp_path: Path) -> None:
     assert "ghost-model" not in amc_html
 
 
-def test_task_with_only_invalid_rows_produces_no_page(tmp_path: Path) -> None:
-    """A task whose every row is invalid yields NO <task>.html (index still written)."""
+def test_declared_task_with_only_invalid_rows_renders_wip_page(tmp_path: Path) -> None:
+    """A DECLARED task whose every row is invalid renders a WIP page, not a broken table.
+
+    ``wideband_detection`` is declared in the manifest; when its only submitted row is
+    schema-invalid (so it has zero valid results), the build must still write its page as a
+    WIP page (clear WIP state, no results table) rather than dropping it or crashing.
+    """
     results = tmp_path / "results"
     out = tmp_path / "site"
-    # One valid AMC row so the build has content, plus a wideband_detection task whose only
-    # row is invalid (missing verification) -> no page for it.
     _write(
         results / "amc" / "a.json", _amc_row("row-a", "iqfm", "linear_probe", 0.71, "self_reported")
     )
@@ -568,7 +577,13 @@ def test_task_with_only_invalid_rows_produces_no_page(tmp_path: Path) -> None:
 
     assert (out / "index.html").is_file()
     assert (out / "amc.html").is_file()
-    assert not (out / "wideband_detection.html").exists()
+    # The declared task still gets a page -- a WIP page (no results, no crash).
+    wb_page = out / "wideband_detection.html"
+    assert wb_page.is_file()
+    wb_html = wb_page.read_text(encoding="utf-8")
+    assert "Work in progress" in wb_html
+    assert "ghost" not in wb_html
+    assert "<table" not in wb_html
 
 
 def test_load_results_only_returns_valid_rows(tmp_path: Path) -> None:
@@ -579,3 +594,158 @@ def test_load_results_only_returns_valid_rows(tmp_path: Path) -> None:
     # 4 valid fixtures.
     assert len(rows) == 4
     assert {r["result_id"] for r in rows} == {"row-a", "row-b", "row-c", "row-d"}
+
+
+# --------------------------------------------------------------------------------------------------
+# Declared-task manifest: every declared task appears; WIP tasks render WIP (no results table).
+# --------------------------------------------------------------------------------------------------
+#: The canonical downstream tasks (docs/DOWNSTREAM_TASKS.md); the committed manifest declares all.
+_CANONICAL_TASKS: tuple[str, ...] = (
+    "amc",
+    "sei",
+    "wideband_detection",
+    "spectrum_sensing",
+    "interference_id",
+    "protocol_tech_id",
+    "beam_prediction",
+    "direction_finding",
+    "los_nlos",
+    "positioning",
+    "har",
+    "channel_estimation",
+    "snr_mobility_recognition",
+)
+
+
+def test_committed_manifest_declares_every_canonical_task() -> None:
+    """The committed leaderboard/tasks.json declares every canonical downstream task."""
+    declared = generate.load_manifest()
+    assert set(declared) == set(_CANONICAL_TASKS)
+    # Each entry carries a recognised status and a non-empty title.
+    for entry in declared.values():
+        assert entry.status in {"implemented", "wip", "planned"}
+        assert entry.title
+
+
+def test_index_lists_every_declared_task(tmp_path: Path) -> None:
+    """Every DECLARED task appears on the index -- implemented ones AND WIP ones.
+
+    Only ``amc`` + ``sei`` have result fixtures here; the index must still surface a card
+    (and a nav link -> a page) for every other declared task as work-in-progress.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    for task in _CANONICAL_TASKS:
+        # A card/nav link to each declared task's page is present on the index.
+        assert f"{task}.html" in index_html
+        # And its page file was written (full leaderboard or WIP page).
+        assert (out / f"{task}.html").is_file()
+    # The index advertises the work-in-progress state for tasks lacking a baseline.
+    assert "work in progress" in index_html
+
+
+def test_wip_task_renders_badge_and_no_results_table(tmp_path: Path) -> None:
+    """A declared task WITHOUT results renders a WIP badge + NO results table, no crash.
+
+    ``spectrum_sensing`` is declared (status wip) but has no result fixtures here: its page
+    must show the WIP badge/state and MUST NOT contain a leaderboard ``<table>`` (a broken
+    empty table is the exact failure mode we are avoiding).
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    page = out / "spectrum_sensing.html"
+    assert page.is_file()
+    html_text = page.read_text(encoding="utf-8")
+    # Clear WIP state + badge, and no results table at all.
+    assert "Work in progress" in html_text
+    assert "status-wip" in html_text
+    assert "<table" not in html_text
+    assert 'class="plot"' not in html_text
+
+
+def test_implemented_task_with_results_still_renders_tables_and_plots(tmp_path: Path) -> None:
+    """A declared+implemented task that HAS results renders its tables/plots as before.
+
+    ``amc`` is declared implemented AND has fixtures with an ``accuracy_vs_snr`` curve, so
+    its page must carry a real leaderboard ``<table>`` and an inline SVG plot -- the manifest
+    must not downgrade a task that has data to a WIP page.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    # Give amc a curve so a plot is expected.
+    curved = _amc_row("row-curve", "amc-curve", "linear_probe", 0.66, "self_reported")
+    curved["metrics"]["curves"] = {
+        "accuracy_vs_snr": [{"x": -20.0, "y": 0.1}, {"x": 18.0, "y": 0.9}]
+    }
+    _write(results / "amc" / "curve.json", curved)
+
+    generate.build_site(results, out)
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert "<table" in amc_html
+    assert 'class="plot"' in amc_html
+    assert "Work in progress" not in amc_html
+
+
+def test_render_wip_page_is_self_contained_and_tableless() -> None:
+    """render_wip_page produces a valid standalone page with a WIP badge and no table."""
+    entry = generate.DeclaredTask(
+        id="direction_finding",
+        title="Direction finding",
+        status="planned",
+        priority="P1",
+        blurb="Angle-of-arrival estimation; blocked on a public dataset.",
+    )
+    html_text = generate.render_wip_page(entry, ["amc", "direction_finding"])
+    assert "<!DOCTYPE html>" in html_text
+    assert "Direction finding" in html_text
+    assert "status-planned" in html_text
+    assert "planned" in html_text
+    assert "P1" in html_text
+    assert "Work in progress" in html_text
+    assert "<table" not in html_text
+
+
+def test_undeclared_task_with_results_is_still_rendered(tmp_path: Path) -> None:
+    """A task with results but ABSENT from the manifest is still rendered (manifest additive).
+
+    ``interference_id`` is declared wip; here we give it a valid result. Even though the
+    manifest declares it WIP, having a real result promotes it to a full leaderboard page --
+    the manifest never suppresses tasks that have data.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    row = _amc_row("row-if", "interf-net", "linear_probe", 0.63, "self_reported")
+    row["task"] = {"name": "interference_id", "version": "v1"}
+    _write(results / "interference_id" / "a.json", row)
+
+    generate.build_site(results, out)
+    page = out / "interference_id.html"
+    assert page.is_file()
+    html_text = page.read_text(encoding="utf-8")
+    assert "interf-net" in html_text
+    assert "<table" in html_text
+    assert "Work in progress" not in html_text
+
+
+def test_load_manifest_missing_file_returns_empty(tmp_path: Path) -> None:
+    """A missing manifest path is a non-fatal warning yielding an empty mapping."""
+    assert generate.load_manifest(tmp_path / "no-such-manifest.json") == {}
+
+
+def test_load_manifest_bad_status_defaults_to_wip(tmp_path: Path) -> None:
+    """An entry with an unknown status is coerced to wip (renders as a WIP page)."""
+    manifest = tmp_path / "tasks.json"
+    manifest.write_text(
+        json.dumps({"tasks": [{"id": "amc", "title": "AMC", "status": "bogus"}]}),
+        encoding="utf-8",
+    )
+    declared = generate.load_manifest(manifest)
+    assert declared["amc"].status == "wip"

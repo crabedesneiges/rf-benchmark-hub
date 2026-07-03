@@ -1,0 +1,96 @@
+{
+  "$comment": "Declared downstream tasks for the RF-Benchmark-Hub leaderboard. The site generator (leaderboard/site/generate.py) renders EVERY task listed here: tasks with valid result JSONs render full leaderboard tables/plots; tasks without results render a WIP card + a minimal WIP page. Canonical task ids, titles, priority (P1/P2/P3) and scope buckets mirror docs/DOWNSTREAM_TASKS.md. 'status' is the declared build state: implemented (has or will have results), wip (task/track defined, baseline pending), planned (blocked / out-of-current-scope, e.g. CSI/channel-domain). Keep this list in sync with docs/DOWNSTREAM_TASKS.md.",
+  "tasks": [
+    {
+      "id": "amc",
+      "title": "Automatic modulation classification",
+      "status": "implemented",
+      "priority": "P1",
+      "blurb": "Predict the modulation scheme of a raw-IQ window (RadioML 2016.10a, full SNR range). The board's most mature track."
+    },
+    {
+      "id": "sei",
+      "title": "Specific emitter identification",
+      "status": "implemented",
+      "priority": "P1",
+      "blurb": "Identify the transmitting device from hardware imperfections (WiSig), with closed-set / cross-receiver / cross-day tracks."
+    },
+    {
+      "id": "wideband_detection",
+      "title": "Wideband detection",
+      "status": "implemented",
+      "priority": "P2",
+      "blurb": "Locate and identify signals in time-frequency (RadDet), primary mAP with mAR and IoU."
+    },
+    {
+      "id": "spectrum_sensing",
+      "title": "Spectrum sensing",
+      "status": "wip",
+      "priority": "P3",
+      "blurb": "Per-subband occupancy detection under a target false-alarm rate (DeepSense, pd@pfa=0.1). Track defined; no baseline submitted yet."
+    },
+    {
+      "id": "interference_id",
+      "title": "Interference identification",
+      "status": "wip",
+      "priority": "P2",
+      "blurb": "Multi-class jamming / interference recognition (GNSS jamming 6-class IQ). Task added; baseline pending cluster training."
+    },
+    {
+      "id": "protocol_tech_id",
+      "title": "Protocol / technology identification",
+      "status": "wip",
+      "priority": "P2",
+      "blurb": "Recognise the WiFi 802.11 standard (ax/b/n/g) from raw IQ (T-PRIME). Task added; baseline pending cluster training."
+    },
+    {
+      "id": "snr_mobility_recognition",
+      "title": "SNR / mobility recognition",
+      "status": "wip",
+      "priority": "P2",
+      "blurb": "Joint (SNR bin x mobility/Doppler regime) classification on spectrograms (DeepMIMO Phoenix). Spectrogram track; dataset + baseline pending."
+    },
+    {
+      "id": "beam_prediction",
+      "title": "Beam prediction",
+      "status": "planned",
+      "priority": "P1",
+      "blurb": "Best-beam / beam-index prediction from CSI (DeepMIMO). CSI/channel-domain — out of the current terrestrial-IQ scope; separate CSI track."
+    },
+    {
+      "id": "direction_finding",
+      "title": "Direction finding",
+      "status": "planned",
+      "priority": "P1",
+      "blurb": "Angle-of-arrival estimation from a multi-antenna array. Blocked on a public multi-rx dataset (both FM evals use private OTA testbeds)."
+    },
+    {
+      "id": "los_nlos",
+      "title": "Line-of-sight / NLOS",
+      "status": "planned",
+      "priority": "P1",
+      "blurb": "Line-of-sight vs non-line-of-sight classification from CSI (DeepMIMO). CSI/channel-domain — out of current scope; separate CSI track."
+    },
+    {
+      "id": "positioning",
+      "title": "Positioning",
+      "status": "planned",
+      "priority": "P1",
+      "blurb": "Localization / geolocation from CSI (5G NR, mean positioning error in metres). CSI-domain + needs a regression-metric protocol entry."
+    },
+    {
+      "id": "har",
+      "title": "Human activity recognition",
+      "status": "planned",
+      "priority": "P1",
+      "blurb": "Human activity recognition from WiFi CSI (6-class). CSI-sensing domain — out of the current signal scope; separate CSI / RF-sensing track."
+    },
+    {
+      "id": "channel_estimation",
+      "title": "Channel estimation",
+      "status": "planned",
+      "priority": "P2",
+      "blurb": "MIMO-OFDM channel estimation (regression to MSE). CSI/channel-domain + needs a regression-metric protocol entry; separate CSI track."
+    }
+  ]
+}

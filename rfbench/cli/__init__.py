@@ -70,7 +70,14 @@ EXIT_FAILURE = 1  # validation / verification / runtime failure
 EXIT_USAGE = 2  # usage error
 
 # --- Canonical enumerations (in sync with docs/EVALUATION_PROTOCOL.md + the JSON schema) ---
-TASK_NAMES: tuple[str, ...] = ("amc", "sei", "wideband_detection", "spectrum_sensing")
+TASK_NAMES: tuple[str, ...] = (
+    "amc",
+    "sei",
+    "wideband_detection",
+    "spectrum_sensing",
+    "interference_id",
+    "protocol_tech_id",
+)
 REGIME_NAMES: tuple[str, ...] = ("from_scratch", "full_finetune", "linear_probe", "few_shot")
 SPLIT_NAMES: tuple[str, ...] = ("test", "val")
 DATASET_NAMES: tuple[str, ...] = (
@@ -83,6 +90,8 @@ DATASET_NAMES: tuple[str, ...] = (
     "raddet",
     "wbsig53",
     "deepsense",
+    "interf_gnss6",
+    "tprime_wifi4",
 )
 
 #: Which prepare task each dataset belongs to, and the family of prepare_* it dispatches to.
@@ -96,6 +105,8 @@ _DATASET_FAMILY: dict[str, str] = {
     "lora": "sei",
     "raddet": "detection",
     "wbsig53": "detection",
+    "interf_gnss6": "interference",
+    "tprime_wifi4": "protocol",
 }
 
 #: Datasets a given data task can prepare (task name -> concrete datasets).
@@ -106,6 +117,8 @@ _TASK_DATASETS: dict[str, tuple[str, ...]] = {
     "sei": ("wisig", "oracle", "lora"),
     "wideband_detection": ("raddet",),
     "detection": ("raddet",),
+    "interference_id": ("interf_gnss6",),
+    "protocol_tech_id": ("tprime_wifi4",),
 }
 
 # Per-task eval defaults used to assemble the result.json when no task registry row exists yet
@@ -135,6 +148,18 @@ _TASK_DEFAULTS: dict[str, dict[str, str]] = {
         "primary": "pd@pfa=0.1",
         "canonical_split_id": "sensing-deepsense-8010-seed42-v1",
         "track": "occupancy",
+    },
+    "interference_id": {
+        "dataset": "interf_gnss6",
+        "primary": "accuracy_overall",
+        "canonical_split_id": "interf-gnss6-8010-seed42-v1",
+        "track": "closed_set",
+    },
+    "protocol_tech_id": {
+        "dataset": "tprime_wifi4",
+        "primary": "accuracy_overall",
+        "canonical_split_id": "proto-tprime-wifi4-8010-seed42-v1",
+        "track": "closed_set",
     },
 }
 
@@ -282,6 +307,10 @@ def _load_labels_file(path: str) -> LabelsPayload:
     * ``sei``: ``{"records": [[tx, rx, day], ...]}``;
     * ``detection``: ``{"samples": [{"boxes": [...], "sample_id"?}, ...],
       "official_split"?: {...}, "track"?: "detection"|"recognition"}``.
+    * ``interference``: ``{"labels": ["DME", "narrowband", ...]}`` (one class name per item;
+      stratify by class).
+    * ``protocol``: ``{"labels": ["802.11b", "802.11g", ...]}`` (one class name per item;
+      stratify by class).
     """
     loaded = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(loaded, dict):
@@ -309,6 +338,10 @@ def _prepare_one(
         return _prepare_sei(dataset, out_dir, payload, seed, cache)
     if family == "detection":
         return _prepare_detection(dataset, out_dir, payload, seed, cache)
+    if family == "interference":
+        return _prepare_interference(dataset, out_dir, payload, seed, cache)
+    if family == "protocol":
+        return _prepare_protocol(dataset, out_dir, payload, seed, cache)
     raise ValueError(f"no prepare family registered for dataset {dataset!r}")  # pragma: no cover
 
 
@@ -412,6 +445,48 @@ def _prepare_detection(
     return split.canonical_split_id
 
 
+def _prepare_interference(
+    dataset: str, out_dir: Path, payload: LabelsPayload | None, seed: int, cache: str
+) -> str:
+    from rfbench.data.prepare.interference import prepare_interference
+
+    if payload is not None:
+        labels = [str(label) for label in payload["labels"]]
+    else:
+        from rfbench.data.prepare.interference import load_interference_labels
+
+        labels = load_interference_labels(dataset, cache=cache)  # type: ignore[arg-type]
+
+    split, _manifest = prepare_interference(
+        dataset,
+        out_dir=out_dir,
+        labels=labels,
+        seed=seed,
+    )
+    return split.canonical_split_id
+
+
+def _prepare_protocol(
+    dataset: str, out_dir: Path, payload: LabelsPayload | None, seed: int, cache: str
+) -> str:
+    from rfbench.data.prepare.protocol import prepare_protocol
+
+    if payload is not None:
+        labels = [str(label) for label in payload["labels"]]
+    else:
+        from rfbench.data.prepare.protocol import load_protocol_labels
+
+        labels = load_protocol_labels(dataset, cache=cache)  # type: ignore[arg-type]
+
+    split, _manifest = prepare_protocol(
+        dataset,
+        out_dir=out_dir,
+        labels=labels,
+        seed=seed,
+    )
+    return split.canonical_split_id
+
+
 def _cmd_data_prepare(args: argparse.Namespace) -> int:
     try:
         datasets = _resolve_prepare_targets(args.target, args.dataset)
@@ -493,9 +568,18 @@ def _download_dispatch(dataset: str, *, cache: str, source_url: str | None) -> P
         from rfbench.data.download.detection_wbsig53 import generate_wbsig53
 
         return generate_wbsig53(cache=cache)
+    if dataset == "interf_gnss6":
+        from rfbench.data.download.interference_gnss import download_interference_gnss6
+
+        return download_interference_gnss6(source_url=source_url, cache=cache)
+    if dataset == "tprime_wifi4":
+        from rfbench.data.download.protocol_tprime import download_tprime_wifi4
+
+        return download_tprime_wifi4(source_url=source_url, cache=cache)
     raise ValueError(
         f"no download function wired for {dataset!r} yet "
-        "(known: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, lora, raddet, wbsig53)."
+        "(known: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, lora, raddet, "
+        "wbsig53, interf_gnss6, tprime_wifi4)."
     )
 
 
@@ -673,6 +757,8 @@ _MODEL_MODULES: dict[str, str] = {
     "mcldnn": "rfbench.models.baselines.mcldnn",
     "resnet_amc": "rfbench.models.baselines.resnet_amc",
     "cldnn": "rfbench.models.baselines.cldnn",
+    "interf_cnn": "rfbench.models.baselines.interf_cnn",
+    "tprime": "rfbench.models.baselines.tprime",
     "lwm-spectro": "rfbench.models.foundation.lwm_spectro",
     "dummy-fm": "rfbench.models.foundation.dummy",
 }
@@ -699,6 +785,8 @@ _TASK_MODULES: dict[str, str] = {
     "amc": "rfbench.tasks.amc",
     "sei": "rfbench.tasks.sei",
     "wideband_detection": "rfbench.tasks.wideband_detection",
+    "interference_id": "rfbench.tasks.interference_id",
+    "protocol_tech_id": "rfbench.tasks.protocol_tech_id",
 }
 
 

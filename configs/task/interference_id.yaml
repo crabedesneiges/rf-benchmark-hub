@@ -1,0 +1,35 @@
+# @package task
+# The interference-ID (GNSS jamming classification) task.
+# Normative protocol: docs/EVALUATION_PROTOCOL.md §interference_id. Any metric/split change here
+# bumps `version` and is a breaking change. Task class:
+# rfbench.tasks.interference_id.task.InterferenceIdTask (registered as `interference_id`);
+# `rfbench eval` drives rfbench.core.evaluate.evaluate(model, task, split, regime).
+name: interference_id
+version: v1
+
+# Dataset variants this task can be scored on. The first is the default when `dataset` is
+# unset on the CLI. Each maps to a canonical, deterministic split id (indices + checksum are
+# versioned under leaderboard/splits/<dataset>/; raw data is never committed, D3).
+datasets:
+  - name: interf_gnss6 # 6 classes; 80/10/10 stratified by class, seed 42
+    canonical_split_id: interf-gnss6-8010-seed42-v1
+
+# Default partition scored on the board ({val, test} only; train is fit-only).
+default_split: test
+# Single closed-set track: interference-ID never blends tracks in one leaderboard column.
+tracks:
+  - closed_set
+
+# Metrics per EVALUATION_PROTOCOL.md §interference_id. `accuracy_overall` is PRIMARY (top-1 over
+# the whole test split); `macro_f1` is the unweighted mean of per-class F1. No SNR curve (the
+# GNSS-jamming set has no SNR grid), so `curves` is empty.
+metrics:
+  primary: accuracy_overall
+  scalars:
+    - accuracy_overall
+    - macro_f1
+  curves: []
+
+# No full-protocol SNR conditions for this task (no SNR grid). Kept empty so
+# result.json.eval.conditions stays clean.
+conditions: {}

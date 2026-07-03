@@ -24,7 +24,9 @@ Tensor: TypeAlias = Any
 Batch: TypeAlias = dict[str, Any]
 
 #: Registered benchmark task ids (``result.json.task.name`` enum).
-TaskName = Literal["amc", "sei", "wideband_detection", "spectrum_sensing"]
+TaskName = Literal[
+    "amc", "sei", "wideband_detection", "spectrum_sensing", "interference_id", "protocol_tech_id"
+]
 
 #: The four locked adaptation regimes (D5, ``result.json.regime.name`` enum).
 RegimeName = Literal["from_scratch", "full_finetune", "linear_probe", "few_shot"]

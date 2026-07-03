@@ -41,7 +41,7 @@
         "name": {
           "type": "string",
           "description": "Registered task id (matches rfbench/tasks/<name>/ and the task registry).",
-          "enum": ["amc", "sei", "wideband_detection", "spectrum_sensing"]
+          "enum": ["amc", "sei", "wideband_detection", "spectrum_sensing", "interference_id", "protocol_tech_id"]
         },
         "version": {
           "type": "string",

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Leaderboard site redesign (generic, per-metric)
+
+- **WP-50 rewrite.** `leaderboard/site/generate.py` is now fully data-driven: it renders **every** task
+  (not just AMC), one `<task>.html` per task with results, and a **column or plot for every metric** —
+  one table column per scalar metric (primary pinned first) and one inline `<svg>` line plot per curve
+  metric (e.g. `accuracy_vs_snr`). Self-contained dark/light CSS, family chips, and
+  `verified`/`self_reported` badges.
+- **Protocol invariants enforced in markup.** One `<table data-regime data-track>` per distinct
+  `(regime, track)` pair — two regimes never share a table, and same-regime different-track results split
+  into separate tables. Rows sorted by the primary metric descending.
+- `tests/test_site.py` rewritten (16 tests, mutation-checked non-trivial) against the new generic output;
+  full suite green (342 passed, 29 skipped), `ruff`/`black`/`mypy` clean.
+
 ### Added — Real dataset loaders (M1, no generation)
 
 Per the "use the datasets from the reference papers, do not generate" decision:

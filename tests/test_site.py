@@ -1,19 +1,23 @@
-"""WP-50 tests -- static leaderboard site generator.
+"""WP-50 tests -- static leaderboard site generator (generic, task-agnostic rewrite).
 
 Exercises ``leaderboard.site.generate.build_site`` end to end on synthetic, in-tree
 result fixtures written to ``tmp_path`` (no network, no heavy deps -- only ``jsonschema``,
 a hard dep of the harness, is used, and only transitively via the generator). The tests
-assert the acceptance criteria for WP-50:
+assert the acceptance criteria for the generic generator:
 
-* an ``index.html`` and one ``<task>.html`` page are produced,
-* the expected model rows appear on the task page,
-* rows are ordered by the task's PRIMARY metric (descending) within a regime,
-* the maintainer ``verified`` badge is rendered (vs ``self-reported``),
-* a comparison column NEVER mixes two regimes (D5): every row inside a
-  ``<table data-regime="R">`` really has regime ``R``,
-* a comparison table NEVER mixes two tracks: two rows sharing a regime but declaring
-  different ``split.track`` land in SEPARATE tables (SEI / detection tracks are reported
-  separately),
+* an ``index.html`` and one ``<task>.html`` page are produced (one per task with >=1 valid
+  row); a task whose every row is invalid produces NO page,
+* GENERIC per-metric rendering: every scalar in ``metrics.values`` gets its OWN table
+  column (not just the primary one),
+* every curve in ``metrics.curves`` yields an inline ``<svg class="plot">`` on the page,
+* a task carrying only scalar metrics (no curves) still renders its table (no plot, no
+  crash),
+* rows are ordered by the task's PRIMARY metric (descending) within a (regime, track)
+  group,
+* the no-mixing invariant (D5): each ``<table>`` carries exactly one ``data-regime`` /
+  ``data-track`` pair; two rows sharing a regime but declaring different tracks land in
+  SEPARATE tables, and two different regimes never share a table,
+* both verification states surface as distinguishable badges,
 * invalid result JSONs are skipped (not rendered) instead of crashing the build.
 
 The generator module lives at ``leaderboard/site/generate.py``; it is loaded by file
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from html.parser import HTMLParser
 from pathlib import Path
 from types import ModuleType
@@ -87,8 +92,25 @@ def _amc_row(
     }
 
 
-def _sei_row(result_id: str, model_name: str, track: str, rank1: float) -> dict[str, Any]:
-    """Build a schema-valid SEI result row (primary metric = rank1_accuracy)."""
+def _sei_row(
+    result_id: str,
+    model_name: str,
+    track: str,
+    rank1: float,
+    *,
+    values: dict[str, float] | None = None,
+    primary: str = "rank1_accuracy",
+    curves: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Build a schema-valid SEI result row.
+
+    ``values`` overrides the scalar metric map (defaults to a single ``rank1_accuracy``);
+    ``curves`` optionally attaches ``metrics.curves`` for the inline-SVG plot tests.
+    """
+    metric_values = values if values is not None else {"rank1_accuracy": rank1}
+    metrics: dict[str, Any] = {"primary": primary, "values": metric_values}
+    if curves is not None:
+        metrics["curves"] = curves
     return {
         "schema_version": "1.0.0",
         "result_id": result_id,
@@ -103,7 +125,7 @@ def _sei_row(result_id: str, model_name: str, track: str, rank1: float) -> dict[
             "seed": 42,
             "checksum": "sha256:" + "1" * 64,
         },
-        "metrics": {"primary": "rank1_accuracy", "values": {"rank1_accuracy": rank1}},
+        "metrics": metrics,
         "verification": {"status": "self_reported"},
     }
 
@@ -129,27 +151,25 @@ def _make_results_tree(root: Path) -> None:
 # --------------------------------------------------------------------------------------------------
 # Minimal HTML parsing helpers (stdlib html.parser -- no bs4/lxml).
 # --------------------------------------------------------------------------------------------------
-class _RegimeTableParser(HTMLParser):
-    """Collect, per ``<table data-track=T data-regime=R>``, the (model, regime) body rows.
+class _TableParser(HTMLParser):
+    """Collect, per ``<table data-regime=R data-track=T>``, its ordered body model names.
 
-    The Model cell is the 1st ``<td>`` and the Regime cell the 3rd (Model, Params, Regime,
-    ...), captured in document order. Tables are keyed by the ``(track, regime)`` pair so
-    two same-regime/different-track tables never collide. Lets a test assert (a) that every
-    row inside a table really carries that table's regime -- the comparison column never
-    blends regimes (D5) -- (b) that different tracks land in separate tables (SEI /
-    detection reported separately), and (c) the within-table row order (primary metric).
+    The generic table has NO per-row regime cell: the no-mixing invariant is expressed
+    entirely by each ``<table>``'s ``data-regime`` / ``data-track`` attributes (a table is
+    exactly one (regime, track) group). This parser therefore keys tables by that
+    ``(track, regime)`` pair and records, in document order, the ``<span class="model-name">``
+    of every body row -- enough to assert (a) two regimes never share a table, (b) two tracks
+    never share a table, and (c) the within-table row order (primary metric, descending).
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._current_key: tuple[str, str] | None = None
         self._in_body = False
-        self._td_index = -1
-        self._capture = False
+        self._capture_model = False
         self._buffer: list[str] = []
-        self._row_model: str = ""
-        # (track, regime) -> list of per-row (model, regime) cell texts, in document order
-        self.rows_by_table: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        # (track, regime) -> list of body-row model names, in document order.
+        self.rows_by_table: dict[tuple[str, str], list[str]] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = dict(attrs)
@@ -161,53 +181,64 @@ class _RegimeTableParser(HTMLParser):
                 self.rows_by_table.setdefault(self._current_key, [])
         elif tag == "tbody":
             self._in_body = True
-        elif tag == "tr" and self._in_body:
-            self._td_index = 0
-            self._row_model = ""
-        elif tag == "td" and self._in_body and self._td_index >= 0:
-            self._td_index += 1
-            # Capture the Model (1st) and Regime (3rd) cells.
-            if self._td_index in (1, 3):
-                self._capture = True
-                self._buffer = []
+        elif (
+            tag == "span"
+            and self._in_body
+            and self._current_key is not None
+            and attr.get("class") == "model-name"
+        ):
+            self._capture_model = True
+            self._buffer = []
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "td" and self._capture:
-            text = "".join(self._buffer).strip()
-            if self._td_index == 1:
-                self._row_model = text
-            elif self._td_index == 3 and self._current_key is not None:
-                self.rows_by_table[self._current_key].append((self._row_model, text))
-            self._capture = False
+        if tag == "span" and self._capture_model:
+            name = "".join(self._buffer).strip()
+            assert self._current_key is not None
+            self.rows_by_table[self._current_key].append(name)
+            self._capture_model = False
         elif tag == "tbody":
             self._in_body = False
         elif tag == "table":
             self._current_key = None
 
     def handle_data(self, data: str) -> None:
-        if self._capture:
+        if self._capture_model:
             self._buffer.append(data)
 
 
-def _tables_by_track_regime(html_text: str) -> dict[tuple[str, str], list[tuple[str, str]]]:
-    """Return rendered tables keyed by their ``(track, regime)`` pair."""
-    parser = _RegimeTableParser()
+def _tables_by_track_regime(html_text: str) -> dict[tuple[str, str], list[str]]:
+    """Return rendered tables keyed by their ``(track, regime)`` pair -> ordered models."""
+    parser = _TableParser()
     parser.feed(html_text)
     return parser.rows_by_table
 
 
-def _regime_tables(html_text: str) -> dict[str, list[tuple[str, str]]]:
-    """Return rendered tables keyed by regime, assuming a single track per regime.
+def _regime_tables(html_text: str) -> dict[str, list[str]]:
+    """Return tables keyed by regime, asserting a single track per regime.
 
     A convenience wrapper for the single-track AMC fixtures where each regime appears in
     exactly one track; asserts that assumption so multi-track pages use the richer
     ``_tables_by_track_regime`` view instead.
     """
-    by_regime: dict[str, list[tuple[str, str]]] = {}
-    for (_track, regime), cells in _tables_by_track_regime(html_text).items():
+    by_regime: dict[str, list[str]] = {}
+    for (_track, regime), models in _tables_by_track_regime(html_text).items():
         assert regime not in by_regime, f"regime {regime} spans multiple tracks; use pair view"
-        by_regime[regime] = cells
+        by_regime[regime] = models
     return by_regime
+
+
+def _table_data_regimes(html_text: str) -> list[str]:
+    """Return the ``data-regime`` of every ``<table ...>`` tag, in document order.
+
+    Each ``<table>`` must declare exactly ONE ``data-regime`` -- greping the raw opening
+    tags asserts that no table blends two regimes at the tag level.
+    """
+    regimes: list[str] = []
+    for tag in re.findall(r"<table\b[^>]*>", html_text):
+        found = re.findall(r'data-regime="([^"]*)"', tag)
+        assert len(found) == 1, f"table tag has {len(found)} data-regime attrs: {tag}"
+        regimes.append(found[0])
+    return regimes
 
 
 # --------------------------------------------------------------------------------------------------
@@ -231,6 +262,17 @@ def test_build_site_returns_index_and_pages(tmp_path: Path) -> None:
     assert "sei.html" in index_html
 
 
+def test_build_site_requires_existing_results_dir(tmp_path: Path) -> None:
+    """A missing results directory raises FileNotFoundError (never a silent empty build)."""
+    missing = tmp_path / "does-not-exist"
+    try:
+        generate.build_site(missing, tmp_path / "site")
+    except FileNotFoundError:
+        pass
+    else:  # pragma: no cover - defensive
+        raise AssertionError("build_site should raise FileNotFoundError for a missing results dir")
+
+
 def test_expected_model_rows_present(tmp_path: Path) -> None:
     """Every submitted model appears on its task page."""
     results = tmp_path / "results"
@@ -245,8 +287,125 @@ def test_expected_model_rows_present(tmp_path: Path) -> None:
     assert "wisig-cnn" in sei_html
 
 
-def test_rows_sorted_by_primary_descending_within_regime(tmp_path: Path) -> None:
-    """Within a regime, rows are ordered by the primary metric (descending)."""
+def test_scalar_metrics_get_one_column_each(tmp_path: Path) -> None:
+    """GENERIC rendering: every scalar in metrics.values gets its OWN table column.
+
+    A synthetic SEI row carries three scalars (rank1_accuracy, auroc, eer); the rendered
+    table must expose a column HEADER for each -- not only the primary -- and the primary
+    column is the one flagged with the ``primary`` col-note (exactly once).
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "sei" / "multi.json",
+        _sei_row(
+            "row-multi",
+            "sei-net",
+            "open_set",
+            0.0,
+            primary="rank1_accuracy",
+            values={"rank1_accuracy": 0.81, "auroc": 0.90, "eer": 0.07},
+        ),
+    )
+
+    generate.build_site(results, out)
+    sei_html = (out / "sei.html").read_text(encoding="utf-8")
+
+    # One header cell per distinct scalar metric (primary uses `<th class="num primary"`,
+    # the rest `<th class="num"`; both share the `<th class="num` prefix).
+    assert sei_html.count('<th class="num') == 3
+    # Each metric name appears as a header cell.
+    for metric in ("rank1_accuracy", "auroc", "eer"):
+        assert f">{metric}<" in sei_html
+    # The primary column is flagged exactly once.
+    assert sei_html.count('<span class="col-note">primary</span>') == 1
+    # The primary header carries the metric name + the primary marker together.
+    assert '<th class="num primary">rank1_accuracy<span class="col-note">primary</span>' in sei_html
+
+
+def test_missing_metric_renders_en_dash(tmp_path: Path) -> None:
+    """A metric present on one row but absent on another shows an en-dash for the gap.
+
+    The column set is the UNION of every row's metric keys; a row lacking a discovered
+    metric must still render a cell (en-dash) so columns stay aligned.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    # Same task/regime/track; one row has auroc, the other does not.
+    _write(
+        results / "sei" / "full.json",
+        _sei_row(
+            "row-full",
+            "with-auroc",
+            "closed_set",
+            0.0,
+            values={"rank1_accuracy": 0.90, "auroc": 0.88},
+        ),
+    )
+    _write(
+        results / "sei" / "partial.json",
+        _sei_row("row-partial", "no-auroc", "closed_set", 0.70),
+    )
+
+    generate.build_site(results, out)
+    sei_html = (out / "sei.html").read_text(encoding="utf-8")
+
+    # auroc is a discovered column; the row lacking it renders an en-dash cell.
+    assert ">auroc<" in sei_html
+    assert '<td class="num">&ndash;</td>' in sei_html
+
+
+def test_curve_metric_yields_inline_svg_plot(tmp_path: Path) -> None:
+    """Each curve in metrics.curves becomes one inline <svg class="plot"> on the page."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    curve = [
+        {"x": -20.0, "y": 0.10},
+        {"x": 0.0, "y": 0.55},
+        {"x": 18.0, "y": 0.95},
+    ]
+    _write(
+        results / "sei" / "curve.json",
+        _sei_row(
+            "row-curve",
+            "curve-net",
+            "closed_set",
+            0.80,
+            curves={"accuracy_vs_snr": curve},
+        ),
+    )
+
+    generate.build_site(results, out)
+    sei_html = (out / "sei.html").read_text(encoding="utf-8")
+
+    # Exactly one curve -> exactly one plot SVG, tagged with its aria-label + figure caption.
+    assert sei_html.count('class="plot"') == 1
+    assert 'aria-label="accuracy_vs_snr line plot"' in sei_html
+    assert '<figcaption class="plot-title">accuracy_vs_snr</figcaption>' in sei_html
+    # A polyline is drawn for the model series.
+    assert "<polyline" in sei_html
+
+
+def test_scalar_only_task_has_no_plot(tmp_path: Path) -> None:
+    """A task whose rows carry only scalar metrics renders its table but zero plots."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "sei" / "scalar.json",
+        _sei_row("row-scalar", "scalar-net", "closed_set", 0.77),
+    )
+
+    generate.build_site(results, out)
+    sei_html = (out / "sei.html").read_text(encoding="utf-8")
+
+    # Table rendered (has the model + a primary column), and NO plot SVG at all.
+    assert "scalar-net" in sei_html
+    assert 'class="plot"' not in sei_html
+    assert '<div class="plots">' not in sei_html
+
+
+def test_rows_sorted_by_primary_descending_within_group(tmp_path: Path) -> None:
+    """Within a (regime, track) group, rows are ordered by the primary metric descending."""
     results = tmp_path / "results"
     out = tmp_path / "site"
     _make_results_tree(results)
@@ -254,9 +413,8 @@ def test_rows_sorted_by_primary_descending_within_regime(tmp_path: Path) -> None
 
     amc_html = (out / "amc.html").read_text(encoding="utf-8")
     tables = _regime_tables(amc_html)
-    # Within the linear_probe table, iqfm (0.71) must be rendered before mcldnn (0.52).
-    lp_models = [model for model, _ in tables["linear_probe"]]
-    assert lp_models == ["iqfm", "mcldnn"]
+    # In the linear_probe table, iqfm (0.71) must be rendered before mcldnn (0.52).
+    assert tables["linear_probe"] == ["iqfm", "mcldnn"]
 
     # And the ordering is reflected by the sort helper directly.
     rows = generate.load_results(results)
@@ -267,8 +425,8 @@ def test_rows_sorted_by_primary_descending_within_regime(tmp_path: Path) -> None
     assert primaries[0] > primaries[-1]
 
 
-def test_verified_badge_rendered(tmp_path: Path) -> None:
-    """Both verification states surface as distinct badges."""
+def test_verified_and_self_reported_badges_distinct(tmp_path: Path) -> None:
+    """Both verification states surface as distinguishable badges."""
     results = tmp_path / "results"
     out = tmp_path / "site"
     _make_results_tree(results)
@@ -278,14 +436,17 @@ def test_verified_badge_rendered(tmp_path: Path) -> None:
     assert "badge-verified" in amc_html
     assert ">verified<" in amc_html
     assert "badge-self" in amc_html
-    assert "self-reported" in amc_html
+    assert ">self reported<" in amc_html
+    # The two badge classes are genuinely different markers.
+    assert amc_html.count("badge-verified") != 0
+    assert amc_html.count("badge-self") != 0
 
 
-def test_comparison_column_never_mixes_regimes(tmp_path: Path) -> None:
-    """D5: every row inside a regime-tagged table carries exactly that regime.
+def test_each_table_carries_exactly_one_regime(tmp_path: Path) -> None:
+    """D5: every <table> tag declares exactly one data-regime; two regimes never share one.
 
-    The AMC page has a linear_probe table (2 rows) and a full_finetune table (1 row);
-    neither table may contain a row from the other regime.
+    The AMC page has a linear_probe group (2 rows) and a full_finetune group (1 row); each
+    renders its OWN table, and no table blends the two regimes.
     """
     results = tmp_path / "results"
     out = tmp_path / "site"
@@ -293,26 +454,24 @@ def test_comparison_column_never_mixes_regimes(tmp_path: Path) -> None:
     generate.build_site(results, out)
 
     amc_html = (out / "amc.html").read_text(encoding="utf-8")
-    tables = _regime_tables(amc_html)
 
+    # Every table tag carries exactly one data-regime (asserted inside the helper), and the
+    # AMC page has exactly the two expected regime tables.
+    assert sorted(_table_data_regimes(amc_html)) == ["full_finetune", "linear_probe"]
+
+    tables = _regime_tables(amc_html)
     assert set(tables) == {"linear_probe", "full_finetune"}
-    # No table may mix regimes: every row's regime cell equals the table's data-regime tag.
-    for regime, cells in tables.items():
-        assert cells, f"table {regime} rendered no rows"
-        regimes_in_table = {cell_regime for _, cell_regime in cells}
-        assert regimes_in_table == {regime}, f"table {regime} mixed regimes: {cells}"
-    # The linear_probe table holds exactly its two rows; full_finetune holds its one.
-    assert len(tables["linear_probe"]) == 2
-    assert len(tables["full_finetune"]) == 1
+    # linear_probe holds exactly its two models; full_finetune holds its one.
+    assert tables["linear_probe"] == ["iqfm", "mcldnn"]
+    assert tables["full_finetune"] == ["mcldnn"]
 
 
 def test_same_regime_different_track_split_into_separate_tables(tmp_path: Path) -> None:
     """Two rows sharing a regime but declaring different tracks never share a table.
 
-    SEI reports closed_set / cross_receiver / cross_day separately (docs/
-    EVALUATION_PROTOCOL.md); both fixture rows use regime ``from_scratch`` but different
-    ``split.track``, so they must land in two distinct tables -- their primary-metric
-    column must never compare across tracks.
+    SEI reports closed_set / cross_receiver / cross_day separately; both fixture rows use
+    regime ``from_scratch`` but different ``split.track``, so they must land in two distinct
+    tables -- their primary-metric column must never compare across tracks.
     """
     results = tmp_path / "results"
     out = tmp_path / "site"
@@ -327,9 +486,11 @@ def test_same_regime_different_track_split_into_separate_tables(tmp_path: Path) 
     # Two tables, one per track, both scoped to the same regime.
     assert set(tables) == {("closed_set", "from_scratch"), ("cross_receiver", "from_scratch")}
     # Each track table holds exactly its own row -- tracks are never blended.
-    assert tables[("closed_set", "from_scratch")] == [("wisig-cnn", "from_scratch")]
-    assert tables[("cross_receiver", "from_scratch")] == [("wisig-cnn", "from_scratch")]
-    # The page separates the tracks with labelled sections.
+    assert tables[("closed_set", "from_scratch")] == ["wisig-cnn"]
+    assert tables[("cross_receiver", "from_scratch")] == ["wisig-cnn"]
+    # Both tables share the SAME regime yet are distinct tables (no mixing).
+    assert _table_data_regimes(sei_html) == ["from_scratch", "from_scratch"]
+    # The page tags the tracks distinctly.
     assert 'data-track="closed_set"' in sei_html
     assert 'data-track="cross_receiver"' in sei_html
 
@@ -351,13 +512,12 @@ def test_missing_track_falls_back_to_default_all_bucket(tmp_path: Path) -> None:
 
     tables = _tables_by_track_regime(amc_html)
     assert set(tables) == {("all", "linear_probe")}
-    assert tables[("all", "linear_probe")] == [("iqfm", "linear_probe")]
-    # A single-track task stays label-free: no visible "Track:" heading.
-    assert "Track:" not in amc_html
+    assert tables[("all", "linear_probe")] == ["iqfm"]
+    assert 'data-track="all"' in amc_html
 
 
-def test_few_shot_regime_labels_carry_k(tmp_path: Path) -> None:
-    """A few_shot row is labelled with its k, and its table is tagged data-regime=few_shot."""
+def test_few_shot_regime_label_carries_k(tmp_path: Path) -> None:
+    """A few_shot row is labelled with its k (spaced label), table tagged data-regime=few_shot."""
     results = tmp_path / "results"
     out = tmp_path / "site"
     row = _amc_row("row-fs", "iqfm", "few_shot", 0.40, "self_reported", family="foundation")
@@ -366,8 +526,11 @@ def test_few_shot_regime_labels_carry_k(tmp_path: Path) -> None:
 
     generate.build_site(results, out)
     amc_html = (out / "amc.html").read_text(encoding="utf-8")
-    assert "few_shot(k=5)" in amc_html
+    # REGIME_TITLES spaces the label; few_shot expands to include k.
+    assert "few shot (k=5)" in amc_html
     assert 'data-regime="few_shot"' in amc_html
+    # The foundation family surfaces a chip.
+    assert "chip-foundation" in amc_html
 
 
 def test_invalid_result_is_skipped(tmp_path: Path) -> None:
@@ -385,6 +548,27 @@ def test_invalid_result_is_skipped(tmp_path: Path) -> None:
     generate.build_site(results, out)
     amc_html = (out / "amc.html").read_text(encoding="utf-8")
     assert "ghost-model" not in amc_html
+
+
+def test_task_with_only_invalid_rows_produces_no_page(tmp_path: Path) -> None:
+    """A task whose every row is invalid yields NO <task>.html (index still written)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    # One valid AMC row so the build has content, plus a wideband_detection task whose only
+    # row is invalid (missing verification) -> no page for it.
+    _write(
+        results / "amc" / "a.json", _amc_row("row-a", "iqfm", "linear_probe", 0.71, "self_reported")
+    )
+    bad = _amc_row("row-bad", "ghost", "linear_probe", 0.5, "self_reported")
+    bad["task"] = {"name": "wideband_detection", "version": "v1"}
+    del bad["verification"]
+    _write(results / "wideband_detection" / "bad.json", bad)
+
+    generate.build_site(results, out)
+
+    assert (out / "index.html").is_file()
+    assert (out / "amc.html").is_file()
+    assert not (out / "wideband_detection.html").exists()
 
 
 def test_load_results_only_returns_valid_rows(tmp_path: Path) -> None:

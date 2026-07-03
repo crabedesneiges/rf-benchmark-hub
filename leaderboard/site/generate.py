@@ -1,27 +1,35 @@
-"""WP-50 -- static leaderboard site generator.
+"""WP-50 -- static leaderboard site generator (design + genericity overhaul).
 
 Reads every ``leaderboard/results/**/*.json`` row (each MUST validate against
-``schemas/result.schema.json``), groups the valid rows by task, and renders a plain
-**static HTML** site into an ``--out`` directory. No Jinja, no third-party templating:
-a tiny stdlib ``string.Template`` layer plus manual escaping is all we use. The only
-non-stdlib dependency is ``jsonschema`` (a hard dep of the harness), imported LAZILY so
-``import`` of this module stays dependency-free.
+``schemas/result.schema.json``), groups the valid rows by task, and renders a polished,
+**fully static** HTML site into an ``--out`` directory. The generator is stdlib-only (no
+Jinja, no Chart.js, no CDN, no runtime JS): pages are assembled with manual string
+building + ``html.escape``, and every chart is an **inline SVG** whose polylines are
+computed here in Python. The one non-stdlib dependency is ``jsonschema`` (a hard dep of
+the harness), imported LAZILY so importing this module stays dependency-free.
 
-Board contract (mirrors the frozen policy in docs/IMPLEMENTATION_PLAN.md / D5):
+The renderer is **data-driven, never task-specific**:
 
-* One HTML page per task, plus an ``index.html`` linking to them.
-* Each task table is sorted by that task's PRIMARY metric (``metrics.primary``),
-  descending -- higher is better for every v1 primary (accuracy/rank1/auroc/mAP/pd).
-* Rows are separated by ``track`` FIRST, then grouped by ``regime`` within each track
-  (docs/EVALUATION_PROTOCOL.md: SEI closed_set/cross_receiver/cross_day and detection
-  detection/recognition tracks are *reported separately*). ``track`` lives at
-  ``split.track`` and is free-form/optional; rows without one land in a default ``all``
-  bucket so single-track tasks (AMC, sensing) still render.
-* ``regime`` is an explicit column and each table is *scoped to one (track, regime)*: a
-  metric (comparison) column therefore only ever compares rows within a single track AND
-  a single regime, so the board NEVER mixes two regimes -- nor two tracks -- in one
-  comparison column (D5 / risk guard-rail).
-* A badge distinguishes ``verification.status`` ``verified`` from ``self_reported``.
+* Tasks are discovered from ``task.name``; a fixed display order is applied to the four
+  known tasks (amc, sei, wideband_detection, spectrum_sensing) then any others land
+  alphabetically. No task is hardcoded into the rendering path.
+* Per task, the SCALAR metrics are discovered from every key of ``metrics.values`` and the
+  CURVE metrics from every key of ``metrics.curves``. SEI (rank1_accuracy/auroc/eer),
+  detection (mAP/mAR/IoU), sensing (pd@pfa=0.1/latency + ROC) etc. therefore render
+  automatically the moment their result JSONs appear -- nothing about their metric names
+  is baked in.
+
+Protocol invariants (docs/EVALUATION_PROTOCOL.md / D5), enforced structurally:
+
+* One HTML page per task, plus an ``index.html`` landing page.
+* Rows are partitioned into ``(regime, track)`` groups. Each group renders exactly one
+  leaderboard TABLE (a column per scalar metric, primary first + emphasised) and one line
+  PLOT per curve metric (overlaying every model in that group). A table or plot therefore
+  NEVER compares across two regimes -- nor two tracks.
+* ``track`` is read from ``eval.conditions.track`` or ``split.track`` (free-form/optional);
+  rows without one land in a default ``all`` bucket so single-track tasks still render.
+* A badge distinguishes ``verification.status`` ``verified`` from ``self_reported``; a chip
+  distinguishes the model ``family`` ``baseline`` from ``foundation``.
 
 Invalid rows are skipped with a warning (stderr) and never reach the board.
 
@@ -43,25 +51,27 @@ import json
 import sys
 from importlib import resources
 from pathlib import Path
-from string import Template
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from jsonschema import Draft202012Validator
 
 # --------------------------------------------------------------------------------------------------
-# Board presentation constants
+# Board presentation constants (labels only -- never metric/task-specific rendering logic)
 # --------------------------------------------------------------------------------------------------
 
 #: Human-readable task titles for the board (falls back to the raw task id).
 TASK_TITLES: dict[str, str] = {
-    "amc": "AMC -- Automatic Modulation Classification",
-    "sei": "SEI -- RF Fingerprinting",
-    "wideband_detection": "Wideband Detection",
-    "spectrum_sensing": "Spectrum Sensing",
+    "amc": "Automatic modulation classification",
+    "sei": "Specific emitter identification",
+    "wideband_detection": "Wideband detection",
+    "spectrum_sensing": "Spectrum sensing",
 }
 
-#: Stable display order of the four locked regimes (D5).
+#: Sensible fixed order for the known tasks; unknown tasks sort alphabetically AFTER these.
+TASK_ORDER: tuple[str, ...] = ("amc", "sei", "wideband_detection", "spectrum_sensing")
+
+#: Stable display order of the four locked regimes (D5); unknown regimes sort after.
 REGIME_ORDER: tuple[str, ...] = (
     "from_scratch",
     "full_finetune",
@@ -69,25 +79,53 @@ REGIME_ORDER: tuple[str, ...] = (
     "few_shot",
 )
 
+#: Human-readable regime labels (falls back to a de-underscored title-ish form).
+REGIME_TITLES: dict[str, str] = {
+    "from_scratch": "from scratch",
+    "full_finetune": "full finetune",
+    "linear_probe": "linear probe",
+    "few_shot": "few shot",
+}
+
 #: Bucket for rows whose split declares no ``track`` (single closed-set track tasks).
 _DEFAULT_TRACK: str = "all"
 
-#: Human-readable track titles for the board (falls back to the raw track id).
+#: Human-readable track titles for the board (falls back to a de-underscored form).
 TRACK_TITLES: dict[str, str] = {
-    "all": "All",
-    "closed_set": "Closed-set",
-    "cross_receiver": "Cross-receiver",
-    "cross_day": "Cross-day",
-    "open_set": "Open-set",
-    "detection": "Detection",
-    "recognition": "Recognition",
+    "all": "all",
+    "closed_set": "closed set",
+    "cross_receiver": "cross receiver",
+    "cross_day": "cross day",
+    "open_set": "open set",
+    "detection": "detection",
+    "recognition": "recognition",
 }
 
 #: Verification badge text/CSS-class per status.
 _BADGE: dict[str, tuple[str, str]] = {
     "verified": ("verified", "badge-verified"),
-    "self_reported": ("self-reported", "badge-self"),
+    "self_reported": ("self reported", "badge-self"),
 }
+
+#: Family chip text/CSS-class per family.
+_FAMILY_CHIP: dict[str, tuple[str, str]] = {
+    "baseline": ("baseline", "chip-baseline"),
+    "foundation": ("foundation", "chip-foundation"),
+}
+
+#: Distinct (color, dash-pattern) pairs cycled across model lines in a curve plot. Chosen
+#: for contrast in both light and dark themes; the dash pattern makes lines distinguishable
+#: without relying on color alone (accessibility).
+_PLOT_SERIES_STYLES: tuple[tuple[str, str], ...] = (
+    ("#0b5fff", "none"),
+    ("#d1495b", "6 3"),
+    ("#00897b", "2 3"),
+    ("#8e44ad", "8 3 2 3"),
+    ("#e08e0b", "4 2"),
+    ("#2c7fb8", "1 3"),
+    ("#c0392b", "10 4"),
+    ("#16a085", "3 3 1 3"),
+)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -191,17 +229,52 @@ def group_by_task(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]
 
 
 # --------------------------------------------------------------------------------------------------
-# Row helpers
+# Row accessors (all defensive; never assume a specific task/metric)
 # --------------------------------------------------------------------------------------------------
+def _primary_key(row: dict[str, Any]) -> str:
+    """Return the row's primary (ranking) metric key (``metrics.primary``)."""
+    return str(row["metrics"]["primary"])
+
+
 def _primary_value(row: dict[str, Any]) -> float:
     """Return the row's primary-metric scalar (``metrics.values[metrics.primary]``).
 
     Guaranteed present by the schema (``primary`` must be a key of ``values``); we read it
     defensively and coerce to ``float`` for a total ordering.
     """
+    values = row["metrics"]["values"]
+    return float(values[_primary_key(row)])
+
+
+def _scalar_values(row: dict[str, Any]) -> dict[str, float]:
+    """Return this row's scalar metric map (``metrics.values``) as name -> float."""
+    values = row["metrics"]["values"]
+    return {str(k): float(v) for k, v in values.items()}
+
+
+def _curves(row: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Return this row's curve map (``metrics.curves``) as name -> list of points.
+
+    The schema allows each curve to be an array of ``{x, y[, label]}`` points; some tooling
+    may also nest them under ``{"points": [...]}``. Both shapes are normalised to the flat
+    list-of-points form here so the plot code stays shape-agnostic. Absent/empty curves map
+    to an empty dict (the group simply renders no plots).
+    """
     metrics = row["metrics"]
-    primary_key = str(metrics["primary"])
-    return float(metrics["values"][primary_key])
+    raw = metrics.get("curves")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for name, curve in raw.items():
+        points: Any = curve
+        if isinstance(curve, dict):
+            points = curve.get("points", [])
+        if not isinstance(points, list):
+            continue
+        clean = [p for p in points if isinstance(p, dict) and "x" in p and "y" in p]
+        if clean:
+            out[str(name)] = clean
+    return out
 
 
 def _regime_name(row: dict[str, Any]) -> str:
@@ -209,34 +282,45 @@ def _regime_name(row: dict[str, Any]) -> str:
     return str(row["regime"]["name"])
 
 
-def _regime_label(row: dict[str, Any]) -> str:
-    """Human label for a regime, expanding ``few_shot`` to include its ``k_shot``."""
-    name = _regime_name(row)
+def _regime_label(row_or_name: dict[str, Any] | str) -> str:
+    """Human label for a regime, expanding ``few_shot`` to include its ``k_shot``.
+
+    Accepts either a full row (so ``k_shot`` can be read) or a bare regime name.
+    """
+    if isinstance(row_or_name, str):
+        return REGIME_TITLES.get(row_or_name, row_or_name.replace("_", " "))
+    name = _regime_name(row_or_name)
+    label = REGIME_TITLES.get(name, name.replace("_", " "))
     if name == "few_shot":
-        k = row["regime"].get("k_shot")
+        k = row_or_name["regime"].get("k_shot")
         if k is not None:
-            return f"few_shot(k={k})"
-    return name
+            return f"{label} (k={k})"
+    return label
 
 
 def _track_name(row: dict[str, Any]) -> str:
-    """Return the row's evaluation track (``split.track``), defaulting to ``all``.
+    """Return the row's evaluation track, defaulting to ``all``.
 
-    ``track`` is free-form and OPTIONAL in the schema: SEI reports closed_set /
-    cross_receiver / cross_day / open_set and detection reports detection / recognition as
-    separate rows, while AMC/sensing typically omit it. A missing or ``None`` track maps to
-    the default ``all`` bucket so single-track tasks still render.
+    ``track`` is free-form and OPTIONAL: it may live at ``eval.conditions.track`` or at
+    ``split.track`` (checked in that order). SEI reports closed_set / cross_receiver /
+    cross_day / open_set and detection reports detection / recognition as separate rows,
+    while AMC/sensing typically omit it. A missing/empty track maps to the default ``all``
+    bucket so single-track tasks still render.
     """
-    track = row["split"].get("track")
-    if track is None:
+    eval_block = row.get("eval")
+    conditions = eval_block.get("conditions", {}) if isinstance(eval_block, dict) else {}
+    candidate = conditions.get("track") if isinstance(conditions, dict) else None
+    if candidate is None:
+        candidate = row["split"].get("track")
+    if candidate is None:
         return _DEFAULT_TRACK
-    text = str(track).strip()
+    text = str(candidate).strip()
     return text or _DEFAULT_TRACK
 
 
 def _track_label(track: str) -> str:
-    """Human label for a track (falls back to the raw track id)."""
-    return TRACK_TITLES.get(track, track)
+    """Human label for a track (falls back to a de-underscored form)."""
+    return TRACK_TITLES.get(track, track.replace("_", " "))
 
 
 def _status(row: dict[str, Any]) -> str:
@@ -244,6 +328,15 @@ def _status(row: dict[str, Any]) -> str:
     return str(row["verification"]["status"])
 
 
+def _family(row: dict[str, Any]) -> str | None:
+    """Return the model family (``baseline`` | ``foundation``) if declared."""
+    family = row["model"].get("family")
+    return str(family) if family is not None else None
+
+
+# --------------------------------------------------------------------------------------------------
+# Ordering helpers
+# --------------------------------------------------------------------------------------------------
 def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Sort rows by primary metric DESC, then verified-first, then model name.
 
@@ -261,6 +354,13 @@ def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def _task_sort_key(task: str) -> tuple[int, str]:
+    """Order tasks by the fixed known order, unknown tasks last (alphabetical)."""
+    if task in TASK_ORDER:
+        return (TASK_ORDER.index(task), task)
+    return (len(TASK_ORDER), task)
+
+
 def _regime_sort_key(regime: str) -> tuple[int, str]:
     """Order regimes by the locked D5 order, unknown regimes last (alphabetical)."""
     if regime in REGIME_ORDER:
@@ -269,16 +369,34 @@ def _regime_sort_key(regime: str) -> tuple[int, str]:
 
 
 def _track_sort_key(track: str) -> tuple[int, str]:
-    """Order tracks with the default ``all`` bucket first, then alphabetically.
-
-    Tracks are free-form (Wave-B tasks add their own), so there is no locked order beyond
-    keeping the catch-all ``all`` bucket at the top for single-track tasks.
-    """
+    """Order tracks with the default ``all`` bucket first, then alphabetically."""
     return (0 if track == _DEFAULT_TRACK else 1, track)
 
 
+def _ordered_scalar_keys(rows: list[dict[str, Any]], primary_key: str) -> list[str]:
+    """Discover every scalar metric across ``rows``: primary first, then the rest sorted.
+
+    This is the core of the data-driven table: the column set is the UNION of every key in
+    each row's ``metrics.values`` -- so a new task's metrics render automatically -- with the
+    primary metric pinned to the front for emphasis.
+    """
+    keys: set[str] = set()
+    for row in rows:
+        keys.update(_scalar_values(row))
+    rest = sorted(k for k in keys if k != primary_key)
+    return ([primary_key] if primary_key in keys else []) + rest
+
+
+def _ordered_curve_names(rows: list[dict[str, Any]]) -> list[str]:
+    """Discover every curve metric name across ``rows`` (sorted, deduplicated)."""
+    names: set[str] = set()
+    for row in rows:
+        names.update(_curves(row))
+    return sorted(names)
+
+
 # --------------------------------------------------------------------------------------------------
-# HTML rendering (stdlib string.Template + manual escaping; NO jinja)
+# Small formatting + escaping helpers
 # --------------------------------------------------------------------------------------------------
 def _esc(value: object) -> str:
     """HTML-escape a value for safe insertion into markup."""
@@ -286,58 +404,168 @@ def _esc(value: object) -> str:
 
 
 def _fmt_metric(value: float) -> str:
-    """Format a metric scalar for the board (4 decimals, trims to a stable string)."""
+    """Format a metric scalar for the board (4 decimals, stable string)."""
     return f"{value:.4f}"
 
 
-_PAGE_TEMPLATE = Template("""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>$title</title>
-<style>$css</style>
-</head>
-<body>
-<header><h1>$heading</h1></header>
-<main>
-$body
-</main>
-<footer><p>Generated by leaderboard/site/generate.py -- rows validated against \
-result.schema.json.</p></footer>
-</body>
-</html>
-""")
+def _fmt_params(n_params: object) -> str:
+    """Format a parameter count compactly (e.g. 289K, 2.5M), or an en-dash if absent."""
+    if not isinstance(n_params, int):
+        return "&ndash;"
+    if n_params >= 1_000_000:
+        return f"{n_params / 1_000_000:.1f}M"
+    if n_params >= 1_000:
+        return f"{n_params / 1_000:.0f}K"
+    return str(n_params)
 
-_CSS = """
-:root { --fg:#1a1a1a; --muted:#666; --line:#ddd; --head:#f4f4f6; --accent:#0b5fff; }
-* { box-sizing:border-box; }
-body { font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--fg);
-       margin:0; padding:0 1.5rem 3rem; line-height:1.45; }
-header h1 { font-size:1.5rem; margin:1.5rem 0 0.5rem; }
-main { max-width:1000px; }
-a { color:var(--accent); text-decoration:none; }
-a:hover { text-decoration:underline; }
-table { border-collapse:collapse; width:100%; margin:0.5rem 0 2rem; font-size:0.92rem; }
-caption { text-align:left; font-weight:600; margin-bottom:0.35rem; }
-th, td { border:1px solid var(--line); padding:0.4rem 0.6rem; text-align:left; }
-thead th { background:var(--head); }
-td.num { text-align:right; font-variant-numeric:tabular-nums; }
-tr.primary td.num.primary { font-weight:700; }
-.badge { display:inline-block; padding:0.05rem 0.5rem; border-radius:999px; font-size:0.78rem;
-         font-weight:600; white-space:nowrap; }
-.badge-verified { background:#e6f6ea; color:#137333; border:1px solid #9fd8ae; }
-.badge-self { background:#fff4e5; color:#a15c00; border:1px solid #f0c891; }
-.track-group { margin:0 0 2rem; }
-.track-group h2 { font-size:1.2rem; margin:1.75rem 0 0.5rem; border-bottom:2px solid var(--line);
-                  padding-bottom:0.25rem; }
-.regime-group { margin:0 0 1.5rem; }
-.regime-group h3 { font-size:1.05rem; margin:1rem 0 0.25rem; }
-.note { color:var(--muted); font-size:0.85rem; }
-ul.tasks { list-style:none; padding:0; }
-ul.tasks li { margin:0.4rem 0; font-size:1.05rem; }
-footer p { color:var(--muted); font-size:0.8rem; margin-top:2rem; }
-"""
+
+def _fmt_axis(value: float) -> str:
+    """Format an axis tick label (drops a trailing ``.0`` for integer-valued ticks)."""
+    if value == int(value):
+        return str(int(value))
+    return f"{value:g}"
+
+
+# --------------------------------------------------------------------------------------------------
+# Inline-SVG line plot (stdlib only -- polylines computed from the curve points)
+# --------------------------------------------------------------------------------------------------
+def _render_bar(value: float, vmax: float) -> str:
+    """Render a tiny horizontal bar (0..vmax) visualising a primary score."""
+    frac = 0.0 if vmax <= 0 else max(0.0, min(1.0, value / vmax))
+    pct = f"{frac * 100:.1f}"
+    return (
+        '<span class="bar" role="img" '
+        f'aria-label="{_esc(_fmt_metric(value))}">'
+        f'<span class="bar-fill" style="width:{pct}%"></span></span>'
+    )
+
+
+def _render_curve_plot(
+    curve_name: str,
+    series: list[tuple[str, list[dict[str, Any]]]],
+) -> str:
+    """Render one inline-SVG line plot overlaying every model's curve in a group.
+
+    ``series`` is a list of ``(model_name, points)`` where each point is a ``{x, y}`` dict.
+    Axes, gridlines and a legend are drawn; each series gets a distinct color + dash pattern
+    (cycled from ``_PLOT_SERIES_STYLES``) so lines stay distinguishable without color alone.
+    Every x/y is computed here -- there is no JS and no external chart library.
+    """
+    # Collect the global x/y ranges across all series.
+    xs = [float(p["x"]) for _, pts in series for p in pts]
+    ys = [float(p["y"]) for _, pts in series for p in pts]
+    if not xs or not ys:
+        return ""
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    if xmax == xmin:
+        xmax = xmin + 1.0
+    # Pad the y range a touch and clamp to sensible bounds (curves are usually 0..1 rates).
+    yspan = (ymax - ymin) or 1.0
+    ymin = min(ymin, ymin - 0.05 * yspan)
+    ymax = max(ymax, ymax + 0.05 * yspan)
+    if ymax == ymin:
+        ymax = ymin + 1.0
+
+    # SVG geometry (viewBox coordinates; scales responsively via CSS width:100%).
+    width, height = 720, 340
+    pad_l, pad_r, pad_t, pad_b = 56, 16, 20, 44
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+
+    def sx(x: float) -> float:
+        return pad_l + (x - xmin) / (xmax - xmin) * plot_w
+
+    def sy(y: float) -> float:
+        return pad_t + (ymax - y) / (ymax - ymin) * plot_h
+
+    parts: list[str] = [
+        f'<svg class="plot" viewBox="0 0 {width} {height}" role="img" '
+        f'aria-label="{_esc(curve_name)} line plot" '
+        f'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
+    ]
+
+    # Gridlines + y-axis ticks (5 horizontal bands).
+    n_yticks = 5
+    for i in range(n_yticks + 1):
+        yval = ymin + (ymax - ymin) * i / n_yticks
+        y = sy(yval)
+        parts.append(
+            f'<line class="grid" x1="{pad_l:.1f}" y1="{y:.1f}" '
+            f'x2="{pad_l + plot_w:.1f}" y2="{y:.1f}"/>'
+        )
+        parts.append(
+            f'<text class="tick" x="{pad_l - 6:.1f}" y="{y + 3:.1f}" '
+            f'text-anchor="end">{_esc(_fmt_axis(yval))}</text>'
+        )
+    # x-axis ticks (min .. max in a few steps).
+    n_xticks = 5
+    for i in range(n_xticks + 1):
+        xval = xmin + (xmax - xmin) * i / n_xticks
+        x = sx(xval)
+        parts.append(
+            f'<line class="grid" x1="{x:.1f}" y1="{pad_t:.1f}" '
+            f'x2="{x:.1f}" y2="{pad_t + plot_h:.1f}"/>'
+        )
+        parts.append(
+            f'<text class="tick" x="{x:.1f}" y="{pad_t + plot_h + 16:.1f}" '
+            f'text-anchor="middle">{_esc(_fmt_axis(xval))}</text>'
+        )
+
+    # Axis frame.
+    parts.append(
+        f'<line class="axis" x1="{pad_l:.1f}" y1="{pad_t + plot_h:.1f}" '
+        f'x2="{pad_l + plot_w:.1f}" y2="{pad_t + plot_h:.1f}"/>'
+    )
+    parts.append(
+        f'<line class="axis" x1="{pad_l:.1f}" y1="{pad_t:.1f}" '
+        f'x2="{pad_l:.1f}" y2="{pad_t + plot_h:.1f}"/>'
+    )
+
+    # Series polylines.
+    legend_items: list[str] = []
+    for idx, (model_name, pts) in enumerate(series):
+        color, dash = _PLOT_SERIES_STYLES[idx % len(_PLOT_SERIES_STYLES)]
+        ordered = sorted(pts, key=lambda p: float(p["x"]))
+        coords = " ".join(f"{sx(float(p['x'])):.1f},{sy(float(p['y'])):.1f}" for p in ordered)
+        dash_attr = "" if dash == "none" else f' stroke-dasharray="{dash}"'
+        parts.append(
+            f'<polyline fill="none" stroke="{color}" stroke-width="2" '
+            f'stroke-linejoin="round" stroke-linecap="round"{dash_attr} points="{coords}"/>'
+        )
+        # Point markers for readability.
+        for p in ordered:
+            parts.append(
+                f'<circle cx="{sx(float(p["x"])):.1f}" cy="{sy(float(p["y"])):.1f}" '
+                f'r="2.2" fill="{color}"/>'
+            )
+        legend_items.append(
+            '<span class="legend-item">'
+            f'<svg class="legend-swatch" viewBox="0 0 24 10" aria-hidden="true">'
+            f'<line x1="1" y1="5" x2="23" y2="5" stroke="{color}" stroke-width="2"'
+            f"{dash_attr}/></svg>"
+            f"<span>{_esc(model_name)}</span></span>"
+        )
+
+    parts.append("</svg>")
+    legend = f'<div class="legend">{"".join(legend_items)}</div>'
+    return (
+        '<figure class="plot-figure">'
+        f'<figcaption class="plot-title">{_esc(curve_name)}</figcaption>'
+        f'{"".join(parts)}{legend}'
+        "</figure>"
+    )
+
+
+# --------------------------------------------------------------------------------------------------
+# Table rendering (a column per discovered scalar metric)
+# --------------------------------------------------------------------------------------------------
+def _render_family_chip(family: str | None) -> str:
+    """Render the model-family chip (baseline=neutral, foundation=violet)."""
+    if family is None:
+        return ""
+    text, css_class = _FAMILY_CHIP.get(family, (family, "chip-baseline"))
+    return f'<span class="chip {css_class}">{_esc(text)}</span>'
 
 
 def _render_badge(status: str) -> str:
@@ -346,157 +574,474 @@ def _render_badge(status: str) -> str:
     return f'<span class="badge {css_class}">{_esc(text)}</span>'
 
 
-def _render_row(row: dict[str, Any], primary_key: str) -> str:
-    """Render one ``<tr>`` for a task table (rank filled in by the caller's numbering).
+def _render_row(
+    rank: int,
+    row: dict[str, Any],
+    scalar_keys: list[str],
+    primary_key: str,
+    primary_max: float,
+) -> str:
+    """Render one ``<tr>``: rank, model (+family chip, +params), each scalar, status.
 
-    Columns: model, params, regime, primary metric (the only cross-row comparison column,
-    kept within a single regime group), other scalar metrics, verification badge.
+    A cell is rendered for EVERY discovered scalar metric so no metric is left out; a metric
+    absent from this particular row shows an en-dash. The primary column carries the score
+    bar and is visually emphasised.
     """
     model = row["model"]
     name = _esc(model["name"])
     url = model.get("url")
     if isinstance(url, str) and url:
         name = f'<a href="{_esc(url)}">{name}</a>'
-    n_params = model.get("n_params")
-    params_cell = f"{n_params:,}" if isinstance(n_params, int) else "&ndash;"
+    chip = _render_family_chip(_family(row))
+    params = _fmt_params(model.get("n_params"))
 
-    values = row["metrics"]["values"]
-    primary = _fmt_metric(float(values[primary_key]))
-    other_keys = sorted(k for k in values if k != primary_key)
-    other_cells = "".join(
-        f'<td class="num">{_fmt_metric(float(values[k]))}</td>' for k in other_keys
-    )
+    values = _scalar_values(row)
+    metric_cells: list[str] = []
+    for key in scalar_keys:
+        if key not in values:
+            metric_cells.append('<td class="num">&ndash;</td>')
+            continue
+        formatted = _fmt_metric(values[key])
+        if key == primary_key:
+            bar = _render_bar(values[key], primary_max)
+            metric_cells.append(
+                f'<td class="num primary"><span class="metric-val">{formatted}</span>{bar}</td>'
+            )
+        else:
+            metric_cells.append(f'<td class="num">{formatted}</td>')
 
     badge = _render_badge(_status(row))
     return (
         "<tr>"
-        f"<td>{name}</td>"
-        f'<td class="num">{params_cell}</td>'
-        f"<td>{_esc(_regime_label(row))}</td>"
-        f'<td class="num primary">{primary}</td>'
-        f"{other_cells}"
-        f"<td>{badge}</td>"
+        f'<td class="rank num">{rank}</td>'
+        f'<td class="model"><span class="model-name">{name}</span>{chip}'
+        f'<span class="params">{params}</span></td>'
+        f"{''.join(metric_cells)}"
+        f'<td class="status">{badge}</td>'
         "</tr>"
     )
 
 
-def _render_regime_table(
-    track: str,
+def _render_group_table(
     regime: str,
+    track: str,
+    rows: list[dict[str, Any]],
+    primary_key: str,
+    scalar_keys: list[str],
+) -> str:
+    """Render the leaderboard table for one ``(regime, track)`` group.
+
+    Columns: ``#``, ``Model`` (name + family chip + params), one column per discovered
+    scalar metric (primary first + emphasised), ``Status``. Rows are sorted by the primary
+    metric, descending. The table carries ``data-regime`` and ``data-track`` so the
+    no-mixing invariant is checkable from the rendered HTML.
+    """
+    ordered = _sort_rows(rows)
+    primary_max = max((_primary_value(r) for r in ordered), default=1.0)
+
+    head_metric_cells = "".join(
+        (
+            f'<th class="num primary">{_esc(k)}<span class="col-note">primary</span></th>'
+            if k == primary_key
+            else f'<th class="num">{_esc(k)}</th>'
+        )
+        for k in scalar_keys
+    )
+    header = (
+        "<thead><tr>"
+        '<th class="rank">#</th><th class="model">Model</th>'
+        f"{head_metric_cells}"
+        '<th class="status">Status</th>'
+        "</tr></thead>"
+    )
+    body_rows = "\n".join(
+        _render_row(i, row, scalar_keys, primary_key, primary_max)
+        for i, row in enumerate(ordered, start=1)
+    )
+    return (
+        f'<table data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
+        f"{header}<tbody>\n{body_rows}\n</tbody></table>"
+    )
+
+
+def _render_group(
+    regime: str,
+    track: str,
     rows: list[dict[str, Any]],
     primary_key: str,
 ) -> str:
-    """Render a per-(track, regime) sub-table (header + sorted rows).
+    """Render one ``(regime, track)`` group: its table plus one plot per curve metric.
 
-    Scoping each table to a single (track, regime) is what guarantees D5 (and the SEI /
-    detection 'reported separately' rule): the primary/other metric columns only ever
-    compare rows *inside one regime AND one track*, so a comparison column never mixes
-    regimes -- nor tracks. The table carries both ``data-track`` and ``data-regime`` so the
-    invariant is checkable from the rendered HTML.
+    Genericity + the plot-OR-table-for-every-metric rule are realised here: the scalar keys
+    are discovered from the group's rows (every scalar gets a column) and the curve names
+    are discovered too (every curve gets an inline-SVG plot overlaying the group's models).
+    Nothing here is task-specific, and because the group is a single (regime, track), no
+    table or plot ever mixes two regimes nor two tracks.
     """
-    ordered = _sort_rows(rows)
-    # Union of non-primary scalar keys across this group's rows, for stable columns.
-    other_keys: list[str] = sorted(
-        {k for row in ordered for k in row["metrics"]["values"] if k != primary_key}
-    )
-    head_cells = "".join(f"<th>{_esc(k)}</th>" for k in other_keys)
-    header = (
-        "<thead><tr>"
-        "<th>Model</th><th>Params</th><th>Regime</th>"
-        f"<th>{_esc(primary_key)} (primary)</th>{head_cells}<th>Status</th>"
-        "</tr></thead>"
-    )
-    body_rows = "\n".join(_render_row(row, primary_key) for row in ordered)
-    label = _regime_label(ordered[0]) if regime == "few_shot" else regime
+    scalar_keys = _ordered_scalar_keys(rows, primary_key)
+    table = _render_group_table(regime, track, rows, primary_key, scalar_keys)
+
+    # One inline-SVG plot per discovered curve metric (skipped gracefully if none).
+    plots: list[str] = []
+    for curve_name in _ordered_curve_names(rows):
+        series: list[tuple[str, list[dict[str, Any]]]] = []
+        for row in _sort_rows(rows):
+            curves = _curves(row)
+            if curve_name in curves:
+                series.append((str(row["model"]["name"]), curves[curve_name]))
+        plot = _render_curve_plot(curve_name, series)
+        if plot:
+            plots.append(plot)
+    plots_html = f'<div class="plots">{"".join(plots)}</div>' if plots else ""
+
+    # A clear label for the group. A single-track task (everything in the default 'all'
+    # bucket) is labelled by regime only; multi-track tasks name the track too.
+    regime_label = _regime_label(rows[0])
+    if track == _DEFAULT_TRACK:
+        heading = f"Regime &middot; {_esc(regime_label)}"
+    else:
+        heading = (
+            f"Regime &middot; {_esc(regime_label)} &nbsp;/&nbsp; "
+            f"Track &middot; {_esc(_track_label(track))}"
+        )
     return (
-        '<section class="regime-group">'
-        f"<h3>Regime: {_esc(label)}</h3>"
-        f'<table data-track="{_esc(track)}" data-regime="{_esc(regime)}">'
-        f"<caption>Ranked by <code>{_esc(primary_key)}</code> (descending).</caption>"
-        f"{header}<tbody>\n{body_rows}\n</tbody></table>"
+        '<section class="group" '
+        f'data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
+        f'<h3 class="group-title">{heading}</h3>'
+        f"{table}{plots_html}"
         "</section>"
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# Page assembly
+# --------------------------------------------------------------------------------------------------
+def _task_meta_line(task_name: str, rows: list[dict[str, Any]]) -> str:
+    """Build the mono sub-line under a task heading (primary metric + row/model counts)."""
+    primary = _primary_key(rows[0])
+    n_models = len({str(r["model"]["name"]) for r in rows})
+    datasets = sorted({str(r["dataset"]["name"]) for r in rows})
+    n_rows = len(rows)
+    bits = [
+        f"primary = {primary}",
+        f"{n_rows} result{'s' if n_rows != 1 else ''}",
+        f"{n_models} model{'s' if n_models != 1 else ''}",
+    ]
+    if datasets:
+        bits.insert(0, "datasets: " + ", ".join(datasets))
+    return _esc(" · ".join(bits))
 
 
 def render_task_page(task_name: str, rows: list[dict[str, Any]]) -> str:
     """Render the full HTML page for one task.
 
-    The primary metric key is taken from the rows (all rows of a task share it by
-    protocol). Rows are separated by ``track`` first (SEI / detection tracks are reported
-    separately), then grouped by regime within each track (D5). Each (track, regime) group
-    is a table sorted by the primary metric, descending, so a comparison column never mixes
-    tracks nor regimes. A verification badge is shown per row.
+    Rows are partitioned into ``(regime, track)`` groups; each group renders one table
+    (a column per discovered scalar metric) and one plot per discovered curve metric. A
+    group is a single (regime, track), so no table or plot ever mixes regimes nor tracks.
+    Groups are ordered by regime (locked D5 order) then track (``all`` first).
     """
     if not rows:
         raise ValueError(f"render_task_page called with no rows for task '{task_name}'")
 
-    primary_key = str(rows[0]["metrics"]["primary"])
     title = TASK_TITLES.get(task_name, task_name)
+    dataset_line = _task_meta_line(task_name, rows)
 
-    # track -> regime -> rows (preserving input order within each leaf group).
-    by_track: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    # (regime, track) -> rows, preserving input order within each leaf group.
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
-        by_regime = by_track.setdefault(_track_name(row), {})
-        by_regime.setdefault(_regime_name(row), []).append(row)
+        groups.setdefault((_regime_name(row), _track_name(row)), []).append(row)
 
-    only_default_track = set(by_track) == {_DEFAULT_TRACK}
-    sections: list[str] = [
-        '<p class="note">Tracks are reported separately, and each regime within a track '
-        "is ranked separately -- comparison columns never mix tracks nor regimes (D5). "
-        "Badges mark maintainer-<strong>verified</strong> rows vs self-reported ones.</p>",
-        '<p class="note"><a href="index.html">&larr; all tasks</a></p>',
+    ordered_keys = sorted(groups, key=lambda rt: (_regime_sort_key(rt[0]), _track_sort_key(rt[1])))
+    sections = [
+        _render_group(regime, track, group_rows, _primary_key(group_rows[0]))
+        for (regime, track) in ordered_keys
+        for group_rows in (groups[(regime, track)],)
     ]
-    for track in sorted(by_track, key=_track_sort_key):
-        by_regime = by_track[track]
-        tables = [
-            _render_regime_table(track, regime, by_regime[regime], primary_key)
-            for regime in sorted(by_regime, key=_regime_sort_key)
-        ]
-        # Only wrap in a labelled track section when the task actually uses tracks; a
-        # single-track task (everything in the default 'all' bucket) stays label-free.
-        if only_default_track:
-            sections.extend(tables)
-        else:
-            sections.append(
-                f'<section class="track-group" data-track="{_esc(track)}">'
-                f"<h2>Track: {_esc(_track_label(track))}</h2>"
-                f"{''.join(tables)}"
-                "</section>"
-            )
 
-    return _PAGE_TEMPLATE.substitute(
-        title=f"{title} -- RF-Benchmark-Hub",
-        heading=_esc(title),
-        css=_CSS,
-        body="\n".join(sections),
+    body = (
+        '<section class="task">'
+        f'<h2 class="task-title">{_esc(title)}</h2>'
+        f'<p class="task-meta">{dataset_line}</p>'
+        f'<p class="note">Each (regime, track) is ranked separately &mdash; a table or plot '
+        "never mixes two regimes nor two tracks (protocol invariant). Badges mark "
+        "maintainer-verified rows vs self-reported ones.</p>"
+        f"{''.join(sections)}"
+        "</section>"
+    )
+    page_title = f"{title} — RF-Benchmark-Hub"
+    return _page(page_title, body, task_nav=_task_nav([task_name], task_name))
+
+
+def _best_summary(rows: list[dict[str, Any]]) -> tuple[str, str, str]:
+    """Return ``(best_model, best_score_str, primary_key)`` for a task's rows."""
+    best = _sort_rows(rows)[0]
+    return (
+        str(best["model"]["name"]),
+        _fmt_metric(_primary_value(best)),
+        _primary_key(best),
     )
 
 
 def render_index(grouped: dict[str, list[dict[str, Any]]]) -> str:
-    """Render the ``index.html`` linking to every task page with a row count."""
-    items: list[str] = []
-    for task_name in sorted(grouped, key=lambda t: TASK_TITLES.get(t, t)):
-        n = len(grouped[task_name])
+    """Render the ``index.html`` landing page: one card per task with a best-score summary."""
+    ordered_tasks = sorted(grouped, key=_task_sort_key)
+    cards: list[str] = []
+    for task_name in ordered_tasks:
+        rows = grouped[task_name]
         title = TASK_TITLES.get(task_name, task_name)
-        plural = "row" if n == 1 else "rows"
-        items.append(
-            f'<li><a href="{_esc(task_name)}.html">{_esc(title)}</a> '
-            f'<span class="note">({n} {plural})</span></li>'
+        n_rows = len(rows)
+        n_models = len({str(r["model"]["name"]) for r in rows})
+        best_model, best_score, primary = _best_summary(rows)
+        cards.append(
+            f'<a class="task-card" href="{_esc(task_name)}.html">'
+            f'<span class="card-title">{_esc(title)}</span>'
+            f'<span class="card-sub">{_esc(f"{n_rows} results · {n_models} models")}</span>'
+            f'<span class="card-best">Best: <strong>{_esc(best_model)}</strong> '
+            f"&middot; {_esc(primary)} = <strong>{_esc(best_score)}</strong></span>"
+            "</a>"
         )
-    body = (
-        '<p class="note">Reproducible benchmarks for terrestrial RF ML tasks. '
-        "Each task ranks submissions by its primary metric; tracks and regimes are never "
-        "mixed in a comparison column.</p>"
-        f'<ul class="tasks">\n{chr(10).join(items)}\n</ul>'
-        if items
-        else '<p class="note">No valid results yet.</p>'
+
+    if cards:
+        body = (
+            '<section class="task">'
+            '<p class="note">Reproducible benchmarks for terrestrial RF machine-learning '
+            "tasks, comparing specialised baselines against fine-tuned foundation models. "
+            "Each task ranks submissions by its primary metric; regimes and tracks are never "
+            "mixed in a comparison.</p>"
+            f'<div class="card-grid">{"".join(cards)}</div>'
+            "</section>"
+        )
+    else:
+        body = '<section class="task"><p class="note">No valid results yet.</p></section>'
+    return _page("RF-Benchmark-Hub Leaderboard", body, task_nav=_task_nav(ordered_tasks, None))
+
+
+def _task_nav(task_names: list[str], current: str | None) -> str:
+    """Render the header task navigation chips (linking each task to its page)."""
+    chips: list[str] = ['<a class="nav-chip" href="index.html">Home</a>']
+    for task in sorted(task_names, key=_task_sort_key):
+        title = TASK_TITLES.get(task, task)
+        active = " nav-chip-active" if task == current else ""
+        chips.append(f'<a class="nav-chip{active}" href="{_esc(task)}.html">{_esc(title)}</a>')
+    return f'<nav class="nav">{"".join(chips)}</nav>'
+
+
+def _page(title: str, body: str, task_nav: str) -> str:
+    """Assemble a complete standalone HTML page (header + nav + body + footer)."""
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="en">\n<head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>{_esc(title)}</title>\n"
+        f"<style>{_CSS}</style>\n"
+        "</head>\n<body>\n"
+        '<header class="site-header">'
+        '<div class="brand">'
+        f"{_LOGO_SVG}"
+        '<div class="brand-text">'
+        '<span class="brand-name">RF-Benchmark-Hub</span>'
+        '<span class="brand-tag">Reproducible leaderboards for terrestrial RF '
+        "machine learning</span>"
+        "</div></div>"
+        f"{task_nav}"
+        "</header>\n"
+        f"<main>\n{body}\n</main>\n"
+        '<footer class="site-footer"><p>Generated by leaderboard/site/generate.py '
+        "&mdash; every row validated against result.schema.json. No runtime dependencies; "
+        "charts are inline SVG.</p></footer>\n"
+        "</body>\n</html>\n"
     )
-    return _PAGE_TEMPLATE.substitute(
-        title="RF-Benchmark-Hub Leaderboard",
-        heading="RF-Benchmark-Hub Leaderboard",
-        css=_CSS,
-        body=body,
-    )
+
+
+# --------------------------------------------------------------------------------------------------
+# Theme (self-contained; light + dark via prefers-color-scheme; NO external assets)
+# --------------------------------------------------------------------------------------------------
+_LOGO_SVG = (
+    '<svg class="logo" viewBox="0 0 32 32" aria-hidden="true" '
+    'xmlns="http://www.w3.org/2000/svg">'
+    '<rect x="1" y="1" width="30" height="30" rx="7" fill="none" '
+    'stroke="var(--accent)" stroke-width="2"/>'
+    '<path d="M5 20 Q9 8 13 20 T21 20 T29 20" fill="none" stroke="var(--accent)" '
+    'stroke-width="2" stroke-linecap="round"/>'
+    "</svg>"
+)
+
+_CSS = """
+:root {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f7f8fa;
+  --fg: #1a1c20;
+  --muted: #5c6470;
+  --line: #e2e5ea;
+  --line-strong: #cbd0d8;
+  --accent: #0b5fff;
+  --accent-soft: #e8f0ff;
+  --head: #f4f5f7;
+  --badge-verified-bg: #e6f6ea; --badge-verified-fg: #137333; --badge-verified-bd: #9fd8ae;
+  --badge-self-bg: #fff4e5; --badge-self-fg: #a15c00; --badge-self-bd: #f0c891;
+  --chip-baseline-bg: #eef0f3; --chip-baseline-fg: #444b56; --chip-baseline-bd: #d6dae1;
+  --chip-foundation-bg: #f1e9fb; --chip-foundation-fg: #6b31c9; --chip-foundation-bd: #d9c4f4;
+  --bar-track: #eef0f3; --bar-fill: #0b5fff;
+  --grid: #edeff2;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101317;
+    --surface: #161a20;
+    --surface-2: #1b2028;
+    --fg: #e6e8ec;
+    --muted: #9aa3b0;
+    --line: #262c35;
+    --line-strong: #333b46;
+    --accent: #5b8dff;
+    --accent-soft: #1a2740;
+    --head: #1b2028;
+    --badge-verified-bg: #12281a; --badge-verified-fg: #57cc7f; --badge-verified-bd: #2c5b3b;
+    --badge-self-bg: #2e2410; --badge-self-fg: #e0a94b; --badge-self-bd: #5c4a1f;
+    --chip-baseline-bg: #20262e; --chip-baseline-fg: #b6bdc8; --chip-baseline-bd: #333b46;
+    --chip-foundation-bg: #241a35; --chip-foundation-fg: #b892ec; --chip-foundation-bd: #4a3670;
+    --bar-track: #20262e; --bar-fill: #5b8dff;
+    --grid: #22282f;
+  }
+}
+* { box-sizing: border-box; }
+html { color-scheme: light dark; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--fg); background: var(--bg); margin: 0;
+  line-height: 1.5; -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.site-header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem;
+  padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); background: var(--surface);
+}
+.brand { display: flex; align-items: center; gap: 0.6rem; }
+.logo { width: 30px; height: 30px; flex: none; }
+.brand-text { display: flex; flex-direction: column; }
+.brand-name { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.01em; }
+.brand-tag { color: var(--muted); font-size: 0.8rem; }
+.nav { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-left: auto; }
+.nav-chip {
+  font-size: 0.82rem; padding: 0.25rem 0.7rem; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--fg); background: var(--surface-2);
+}
+.nav-chip:hover { border-color: var(--line-strong); text-decoration: none; }
+.nav-chip-active {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+}
+
+main { max-width: 1080px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
+.task-title { font-size: 1.4rem; margin: 0.5rem 0 0.25rem; letter-spacing: -0.01em; }
+.task-meta {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--muted); font-size: 0.8rem; margin: 0 0 0.75rem;
+}
+.note { color: var(--muted); font-size: 0.85rem; margin: 0.25rem 0 1.25rem; }
+
+.group {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  padding: 1rem 1.1rem 1.25rem; margin: 0 0 1.5rem;
+}
+.group-title {
+  font-size: 1rem; margin: 0 0 0.75rem; padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line); font-weight: 600;
+}
+
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td {
+  border-bottom: 1px solid var(--line); padding: 0.5rem 0.7rem; text-align: left;
+  vertical-align: middle;
+}
+thead th {
+  background: var(--head); font-weight: 600; font-size: 0.82rem; color: var(--muted);
+  border-bottom: 1px solid var(--line-strong); white-space: nowrap;
+}
+thead th:first-child { border-top-left-radius: 8px; }
+thead th:last-child { border-top-right-radius: 8px; }
+tbody tr:last-child td { border-bottom: none; }
+th.rank, td.rank { width: 2rem; text-align: right; color: var(--muted); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+th.primary, td.primary { color: var(--fg); }
+td.num.primary .metric-val { font-weight: 700; }
+.col-note {
+  display: block; font-size: 0.66rem; font-weight: 500; color: var(--accent);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.model { min-width: 12rem; }
+.model-name { font-weight: 600; }
+.params {
+  display: inline-block; margin-left: 0.5rem; color: var(--muted); font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.bar {
+  display: block; height: 5px; width: 100%; max-width: 90px; margin: 0.25rem 0 0 auto;
+  background: var(--bar-track); border-radius: 999px; overflow: hidden;
+}
+.bar-fill { display: block; height: 100%; background: var(--bar-fill); }
+
+.badge, .chip {
+  display: inline-block; padding: 0.08rem 0.55rem; border-radius: 999px;
+  font-size: 0.74rem; font-weight: 600; white-space: nowrap; border: 1px solid transparent;
+}
+.badge-verified {
+  background: var(--badge-verified-bg); color: var(--badge-verified-fg);
+  border-color: var(--badge-verified-bd);
+}
+.badge-self {
+  background: var(--badge-self-bg); color: var(--badge-self-fg);
+  border-color: var(--badge-self-bd);
+}
+.chip { margin-left: 0.4rem; font-size: 0.68rem; padding: 0.02rem 0.45rem; }
+.chip-baseline {
+  background: var(--chip-baseline-bg); color: var(--chip-baseline-fg);
+  border-color: var(--chip-baseline-bd);
+}
+.chip-foundation {
+  background: var(--chip-foundation-bg); color: var(--chip-foundation-fg);
+  border-color: var(--chip-foundation-bd);
+}
+
+.plots { margin-top: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; }
+.plot-figure { margin: 0; }
+.plot-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
+.plot {
+  width: 100%; height: auto; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.plot .grid { stroke: var(--grid); stroke-width: 1; }
+.plot .axis { stroke: var(--line-strong); stroke-width: 1; }
+.plot .tick { fill: var(--muted); font-size: 11px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin-top: 0.5rem; }
+.legend-item {
+  display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--muted);
+}
+.legend-swatch { width: 24px; height: 10px; flex: none; }
+
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem; margin-top: 0.5rem;
+}
+.task-card {
+  display: flex; flex-direction: column; gap: 0.35rem; color: var(--fg);
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  padding: 1rem 1.1rem;
+}
+.task-card:hover { border-color: var(--accent); text-decoration: none; }
+.card-title { font-weight: 700; font-size: 1.05rem; }
+.card-sub { color: var(--muted); font-size: 0.8rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+.card-best { font-size: 0.85rem; }
+
+.site-footer { border-top: 1px solid var(--line); background: var(--surface); }
+.site-footer p { max-width: 1080px; margin: 0 auto; padding: 1rem 1.5rem;
+  color: var(--muted); font-size: 0.78rem; }
+"""
 
 
 # --------------------------------------------------------------------------------------------------
@@ -507,8 +1052,8 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
 
     Reads and schema-validates every ``results_dir/**/*.json`` (invalid rows skipped with
     a warning), groups the valid rows by task, and writes ``index.html`` plus one
-    ``<task>.html`` page per task into ``out_dir`` (created if absent). Returns the path to
-    the written ``index.html``.
+    ``<task>.html`` page per task that has results into ``out_dir`` (created if absent).
+    Returns the path to the written ``index.html``.
     """
     results_path = Path(results_dir)
     out_path = Path(out_dir)

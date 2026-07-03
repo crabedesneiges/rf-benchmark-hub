@@ -75,6 +75,11 @@ DEFAULT_LR_FACTOR = 0.5
 DEFAULT_LR_PATIENCE = 10
 #: Floor the plateau scheduler will not reduce the LR below.
 DEFAULT_MIN_LR = 1e-7
+#: Global gradient-norm cap applied before each optimizer step (``clip_grad_norm_``). Stabilises
+#: the deep recurrent baselines -- CLDNN's 3 stacked LSTMs explode at lr=1e-3 over a long schedule
+#: and collapse to a constant-class (chance) predictor -- while being high enough not to bite the
+#: well-behaved CNN baselines. ``None`` disables clipping.
+DEFAULT_GRAD_CLIP = 5.0
 
 
 def resolve_device(device: str | None) -> str:
@@ -204,8 +209,17 @@ def _train_one_epoch(
     loader: DataLoaderT,
     optimizer: OptimizerT,
     criterion: CriterionT,
+    grad_clip: float | None = None,
 ) -> float:
-    """Run one optimisation pass over ``loader`` and return the mean per-batch train loss."""
+    """Run one optimisation pass over ``loader`` and return the mean per-batch train loss.
+
+    ``grad_clip`` (when not ``None``) caps the global gradient norm before each optimizer step
+    via ``clip_grad_norm_``. This stabilises the deep recurrent baselines: CLDNN's 3 stacked
+    LSTMs explode at lr=1e-3 over a long schedule and collapse to a constant-class (chance)
+    predictor without it. The cap is high enough that it does not bite the CNN baselines.
+    """
+    import torch  # noqa: PLC0415 - lazy by design
+
     module.train()
     running = 0.0
     n_batches = 0
@@ -213,6 +227,8 @@ def _train_one_epoch(
         optimizer.zero_grad()
         loss = criterion(module(x), y)
         loss.backward()
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(module.parameters(), grad_clip)
         optimizer.step()
         running += float(loss.detach().item())
         n_batches += 1
@@ -295,6 +311,7 @@ def train_baseline(
     lr_factor: float = DEFAULT_LR_FACTOR,
     lr_patience: int = DEFAULT_LR_PATIENCE,
     min_lr: float = DEFAULT_MIN_LR,
+    grad_clip: float | None = DEFAULT_GRAD_CLIP,
 ) -> tuple[Model, dict[str, Any]]:
     """Fit ``model`` on ``dataset``'s TRAIN split with val-monitoring, then ``evaluate`` on TEST.
 
@@ -394,7 +411,17 @@ def train_baseline(
     epochs_since_improve = 0
 
     for epoch in range(epochs):
-        train_loss = _train_one_epoch(module, train_loader, optimizer, criterion)
+        train_loss = _train_one_epoch(module, train_loader, optimizer, criterion, grad_clip)
+
+        if train_loss != train_loss:  # NaN -> the model diverged; keep the best checkpoint so far
+            logger.error(
+                "training DIVERGED at epoch %d/%d (train loss is NaN); stopping and restoring the "
+                "best checkpoint (epoch %d). Lower the LR or tighten grad_clip for this model.",
+                epoch + 1,
+                epochs,
+                best_epoch + 1,
+            )
+            break
 
         if val_loader is not None:
             val_loss, val_acc = _mean_accuracy(module, val_loader, criterion)
@@ -539,4 +566,5 @@ __all__ = [
     "DEFAULT_LR_FACTOR",
     "DEFAULT_LR_PATIENCE",
     "DEFAULT_MIN_LR",
+    "DEFAULT_GRAD_CLIP",
 ]

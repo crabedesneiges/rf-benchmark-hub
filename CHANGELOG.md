@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Downstream-task prioritization mined from the FM bibliography
+
+- `docs/DOWNSTREAM_TASKS.md`: mined the 9 foundation-model papers in `docs/BIBLIOGRAPHY.md` for the
+  downstream tasks each one actually evaluates, normalized synonyms into a canonical taxonomy, and
+  bucketed by FM coverage — **P1** (>= 2 FM papers): `amc`, `beam_prediction`, `sei`,
+  `direction_finding`, `los_nlos`, `positioning`, `har`; **P2** (1 paper): `interference_id`,
+  `protocol_tech_id`, `channel_estimation`, `snr_mobility_recognition`, `wideband_detection`;
+  **P3** (defined benchmark track, 0 FM papers): `spectrum_sensing`. Each task carries its FM
+  evaluators + datasets/metrics, current rfbench status, a recommended canonical dataset/protocol/
+  metric, and scope-fit (IQ-signal vs a proposed separate CSI/6G-sensing track).
+
+### Fixed — CLDNN training divergence (gradient clipping)
+
+- The 150-epoch retrain collapsed CLDNN to chance (0.0909): its 3 stacked LSTMs explode at lr=1e-3
+  over the longer schedule (the new recipe holds the LR higher for longer), and `argmax(NaN)`
+  predicts a constant class. Added a global gradient-norm cap (`DEFAULT_GRAD_CLIP=5.0`, applied in
+  `_train_one_epoch`) that stabilises the recurrent baselines without biting the CNN baselines, plus
+  a NaN-loss guard that logs an ERROR and stops early, keeping the best checkpoint. MCLDNN/ResNet are
+  unaffected (clip does not trigger for them). Baselines to be re-trained under the final recipe.
+
 ### Changed — AMC baseline paper-conformance + training-recipe fix (M3)
 
 - **Regression root-caused** (4-way audit + adversarial verification): the `training.py` rewrite selected

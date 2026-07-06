@@ -1,0 +1,46 @@
+{
+  "dataset": {
+    "name": "interf_gnss6"
+  },
+  "environment": {
+    "framework": "torch 2.12.1+cu130",
+    "hardware": "1x NVIDIA GB200",
+    "python_version": "3.11.15",
+    "rfbench_version": "0.1.0",
+    "seed": 42
+  },
+  "eval": {
+    "batch_size": 256,
+    "conditions": {},
+    "n_samples": 750
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.9986666666666667,
+      "macro_f1": 0.998666645332992
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "n_params": 90086,
+    "name": "interf_cnn"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.0.0",
+  "split": {
+    "canonical_split_id": "interf-gnss6-8010-seed42-v1",
+    "checksum": "sha256:f90cf8e96a8b240520881f4b9c777980aa41af2114dca2ba990871f5dc928625",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "interference_id",
+    "version": "v1"
+  },
+  "verification": {
+    "status": "self_reported"
+  }
+}

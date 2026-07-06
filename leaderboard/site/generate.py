@@ -1402,7 +1402,7 @@ def render_wip_page(
         "</section>"
     )
     page_title = f"{title} — RF-Benchmark-Hub"
-    return _page(page_title, body, task_nav=_task_nav(nav_task_ids, entry.id))
+    return _page(page_title, body, current=entry.id)
 
 
 def render_task_page(
@@ -1467,7 +1467,7 @@ def render_task_page(
         "</section>"
     )
     page_title = f"{title} — RF-Benchmark-Hub"
-    return _page(page_title, body, task_nav=_task_nav(nav_ids, task_name))
+    return _page(page_title, body, current=task_name)
 
 
 def _best_summary(rows: list[dict[str, Any]]) -> tuple[str, str, str]:
@@ -1677,21 +1677,10 @@ def render_index(
             '<p class="note">No tasks declared or results yet.</p>'
             "</section>"
         )
-    extra_header = (
-        '<div class="top-tabs">'
-        '<a class="top-tab top-tab-active" href="index.html">Tasks</a>'
-        f'<a class="top-tab" href="{_GUIDE_SLUG}.html">Guide</a>'
-        '<a class="top-tab" target="_blank" rel="noopener" '
-        f'href="{_esc(_SUBMISSION_GUIDE_URL)}">Submit</a>'
-        "</div>"
-        '<a class="icon-link" aria-label="GitHub repository" target="_blank" rel="noopener" '
-        f'href="{_esc(_REPO_URL)}">{_REPO_ICON_SVG}</a>'
-    )
     return _page(
         "RF-Benchmark-Hub Leaderboard",
         body,
-        task_nav=_task_nav(ordered_tasks, None),
-        extra_header=extra_header,
+        current=None,
         extra_body=f"<script>{_JS}</script>" if sections_html else "",
     )
 
@@ -1748,13 +1737,13 @@ def _render_glossary_section() -> str:
     )
 
 
-def render_guide(nav_task_ids: list[str] | None = None) -> str:
+def render_guide() -> str:
     """Render the standalone Guide page (``guide.html``) from the shared ``_GUIDE`` content.
 
     Sections: what I/Q is, the four evaluation regimes, verified-vs-self_reported, the data
     policy, the split policy and a metrics glossary (name + definition + an up/down arrow for
-    higher/lower-is-better). Self-contained -- shares the site theme and the same task nav as
-    every other page (``nav_task_ids`` -- the declared/has-results task ids).
+    higher/lower-is-better). Self-contained -- shares the site theme and the same top nav
+    (Tasks | Guide | Submit) as every other page.
     """
     body = (
         '<section class="task guide">'
@@ -1782,26 +1771,33 @@ def render_guide(nav_task_ids: list[str] | None = None) -> str:
         f"{_render_glossary_section()}"
         "</section>"
     )
-    nav_ids = nav_task_ids if nav_task_ids is not None else []
-    return _page("Guide — RF-Benchmark-Hub", body, task_nav=_task_nav(nav_ids, _GUIDE_SLUG))
+    return _page("Guide — RF-Benchmark-Hub", body, current=_GUIDE_SLUG)
 
 
-def _task_nav(task_names: list[str], current: str | None) -> str:
-    """Render the header nav chips: Home, one per task, plus the Guide link.
+def _top_nav(current: str | None) -> str:
+    """Render the site-wide top nav: Tasks | Guide | Submit, plus a GitHub repo icon link.
 
-    ``current`` marks the active chip; it may be a task id, the Guide slug (``_GUIDE_SLUG``)
-    or ``None`` (index). The Guide chip is always present on every page.
+    Replaces the old per-task chip list (Home + one chip per task name) -- task-to-task
+    navigation now lives in each task page's own sidebar (see ``_render_task_sidebar``), so
+    this bar only needs to say which TOP-LEVEL section of the site you're in.
+
+    ``current`` is the Guide slug (``_GUIDE_SLUG``) on the Guide page, or anything else
+    (a task id, or ``None`` for the index) everywhere else -- "Tasks" is active whenever
+    "Guide" isn't, since every task/WIP page lives under the Tasks section.
     """
-    chips: list[str] = ['<a class="nav-chip" href="index.html">Home</a>']
-    for task in sorted(task_names, key=_task_sort_key):
-        title = TASK_TITLES.get(task, task)
-        active = " nav-chip-active" if task == current else ""
-        chips.append(f'<a class="nav-chip{active}" href="{_esc(task)}.html">{_esc(title)}</a>')
-    guide_active = " nav-chip-active" if current == _GUIDE_SLUG else ""
-    chips.append(
-        f'<a class="nav-chip nav-chip-guide{guide_active}" ' f'href="{_GUIDE_SLUG}.html">Guide</a>'
+    guide_active = current == _GUIDE_SLUG
+    tasks_class = "top-tab" if guide_active else "top-tab top-tab-active"
+    guide_class = "top-tab top-tab-active" if guide_active else "top-tab"
+    return (
+        '<div class="top-tabs">'
+        f'<a class="{tasks_class}" href="index.html">Tasks</a>'
+        f'<a class="{guide_class}" href="{_GUIDE_SLUG}.html">Guide</a>'
+        '<a class="top-tab" target="_blank" rel="noopener" '
+        f'href="{_esc(_SUBMISSION_GUIDE_URL)}">Submit</a>'
+        "</div>"
+        '<a class="icon-link" aria-label="GitHub repository" target="_blank" rel="noopener" '
+        f'href="{_esc(_REPO_URL)}">{_REPO_ICON_SVG}</a>'
     )
-    return f'<nav class="nav">{"".join(chips)}</nav>'
 
 
 #: Google Fonts request for the board's typeface pair (Space Grotesk headings, IBM Plex Sans
@@ -1819,18 +1815,19 @@ _GOOGLE_FONTS_LINK: str = (
 def _page(
     title: str,
     body: str,
-    task_nav: str,
+    current: str | None,
     *,
-    extra_header: str = "",
     extra_body: str = "",
 ) -> str:
     """Assemble a complete standalone HTML page (header + nav + body + footer).
 
-    ``extra_header`` renders inside ``.site-header`` after the nav (homepage-only search/tabs
-    bar, see ``render_index``); ``extra_body`` renders just before ``</body>`` (homepage-only
-    inline filter script, see ``render_index``). Both default to empty so every other page
+    ``current`` drives the site-wide top nav's active state (see ``_top_nav``): the Guide
+    slug (``_GUIDE_SLUG``) on the Guide page, or anything else (a task id, or ``None`` for
+    the index) everywhere else. ``extra_body`` renders just before ``</body>`` (homepage-only
+    inline filter script, see ``render_index``); it defaults to empty so every other page
     (task pages, WIP pages, the guide) is unaffected.
     """
+    task_nav = _top_nav(current)
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en">\n<head>\n'
@@ -1849,7 +1846,6 @@ def _page(
         "machine learning</span>"
         "</div></div>"
         f"{task_nav}"
-        f"{extra_header}"
         "</header>\n"
         f"<main>\n{body}\n</main>\n"
         '<footer class="site-footer"><p>Generated by leaderboard/site/generate.py '
@@ -1950,16 +1946,6 @@ h1, h2, h3, .task-title, .card-title, .brand-name, .group-title {
 .brand-text { display: flex; flex-direction: column; }
 .brand-name { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.01em; }
 .brand-tag { color: var(--muted); font-size: 0.8rem; }
-.nav { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-left: auto; }
-.nav-chip {
-  font-size: 0.82rem; padding: 0.25rem 0.7rem; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--fg); background: var(--surface-2);
-}
-.nav-chip:hover { border-color: var(--line-strong); text-decoration: none; }
-.nav-chip-active {
-  background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
-}
-
 main { max-width: 1080px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
 .task-title { font-size: 1.4rem; margin: 0.5rem 0 0.25rem; letter-spacing: -0.01em; }
 .task-meta {
@@ -2049,7 +2035,7 @@ td.num.primary .metric-val { font-weight: 700; }
 }
 .legend-swatch { width: 24px; height: 10px; flex: none; }
 
-.top-tabs { display: flex; gap: 0.25rem; }
+.top-tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-left: auto; }
 .top-tab {
   font-size: 0.85rem; font-weight: 500; padding: 0.35rem 0.7rem; border-radius: 8px;
   color: var(--muted);
@@ -2393,7 +2379,7 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
         (out_path / f"{task_id}.html").write_text(page, encoding="utf-8")
 
     # Shared educational Guide page (linked from the nav on every page).
-    (out_path / f"{_GUIDE_SLUG}.html").write_text(render_guide(nav_ids), encoding="utf-8")
+    (out_path / f"{_GUIDE_SLUG}.html").write_text(render_guide(), encoding="utf-8")
 
     index_path = out_path / "index.html"
     index_path.write_text(render_index(grouped, declared), encoding="utf-8")

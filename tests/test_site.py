@@ -1030,19 +1030,38 @@ def test_guide_page_written_with_iq_and_glossary(tmp_path: Path) -> None:
 
 
 def test_guide_linked_in_nav_on_every_page(tmp_path: Path) -> None:
-    """Every generated page's nav links the Guide; the Guide page marks its own chip active."""
+    """Every generated page's top nav links the Guide; the Guide page marks its own tab active."""
     results = tmp_path / "results"
     out = tmp_path / "site"
     _make_results_tree(results)
     generate.build_site(results, out)
 
-    # Index, a full task page, and a WIP page all link guide.html in the nav.
+    # Index, a full task page, and a WIP page all link guide.html in the top nav.
     for name in ("index.html", "amc.html", "spectrum_sensing.html"):
         page = (out / name).read_text(encoding="utf-8")
         assert 'href="guide.html">Guide</a>' in page
-    # On the Guide page itself, the Guide chip is the active one.
+        # "Tasks" is the active tab everywhere except the Guide page itself.
+        assert 'class="top-tab top-tab-active" href="index.html">Tasks</a>' in page
+    # On the Guide page itself, the Guide tab is the active one (not Tasks).
     guide_html = (out / "guide.html").read_text(encoding="utf-8")
-    assert "nav-chip nav-chip-guide nav-chip-active" in guide_html
+    assert 'class="top-tab top-tab-active" href="guide.html">Guide</a>' in guide_html
+    assert 'class="top-tab top-tab-active" href="index.html">Tasks</a>' not in guide_html
+
+
+def test_top_nav_has_only_tasks_guide_submit_and_repo_icon(tmp_path: Path) -> None:
+    """The per-task chip list is gone: the top nav is Tasks/Guide/Submit + the repo icon."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    for name in ("index.html", "amc.html", "spectrum_sensing.html", "guide.html"):
+        page = (out / name).read_text(encoding="utf-8")
+        assert 'class="top-tabs"' in page
+        assert "docs/SUBMISSION.md" in page
+        assert 'class="icon-link"' in page
+        # No more per-task nav chips (the old design this replaces).
+        assert "nav-chip" not in page
 
 
 def test_google_fonts_link_present_on_every_page(tmp_path: Path) -> None:
@@ -1168,11 +1187,11 @@ def test_submit_tab_links_to_submission_guide(tmp_path: Path) -> None:
 
 def test_render_guide_is_self_contained() -> None:
     """render_guide produces a standalone HTML page (doctype + theme) with the I/Q section."""
-    html_text = generate.render_guide(["amc", "sei"])
+    html_text = generate.render_guide()
     assert "<!DOCTYPE html>" in html_text
     assert "Guide — RF-Benchmark-Hub" in html_text
     assert "What is I/Q?" in html_text
     assert "Metrics glossary" in html_text
-    # It shares the site nav (task chips passed through) + the Guide chip.
-    assert 'href="amc.html"' in html_text
+    # It shares the site-wide top nav (Tasks | Guide | Submit).
+    assert 'href="index.html">Tasks</a>' in html_text
     assert 'href="guide.html">Guide</a>' in html_text

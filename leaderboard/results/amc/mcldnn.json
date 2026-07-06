@@ -112,7 +112,8 @@
   "model": {
     "family": "baseline",
     "n_params": 406199,
-    "name": "mcldnn"
+    "name": "mcldnn",
+    "url": "https://doi.org/10.1109/LWC.2020.2999453"
   },
   "regime": {
     "name": "from_scratch"

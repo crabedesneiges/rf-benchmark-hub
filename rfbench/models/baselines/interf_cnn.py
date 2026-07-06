@@ -13,8 +13,10 @@ Literature SOTA (see the interference-ID section of ``docs/EVALUATION_PROTOCOL.m
 IQ baseline is a from-scratch reference next to the published transform-domain results:
 Morales-Ferre et al. 2019 (IEEE Sensors / IEEE Trans. Aerospace, a CNN and an SVM on STFT
 spectrogram images of the jamming signals, reporting 91.36% (SVM) / 94.90% (CNN) accuracy) and
-Swinney & Woods 2021 ("GNSS Jamming Classification via CNN, Transfer Learning & the Loss
-Curvature Metric", CNN-feature extraction + transfer learning on THIS exact raw-IQ set). Both
+Swinney & Woods 2021 ("GNSS Jamming Classification via CNN, Transfer Learning & the Novel
+Concatenation of Signal Representations", CyberSA 2021, DOI 10.1109/CYBERSA52016.2021.9478250 --
+title verified 2026-07 against the published paper; CNN-feature extraction + transfer learning on
+THIS exact raw-IQ set). Both
 operate on time-frequency images; this compact 1-D CNN over raw IQ is the harness' from-scratch
 board seed.
 

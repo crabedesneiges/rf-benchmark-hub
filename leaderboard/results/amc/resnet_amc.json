@@ -112,7 +112,8 @@
   "model": {
     "family": "baseline",
     "n_params": 124011,
-    "name": "resnet_amc"
+    "name": "resnet_amc",
+    "url": "https://arxiv.org/abs/1712.04578"
   },
   "regime": {
     "name": "from_scratch"

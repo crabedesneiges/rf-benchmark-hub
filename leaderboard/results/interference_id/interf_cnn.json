@@ -24,7 +24,8 @@
   "model": {
     "family": "baseline",
     "n_params": 90086,
-    "name": "interf_cnn"
+    "name": "interf_cnn",
+    "url": "https://doi.org/10.1109/CYBERSA52016.2021.9478250"
   },
   "regime": {
     "name": "from_scratch"

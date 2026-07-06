@@ -1182,7 +1182,12 @@ def _render_task_header(entry: DeclaredTask | None) -> str:
         return ""
     parts: list[str] = []
     if entry.description:
-        parts.append(f'<p class="task-desc">{_esc(entry.description)}</p>')
+        parts.append(
+            '<div class="task-desc">'
+            '<span class="task-desc-label">What is this task?</span>'
+            f"<p>{_esc(entry.description)}</p>"
+            "</div>"
+        )
     card = _render_dataset_card(entry.dataset)
     metrics = _render_metrics_block(entry)
     if card or metrics:
@@ -1293,9 +1298,15 @@ def _render_result_card(
     best_model, best_score, primary = _best_summary(rows)
     entry = declared.get(task_name)
     badge = _render_status_badge(entry) if entry is not None else ""
+    blurb = (
+        f'<span class="card-blurb">{_esc(entry.blurb)}</span>'
+        if entry is not None and entry.blurb
+        else ""
+    )
     return (
         f'<a class="task-card" href="{_esc(task_name)}.html">'
         f'<span class="card-title">{_esc(title)}</span>{badge}'
+        f"{blurb}"
         f'<span class="card-sub">{_esc(f"{n_rows} results · {n_models} models")}</span>'
         f'<span class="card-best">Best: <strong>{_esc(best_model)}</strong> '
         f"&middot; {_esc(primary)} = <strong>{_esc(best_score)}</strong></span>"
@@ -1715,7 +1726,15 @@ td.num.primary .metric-val { font-weight: 700; }
 
 /* Explanatory task header (description + dataset card + metric definitions). */
 .task-header { margin: 0 0 1.25rem; }
-.task-desc { font-size: 0.95rem; color: var(--fg); margin: 0 0 1rem; max-width: 68ch; }
+.task-desc {
+  border: 1px solid var(--accent); border-left-width: 4px; border-radius: 10px;
+  background: var(--accent-soft); padding: 0.85rem 1.1rem; margin: 0 0 1.1rem; max-width: 68ch;
+}
+.task-desc-label {
+  display: block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--accent); margin: 0 0 0.35rem;
+}
+.task-desc p { margin: 0; font-size: 1rem; line-height: 1.5; color: var(--fg); }
 .task-header-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1rem; align-items: start;

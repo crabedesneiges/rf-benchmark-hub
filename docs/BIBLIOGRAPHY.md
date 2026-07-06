@@ -179,7 +179,7 @@ Consolidated board-comparability table (AMC / RadioML only):
 | Model | Weights | RadioML setting | Protocol | Reported | Our score | Board-comparable? |
 |---|---|---|---|---|---|---|
 | **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | not run | ✅ beats our MCLDNN 61.71 |
-| **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | not run (fabricated SEI row removed from board, `a689e86`) | ✅ metric; ✗ data regime |
+| **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | wrapper implemented (`iqfm-base`), in-repo retrain pending — NOT the paper's OOD 38.1% | ✅ metric; ✗ data regime |
 | **RIS-MAE** | ✗ (retrain) | 2018.01a, 24-cls | fine-tune, 1% labels | **48.41%** | not run | ✅ if 2018 unblocked |
 | **LWM-Spectro** | ✅ HF (MIT declared, no LICENSE file) | **none** (DeepMIMO 5-cls) | few-shot F1, real linear/FT head | 47–95 F1 (own data) | **no row** (OOD; removed) | ❌ no RadioML in paper — own task reproduced (B.5) |
 | **WavesFM** | ✗ `(?)` | none (own 20-cls) | fine-tune | 86.05% | not run | ❌ |
@@ -215,6 +215,12 @@ Primary sources & key facts:
   ~341k params**, contrastive SSL (SimCLR/InfoNCE), unit-max norm `iq/max(|iq|)`. OTA MIMO testbed.
   **OOD RML2016.10a: 38.1% @ 50 samples/class linear probe** (only IQFM RadioML figure).
   **Does not evaluate WiSig SEI** — our 0.7734 SEI row is fabricated.
+  **Status (2026-07): board wrapper `iqfm-base` IMPLEMENTED** (`rfbench/models/foundation/iqfm.py` +
+  reusable 1-D ShuffleNetV2-x0.5 backbone `shufflenet1d.py`, measured 335,096 params — the 1-D-vs-2-D
+  delta from the paper's ~341k). Weights unpublished → we (re-)pre-train the recipe IN-REPO with SimCLR
+  on RadioML-train delabelised (`scripts/pretrain/iqfm_simclr.py`, `slurm/pretrain_iqfm_arm.sh`), which
+  is **in-distribution, NOT the paper's OOD OTA setting** — any resulting score is ours and must never
+  be presented as the 38.1% figure. No `result.json` committed until a real cluster run lands.
 - **WirelessJEPA** — arXiv:2601.20190 (2026). No weights. ShuffleNetV2-x0.5 (matched to IQFM), JEPA
   masked latent prediction, EMA teacher 0.996→1.0, no augmentation. Same OTA testbed as IQFM.
   **500-shot linear probe, OOD RML2016.10a (11 mods, −20…+18 dB): 74.78%** — the single most

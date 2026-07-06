@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — IQFM raw-IQ SSL foundation-model wrapper (`iqfm-base`)
+
+Adds IQFM (Mashaal & Abou-Zeid, arXiv:2506.06718v2, CC-BY 4.0) as an evaluable board FM **without
+touching the frozen core** (`rfbench/core/`, `schemas/`, `rfbench/regimes/`, `evaluate()` all
+unchanged) — a pure new wrapper per `docs/ADDING_A_MODEL.md`. This is the real-terrestrial-task FM
+the LWM-Spectro follow-up (below) redirected the FM-vs-baseline thesis toward. Phase 1 (wrapper +
+backbone + tests) is CPU-only and mergeable on its own; Phase 2 (SimCLR pre-training + eval) ships
+as cluster scripts, NOT yet run.
+
+- **Reusable 1-D backbone** `rfbench/models/foundation/shufflenet1d.py`: a faithful `Conv1d`
+  transcription of ShuffleNetV2-x0.5 (Ma et al., ECCV 2018) over raw IQ `(2, L)` →
+  1024-D mean-pooled embedding, **no classifier**. Measured **335,096 params** (the small delta
+  from IQFM's reported ~341k is the expected 1-D-vs-2-D difference). Torch imported lazily via
+  `require_torch()`; `build_shufflenet1d()` is the shared encoder the forthcoming WirelessJEPA
+  wrapper (arXiv:2601.20190, "ShuffleNetV2-x0.5 matched to IQFM") will reuse.
+- **Wrapper** `rfbench/models/foundation/iqfm.py`: `IqfmBase(FoundationModel)`,
+  `@register_model("iqfm-base")`, constructible with no positional args. `embed()` = frozen
+  `(B, 1024)` features with IQFM's **unit-max** input norm `iq/max(|iq|)` applied per sample;
+  `n_params` from the loaded backbone; checkpoint loads lazily. No task head → inherits `forward()`
+  (probing only). Same honesty guards as LWM-Spectro: **no checkpoint → random init +
+  `pretrained=False` + loud warning**; **checkpoint present but keys don't match → RAISES** (never
+  scores a partly-random encoder as pretrained).
+- **Registration** re-exported from `rfbench/models/foundation/__init__.py`, so
+  `import rfbench.models.foundation` registers `iqfm-base` (import stays dependency-free — torch
+  loads only on first `embed`). `slurm/eval_fm_arm.sh` now also imports the package so the generic
+  `[MODEL]` path reaches `iqfm-base`.
+- **HONESTY / provenance.** IQFM's weights are **not published**; the paper's **38.1%** is a
+  linear-probe/50-per-class/**OOD** figure (pre-trained on the authors' OTA MIMO testbed we do NOT
+  have). We reproduce only the *recipe*: `scripts/pretrain/iqfm_simclr.py` +
+  `slurm/pretrain_iqfm_arm.sh` (re-)pre-train the backbone with SimCLR/InfoNCE on the RadioML
+  2016.10a **train** split delabelised (seed 42) — **in-distribution, NOT the paper's OOD setting**.
+  Documented augmentations: circular time shift, additive Gaussian noise, global phase rotation.
+  Any resulting score is **ours**, labelled as such, and **never** presented as the 38.1%. **No
+  `result.json` is committed** — the board row waits on a real cluster run.
+- **Tests** `tests/test_iqfm.py`: dep-free (package import registers `iqfm-base`, cheap
+  construction, cache-path helpers) + torch-gated (backbone ~335k params, `embed` → `(B, 1024)`,
+  unit-max applied, missing-checkpoint flips `pretrained`, non-matching checkpoint raises,
+  round-trip checkpoint loads). Verified on CPU torch: all 12 pass; the SimCLR loop
+  (augment → backbone+head → NT-Xent → backward) runs and back-props to the backbone. Dep-free
+  suite stays green; `ruff check .` + `mypy` (strict, 72 files) clean.
+- **Docs** `docs/BIBLIOGRAPHY.md` (IQFM status → wrapper implemented) + `docs/SOTA_REFERENCE.md`
+  (FM inventory row) updated.
+
 ### Verified — LWM-Spectro integration validated on its own task; no AMC board row (WP-62)
 
 On-cluster follow-up to the LWM-Spectro faithful-wrapper fix. Definitive outcome: the integration and

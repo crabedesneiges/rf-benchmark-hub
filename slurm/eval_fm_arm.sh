@@ -56,6 +56,7 @@ MODEL="$MODEL" REGIME="$REGIME" K_SHOT="$K_SHOT" OUT="$OUT" "$VENV/bin/python" -
 import os
 import sys
 
+import rfbench.models.foundation  # noqa: F401  (registers 'dummy-fm' + 'iqfm-base')
 import rfbench.models.foundation.lwm_spectro  # noqa: F401  (registers 'lwm-spectro')
 import rfbench.tasks.amc  # noqa: F401  (registers 'amc')
 from rfbench.core.registry import MODELS, get_task

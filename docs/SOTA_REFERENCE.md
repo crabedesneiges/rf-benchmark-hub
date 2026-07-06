@@ -28,8 +28,11 @@ the **reference papers** announce, so our reproductions can be compared apples-t
 | **TorchSig XCiT** (Boegner et al.) | ✅ TorchSig repo script | raw IQ 2×4096 | ~192–384 | AMC (53 mod), SEI? | native raw-IQ; also a strong baseline |
 | **TorchSig YOLO** | ✅ same | spectrogram | — | detection | only public detection checkpoint found |
 | **WavesFM** | ⚠️ URL unconfirmed | raw IQ (2,C,T) | 256 | AMC+SEI+detect | best coverage *if* weights obtainable |
+| **IQFM** (Mashaal, Abou-Zeid) | ✗ paper-only (CC-BY 4.0) | raw IQ (2,L), unit-max | 1024 | AMC | wrapper `iqfm-base` implemented; ShuffleNetV2-x0.5 1-D (335k params), SimCLR; retrain in-repo (NOT the paper's OOD 38.1%) |
 
-Code/paper-only (no public weights): IQFM, RIS-MAE, LatentWave, 6G-MSM, WirelessJEPA, most SSL-SEI.
+Code/paper-only (no public weights): RIS-MAE, LatentWave, 6G-MSM, WirelessJEPA, most SSL-SEI.
+IQFM (above): weights unpublished, but its recipe is now a board wrapper — we pre-train our own
+ShuffleNetV2-x0.5 backbone with SimCLR on RadioML-train (`scripts/pretrain/iqfm_simclr.py`).
 
 ### Datasets (real, on the cluster)
 | Dataset | Task | Status | Split indices |

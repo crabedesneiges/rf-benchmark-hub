@@ -605,3 +605,76 @@ def test_powder_supports_only_closed_set(tmp_path: Path) -> None:
     records: list[SeiRecord] = [("MEB", None, "Day1"), ("Honors", None, "Day1")]
     with pytest.raises(ValueError, match="does not support condition"):
         prepare_sei("powder", "cross_receiver", out_dir=tmp_path, records=records)
+
+
+# --- SigMF byte-reading loaders (POWDER / ORACLE): numpy-gated, real .sigmf-data on disk --------
+
+
+def _write_sigmf(path: Path, n_windows: int, window: int) -> None:
+    """Write a synthetic interleaved-f32 .sigmf-data (+ cf32 .sigmf-meta) of n_windows frames."""
+    import numpy as np
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    iq = np.arange(n_windows * window * 2, dtype=np.float32)
+    path.write_bytes(iq.tobytes())
+    path.with_suffix(".sigmf-meta").write_text(
+        json.dumps({"global": {"core:datatype": "cf32_le"}}), encoding="utf-8"
+    )
+
+
+def test_powder_sigmf_loader_and_array_alignment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """load_powder_records + _load_powder_arrays read real SigMF bytes in the SAME frame order."""
+    np = pytest.importorskip("numpy")
+    from rfbench.data.prepare.sei import load_powder_records
+    from rfbench.tasks.sei.dataset import _load_powder_arrays
+
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    powder = tmp_path / "powder"
+    for stem, n in (("WiFi_Day1_MEB_1", 3), ("WiFi_Day1_Honors_1", 2), ("WiFi_Day2_MEB_1", 1)):
+        _write_sigmf(powder / f"{stem}.sigmf-data", n, 256)
+
+    records = load_powder_records(cache=str(tmp_path), window=256)
+    iq_all, arr_records = _load_powder_arrays("powder")
+    assert len(records) == len(iq_all) == 6
+    assert np.asarray(iq_all[0]).shape == (256, 2)
+    # sorted-file order: Day1_Honors (2), Day1_MEB (3), Day2_MEB (1)
+    assert [r[0] for r in records] == ["Honors", "Honors", "MEB", "MEB", "MEB", "MEB"]
+    assert [r[0] for r in arr_records] == [r[0] for r in records]  # array loader == record order
+    assert all(r[1] is None for r in records)  # single fixed receiver
+    assert [r[2] for r in records] == ["Day1", "Day1", "Day1", "Day1", "Day1", "Day2"]
+
+
+def test_oracle_sigmf_loader_and_array_alignment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """load_oracle_records + _load_oracle_arrays read real SigMF bytes (window 128), file order."""
+    np = pytest.importorskip("numpy")
+    from rfbench.data.prepare.sei import load_oracle_records
+    from rfbench.tasks.sei.dataset import _load_oracle_arrays
+
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    oracle = tmp_path / "oracle"
+    for stem, n in (
+        ("2ft/WiFi_air_X310_3123D7B_2ft_run1", 2),
+        ("8ft/WiFi_air_X310_3123D7B_8ft_run1", 3),
+        ("2ft/WiFi_air_X310_3123EF0_2ft_run1", 1),
+    ):
+        _write_sigmf(oracle / f"{stem}.sigmf-data", n, 128)
+
+    records = load_oracle_records(cache=str(tmp_path))
+    iq_all, arr_records = _load_oracle_arrays("oracle")
+    assert len(records) == len(iq_all) == 6
+    assert np.asarray(iq_all[0]).shape == (128, 2)
+    # tx serial parsed from WiFi_air_X310_<serial>_...; sorted-file order (2ft before 8ft)
+    assert [r[0] for r in records] == [
+        "3123D7B",
+        "3123D7B",
+        "3123EF0",
+        "3123D7B",
+        "3123D7B",
+        "3123D7B",
+    ]
+    assert [r[0] for r in arr_records] == [r[0] for r in records]
+    assert all(r[1] is None and r[2] is None for r in records)

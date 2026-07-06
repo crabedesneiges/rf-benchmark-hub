@@ -223,7 +223,7 @@ def _tx_key(tx_id: object) -> tuple[int, str]:
 def _load_sei_arrays(
     name: str,
 ) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
-    """Dispatch to the per-dataset flat ``(iq_rows, records)`` loader (WiSig / POWDER).
+    """Dispatch to the per-dataset flat ``(iq_rows, records)`` loader (WiSig / ORACLE / POWDER).
 
     Each loader returns per-signal ``(window, 2)`` IQ rows + ``(tx, rx, day)`` records in the
     EXACT order the matching :mod:`rfbench.data.prepare.sei` extractor used, so the committed
@@ -233,9 +233,63 @@ def _load_sei_arrays(
         return _load_wisig_arrays(name)
     if name == "powder":
         return _load_powder_arrays(name)
+    if name == "oracle":
+        return _load_oracle_arrays(name)
     raise NotImplementedError(
-        f"on-disk IQ loading is wired for WiSig and POWDER only; {name!r} has no array loader."
+        f"on-disk IQ loading is wired for WiSig / ORACLE / POWDER only; {name!r} has no loader."
     )
+
+
+def _load_oracle_arrays(
+    name: str,
+) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
+    """Load flat ``(iq_rows, records)`` from the cached ORACLE SigMF captures (lazy numpy).
+
+    Mirrors :func:`rfbench.data.prepare.sei.load_oracle_records` EXACTLY (same
+    ``sorted(rglob('*.sigmf-data'))`` file order, same ``_ORACLE_WINDOW`` framing, same
+    ``_oracle_tx_id`` identity), emitting one ``(window, 2)`` row + one ``(tx_id, None, None)``
+    record per capture window -- so ``iq[k]`` corresponds to ``records[k]`` and both align with
+    the committed ORACLE split indices. ORACLE has a single fixed receiver, so ``rx``/``day`` are
+    ``None`` (closed-set identity only).
+    """
+    import json  # stdlib
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Loading SEI IQ needs numpy; install it with `pip install rfbench[tasks]`."
+        ) from exc
+
+    from rfbench.data.prepare._common import resolve_cache_dir
+    from rfbench.data.prepare.sei import _ORACLE_WINDOW, _oracle_tx_id, _sigmf_np_dtype
+
+    cache_dir = resolve_cache_dir(None)
+    root = cache_dir / name
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"ORACLE not found at {root}; run the download step first "
+            "(rfbench.data.download.sei_oracle)."
+        )
+    window = _ORACLE_WINDOW
+    iq: list[Any] = []
+    records: list[SeiRecord] = []
+    for data_path in sorted(root.rglob("*.sigmf-data")):
+        tx_id = _oracle_tx_id(data_path.name)
+        meta_path = data_path.with_suffix(".sigmf-meta")
+        dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
+        raw = np.fromfile(data_path, dtype=dtype).astype(np.float32)
+        n_complex = int(raw.size // 2)
+        n_windows = n_complex // window
+        if n_windows == 0:
+            continue
+        frames = raw[: n_windows * window * 2].reshape(n_windows, window, 2)
+        for row in frames:  # (window, 2) per capture window
+            iq.append(row)
+            records.append((tx_id, None, None))
+    if not records:
+        raise FileNotFoundError(f"no ORACLE .sigmf-data captures found under {root}.")
+    return iq, records
 
 
 def _load_powder_arrays(

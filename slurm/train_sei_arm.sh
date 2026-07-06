@@ -8,13 +8,18 @@
 # LOSS. The shared AMC loop (rfbench.training) is untouched. The WiSig split indices are already
 # committed, so NO data-prepare step is needed here (only ManyTx.pkl must be in $RFBENCH_CACHE).
 #
-#   sbatch slurm/train_sei_arm.sh [MODEL] [EPOCHS] [TRACKS]
-#     MODEL   default wisig_cnn_paper (also: complex_cnn, resnet1d_sei, oracle_cnn[oracle only])
+#   sbatch slurm/train_sei_arm.sh [MODEL] [EPOCHS] [TRACKS] [DATASET]
+#     MODEL   default wisig_cnn_paper (also: complex_cnn, resnet1d_sei, oracle_cnn)
 #     EPOCHS  default 100 (WiSig d006 max; early stopping usually stops sooner). Use a SMALL value
 #             (e.g. 3) for a quick validation run before the full one.
 #     TRACKS  default "closed_set cross_receiver cross_day"
+#     DATASET default wisig (oracle for oracle_cnn). Override to run any model on oracle/powder;
+#             oracle forces window 128, powder forces a single closed_set track (one receiver).
+#             ORACLE/POWDER data must be placed under $RFBENCH_CACHE first (manual download).
 #   e.g. VALIDATION: sbatch slurm/train_sei_arm.sh wisig_cnn_paper 3 closed_set
-#        FULL:       sbatch slurm/train_sei_arm.sh wisig_cnn_paper 100
+#        FULL WiSig:  sbatch slurm/train_sei_arm.sh wisig_cnn_paper 100
+#        POWDER:      sbatch slurm/train_sei_arm.sh complex_cnn 100 closed_set powder
+#        ORACLE:      sbatch slurm/train_sei_arm.sh oracle_cnn 100 closed_set oracle
 #
 #SBATCH --job-name=sei_train
 #SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/rfbench_sei_%j.out
@@ -33,7 +38,10 @@ UV="$WORK/envs/uv-arm/uv"
 MODEL="${1:-wisig_cnn_paper}"
 EPOCHS="${2:-100}"
 TRACKS="${3:-closed_set cross_receiver cross_day}"
-DATASET="wisig"
+# 4th arg overrides the dataset (wisig | oracle | powder). Default: oracle for oracle_cnn (its
+# native set), else wisig. ORACLE/POWDER need their data placed under $RFBENCH_CACHE first (manual
+# download for both -- see rfbench.data.download.sei_{oracle,powder}).
+if [ -n "${4:-}" ]; then DATASET="$4"; elif [ "$MODEL" = "oracle_cnn" ]; then DATASET="oracle"; else DATASET="wisig"; fi
 
 export RFBENCH_CACHE="$WORK/data/rfbench_cache"
 export RFBENCH_HARDWARE="1x NVIDIA GB200"
@@ -45,12 +53,15 @@ export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 
 # Per-model recipe (WiSig d006 for wisig_cnn_paper; ORACLE 1e-4/patience-10; others sensible).
 case "$MODEL" in
-  oracle_cnn) LR="1e-4"; BATCH=32;  PATIENCE=10; WINDOW=128; DATASET="oracle" ;;
+  oracle_cnn) LR="1e-4"; BATCH=32;  PATIENCE=10; WINDOW=128 ;;
   wisig_cnn_paper|wisig_cnn) LR="5e-4"; BATCH=32; PATIENCE=5; WINDOW=256 ;;
   complex_cnn) LR="1e-3"; BATCH=64; PATIENCE=8; WINDOW=256 ;;
   resnet1d_sei) LR="1e-3"; BATCH=128; PATIENCE=8; WINDOW=256 ;;
   *) LR="5e-4"; BATCH=32; PATIENCE=5; WINDOW=256 ;;
 esac
+# ORACLE uses a 128-sample window regardless of model; POWDER is closed_set-only (single rx).
+if [ "$DATASET" = "oracle" ]; then WINDOW=128; fi
+if [ "$DATASET" = "powder" ]; then TRACKS="closed_set"; WINDOW=256; fi
 # ResNet-1D has no l2_penalty hook -> use Adam weight_decay for its L2 instead.
 if [ "$MODEL" = "resnet1d_sei" ]; then WD="1e-4"; L2="0.0"; else WD="0.0"; L2="1e-4"; fi
 

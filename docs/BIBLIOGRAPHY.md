@@ -171,15 +171,18 @@ DeepSense is a different task). Keep the three eval protocols separate.
 ### A.5 Foundation models
 
 Board-comparability warning: only **two** public FM results are on RadioML 2016.10a full SNR / 11-class
-(our exact board setting): **WirelessJEPA 74.78%** and **IQFM 38.1%**. Everything else reports on other
-datasets/protocols and must carry an asterisk.
+(our exact board setting): **WirelessJEPA 74.78%** and **IQFM 38.1%**. Both now have a `from_paper`
+board row (schema 1.1.0, `leaderboard/results/amc/{iqfm,wirelessjepa}_paper.json`) citing exactly
+these figures, clearly separate from the in-repo retrain rows (`iqfm-base` / `wireless-jepa`) which
+will report a different, in-distribution number once a cluster run lands. Everything else reports on
+other datasets/protocols and must carry an asterisk (full per-task breakdown above).
 
 Consolidated board-comparability table (AMC / RadioML only):
 
 | Model | Weights | RadioML setting | Protocol | Reported | Our score | Board-comparable? |
 |---|---|---|---|---|---|---|
-| **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | wrapper implemented (`wireless-jepa`), in-repo retrain pending — NOT the paper's OOD 74.78% | ✅ beats our MCLDNN 61.71 |
-| **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | wrapper implemented (`iqfm-base`), in-repo retrain pending — NOT the paper's OOD 38.1% | ✅ metric; ✗ data regime |
+| **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | `wirelessjepa-paper` row, `from_paper` (this exact figure); in-repo retrain wrapper (`wireless-jepa`) pending a cluster run — will be a SEPARATE, in-distribution number, never 74.78% | ✅ beats our MCLDNN 61.71 |
+| **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | `iqfm-paper` row, `from_paper` (this exact figure); in-repo retrain wrapper (`iqfm-base`) pending a cluster run — will be a SEPARATE, in-distribution number, never 38.1% | ✅ metric; ✗ data regime |
 | **RIS-MAE** | ✗ (retrain) | 2018.01a, 24-cls | fine-tune, 1% labels | **48.41%** | not run | ✅ if 2018 unblocked |
 | **LWM-Spectro** | ✅ HF (MIT declared, no LICENSE file) | **none** (DeepMIMO 5-cls) | few-shot F1, real linear/FT head | 47–95 F1 (own data) | **no row** (OOD; removed) | ❌ no RadioML in paper — own task reproduced (B.5) |
 | **WavesFM** | ✗ `(?)` | none (own 20-cls) | fine-tune | 86.05% | not run | ❌ |
@@ -213,19 +216,30 @@ Primary sources & key facts:
   classification on own 20-class set: 86.05% (pretrained) vs 88.07% supervised. Not RadioML.
 - **IQFM** — Mashaal, Abou-Zeid, arXiv:2506.06718v2 (2025). CC-BY 4.0, no weights. **ShuffleNetV2 0.5×,
   ~341k params**, contrastive SSL (SimCLR/InfoNCE), unit-max norm `iq/max(|iq|)`. OTA MIMO testbed.
-  **OOD RML2016.10a: 38.1% @ 50 samples/class linear probe** (only IQFM RadioML figure).
-  **Does not evaluate WiSig SEI** — our 0.7734 SEI row is fabricated.
+  **Does not evaluate WiSig SEI** — our former 0.7734 SEI row was fabricated and removed (`a689e86`).
   **Status (2026-07): board wrapper `iqfm-base` IMPLEMENTED** (`rfbench/models/foundation/iqfm.py` +
   reusable 1-D ShuffleNetV2-x0.5 backbone `shufflenet1d.py`, measured 335,096 params — the 1-D-vs-2-D
   delta from the paper's ~341k). Weights unpublished → we (re-)pre-train the recipe IN-REPO with SimCLR
   on RadioML-train delabelised (`scripts/pretrain/iqfm_simclr.py`, `slurm/pretrain_iqfm_arm.sh`), which
   is **in-distribution, NOT the paper's OOD OTA setting** — any resulting score is ours and must never
-  be presented as the 38.1% figure. No `result.json` committed until a real cluster run lands.
+  be presented as the 38.1% figure. No `result.json` committed for the in-repo retrain until a real
+  cluster run lands.
+  **Every task the paper itself evaluates, exact reported figures** (arXiv:2506.06718v2; see
+  `docs/DOWNSTREAM_TASKS.md` for the canonical-task mapping method):
+
+  | Canonical task (this repo) | Paper's own task/dataset | Regime | Reported | Board row? |
+  |---|---|---|---|---|
+  | `amc` | OOD RadioML 2016.10a, 11 mods, full SNR −20…+18 dB | linear probe, 50 samples/class | **38.1%** | ✅ `leaderboard/results/amc/iqfm_paper.json`, `from_paper` — same dataset+protocol as the board's exact AMC setting |
+  | `amc` (in-domain, not board-comparable) | 7-class OTA MIMO testbed (own data) | linear probe, 1 sample/class | **99.67%** | ❌ not RadioML, own private testbed |
+  | `sei` (POWDER, not board's WiSig) | POWDER RF fingerprinting, 4 devices | LoRA, 500 samples/class | **96.05%** | ❌ POWDER ≠ our WiSig/ORACLE/LoRa-RFFI dataset (see §A.3) |
+  | `beam_prediction` (out of current scope) | DeepBeam 5-beam mmWave (58 GHz) | LoRA, 500 samples/class | **94.15%** | ❌ CSI/mmWave-beam task, not a terrestrial-signal-board task |
+  | `direction_finding` (out of current scope) | AoA, 225 discrete 10° bins, 4-rx MIMO testbed | linear probe, 1 / 10 samples/class | **65.45% / 92.4%** | ❌ no public AoA dataset in scope yet |
+
+  Only the `amc` row above is board-comparable; every other IQFM task figure is on a private OTA
+  testbed or a dataset (POWDER) the board does not use, so none of them get a `from_paper*` board
+  row — they stay a bibliography reference only.
 - **WirelessJEPA** — arXiv:2601.20190 (2026). No weights. ShuffleNetV2-x0.5 (matched to IQFM), JEPA
   masked latent prediction, EMA teacher 0.996→1.0, no augmentation. Same OTA testbed as IQFM.
-  **500-shot linear probe, OOD RML2016.10a (11 mods, −20…+18 dB): 74.78%** — the single most
-  board-comparable public FM number, and it **beats our supervised MCLDNN (60.08%)**. Weights
-  unreleased → would require retraining the JEPA recipe.
   **Status (2026-07): board wrapper `wireless-jepa` IMPLEMENTED**
   (`rfbench/models/foundation/wireless_jepa.py`), reusing IQFM's shared 1-D ShuffleNetV2-x0.5
   backbone `shufflenet1d.py` (the "matched to IQFM" contract — same `build_shufflenet1d`, 335,096
@@ -233,7 +247,25 @@ Primary sources & key facts:
   teacher 0.996→1.0, no augmentation) on RadioML-train delabelised
   (`scripts/pretrain/wireless_jepa.py`, `slurm/pretrain_wireless_jepa_arm.sh`), which is
   **in-distribution, NOT the paper's OOD OTA setting** — any resulting score is ours and must never
-  be presented as 74.78%. No `result.json` committed until a real cluster run lands.
+  be presented as 74.78%. No `result.json` committed for the in-repo retrain until a real cluster
+  run lands.
+  **Every task the paper itself evaluates, exact reported figures** (arXiv:2601.20190; see
+  `docs/DOWNSTREAM_TASKS.md` for the canonical-task mapping method):
+
+  | Canonical task (this repo) | Paper's own task/dataset | Regime | Reported | Board row? |
+  |---|---|---|---|---|
+  | `amc` | OOD RadioML 2016.10a, 11 mods, full SNR −20…+18 dB | linear probe, 500 samples/class | **74.78%** | ✅ `leaderboard/results/amc/wirelessjepa_paper.json`, `from_paper` — the single most board-comparable public FM number, and it **beats our supervised MCLDNN (61.71%)** |
+  | `amc` (in-domain, not board-comparable) | OTA testbed (own data) | linear probe, 1 / 100 samples/class | not tabulated here `(?)` | ❌ own private testbed |
+  | `interference_id` | GNSS Jamming 6-class (Zenodo-synthesized) | linear probe, 500 samples/class | **63.1%** | ⚠️ `leaderboard/results/interference_id/wirelessjepa_paper.json`, `from_paper_uncertain` — same **task description** (raw-IQ, 6-class GNSS jamming) and class count as our `interf_gnss6` (Swinney & Woods 2021, Zenodo 4629685), but we could **not** confirm the paper's Zenodo source is the same release, nor any split/index overlap |
+  | `protocol_tech_id` | OTA WiFi 802.11 ax/b/n/g (4 protocols), (2,1024) IQ | linear probe, 500 samples/class | **94.26%** | ❌ **no board row yet** — `rfbench/tasks/protocol_tech_id/` and the `tprime` baseline exist, but no canonical split has been generated/committed under `leaderboard/splits/` for this task, so there is no real `checksum` to cite honestly (same discipline as the SEI fabrication fix, `a689e86`). Add a row once a `tprime-wifi4` split lands |
+  | `sei` (POWDER, not board's WiSig) | POWDER RF fingerprinting, 4 devices | linear probe, 500 samples/class | **90.5%** (paper cites IQFM's own POWDER number at 83.4% for comparison) | ❌ POWDER ≠ our WiSig/ORACLE/LoRa-RFFI dataset (see §A.3) |
+  | `direction_finding` (out of current scope) | AoA, OTA testbed, antenna masking | linear probe, 1 / 100 samples/class | **40.39%** @ 1-shot | ❌ no public AoA dataset in scope yet |
+
+  Two rows are board-comparable (`amc` confidently, `interference_id` only on dataset description,
+  not confirmed split) and land as `result.json` rows tagged `from_paper` / `from_paper_uncertain`
+  respectively (`docs/EVALUATION_PROTOCOL.md` verification tiers, schema 1.1.0). `protocol_tech_id`
+  is the closest miss: same canonical task, but blocked on a missing split file, not a dataset
+  mismatch — worth prioritizing once `tprime-wifi4` splits are generated.
 - **RIS-MAE** — Liu, Liu et al., arXiv:2508.00274 (2025). No weights. ViT-MAE encoder 12L d=768, 1D
   IQ patches of 8 (len 1024 → 128 patches), mask 75%. **2018.01a 24-cls, 1% labels, full SNR:
   48.41% OA / κ 0.4616** (beats MCLDNN 31.92 in that regime). Relevant only if 2018 unblocked.

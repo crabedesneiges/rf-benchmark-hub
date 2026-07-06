@@ -1,0 +1,38 @@
+{
+  "created_at": "2026-07-06T00:00:00Z",
+  "dataset": {
+    "name": "interf_gnss6"
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.631
+    }
+  },
+  "model": {
+    "family": "foundation",
+    "name": "wirelessjepa-paper",
+    "pretrained": true,
+    "url": "https://arxiv.org/abs/2601.20190"
+  },
+  "regime": {
+    "k_shot": 500,
+    "name": "few_shot"
+  },
+  "result_id": "interference-id-wirelessjepa-paper-gnss6-fewshot500",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "interf-gnss6-8010-seed42-v1",
+    "checksum": "sha256:f90cf8e96a8b240520881f4b9c777980aa41af2114dca2ba990871f5dc928625",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "interference_id",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the WirelessJEPA authors (arXiv:2601.20190): '500-shot linear probe, GNSS Jamming 6-class (Zenodo-synthesized), 63.1%' (docs/DOWNSTREAM_TASKS.md P2/interference_id). Tagged from_paper_uncertain because we could NOT confirm the paper's Zenodo GNSS-jamming source is the same release as our board's interf_gnss6 dataset (Swinney & Woods 2021, Zenodo record 4629685) nor that any split/index would match ours -- only the task description (raw-IQ, 6-class GNSS jamming) and class count line up. Do not read this as an AMC-grade citation; see docs/BIBLIOGRAPHY.md A.5.",
+    "status": "from_paper_uncertain"
+  }
+}

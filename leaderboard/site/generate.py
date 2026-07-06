@@ -51,8 +51,10 @@ Protocol invariants (docs/EVALUATION_PROTOCOL.md / D5), enforced structurally:
   NEVER compares across two regimes -- nor two tracks.
 * ``track`` is read from ``eval.conditions.track`` or ``split.track`` (free-form/optional);
   rows without one land in a default ``all`` bucket so single-track tasks still render.
-* A badge distinguishes ``verification.status`` ``verified`` from ``self_reported``; a chip
-  distinguishes the model ``family`` ``baseline`` from ``foundation``.
+* A badge distinguishes the four ``verification.status`` tiers -- ``verified``, ``self_reported``,
+  and the two never-re-run literature tiers ``from_paper`` / ``from_paper_uncertain`` (schema
+  1.1.0, see docs/BIBLIOGRAPHY.md) -- a chip distinguishes the model ``family`` ``baseline`` from
+  ``foundation``.
 
 Invalid rows are skipped with a warning (stderr) and never reach the board.
 
@@ -173,10 +175,24 @@ TRACK_TITLES: dict[str, str] = {
     "recognition": "recognition",
 }
 
-#: Verification badge text/CSS-class per status.
+#: Verification badge text/CSS-class per status. ``from_paper``/``from_paper_uncertain`` are
+#: hand-curated bibliography rows citing the model's own paper -- never re-run by us (schema
+#: 1.1.0); ``from_paper_uncertain`` additionally flags that the split/protocol match with our
+#: canonical setting is NOT confirmed (only the dataset family is the same).
 _BADGE: dict[str, tuple[str, str]] = {
     "verified": ("verified", "badge-verified"),
     "self_reported": ("self reported", "badge-self"),
+    "from_paper": ("from paper", "badge-paper"),
+    "from_paper_uncertain": ("from paper (unconfirmed split)", "badge-paper-uncertain"),
+}
+
+#: Tie-break trust order for same-score rows: harness-verified first, then a harness self-run,
+#: then a confirmed-split paper citation, then a paper citation with unconfirmed split/protocol.
+_STATUS_TRUST_RANK: dict[str, int] = {
+    "verified": 0,
+    "self_reported": 1,
+    "from_paper": 2,
+    "from_paper_uncertain": 3,
 }
 
 #: Family chip text/CSS-class per family.
@@ -227,9 +243,17 @@ _GUIDE: dict[str, Any] = {
         "A score marked verified means a maintainer independently re-ran the evaluation on a "
         "multi-GPU station (eval-only when weights and a Docker image are provided, or a full "
         "re-train for seed baselines) and the result matched the submitted numbers within the "
-        "declared tolerance, then signed it with verified_by/date/hardware. Everything else "
-        "stays self_reported: it is the author's own number to cite, and confidence on the "
-        "board comes from the verified track, not from the volume of self-reported entries."
+        "declared tolerance, then signed it with verified_by/date/hardware. self_reported means "
+        "someone ran rfbench themselves and submitted the number, unverified by a maintainer. "
+        "from paper and from paper (unconfirmed split) are a different kind of row entirely: "
+        "nobody ran anything through this repo -- the number is copied from the model's own "
+        "publication (docs/BIBLIOGRAPHY.md) purely as a literature reference point. \"from "
+        "paper\" is used only when the paper's own dataset AND the board's exact canonical "
+        "split/protocol match (e.g. AMC on RadioML 2016.10a full-SNR); \"from paper (unconfirmed "
+        "split)\" is used when only the dataset family matches and the exact split, "
+        "preprocessing, or sample overlap with our canonical split could not be confirmed. "
+        "Confidence on the board comes from the verified track first, self-reported second; the "
+        "two paper tiers are context, not a ranking claim against harness-run rows."
     ),
     "data_policy": (
         "No raw data is ever redistributed: datasets are downloaded from their official "
@@ -746,7 +770,7 @@ def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows,
         key=lambda r: (
             -_primary_value(r),
-            0 if _status(r) == "verified" else 1,
+            _STATUS_TRUST_RANK.get(_status(r), len(_STATUS_TRUST_RANK)),
             str(r["model"]["name"]),
         ),
     )
@@ -1888,6 +1912,9 @@ _CSS = """
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --badge-verified-bg: #e6f6ea; --badge-verified-fg: #137333; --badge-verified-bd: #9fd8ae;
   --badge-self-bg: #fff4e5; --badge-self-fg: #a15c00; --badge-self-bd: #f0c891;
+  --badge-paper-bg: #eaf1fb; --badge-paper-fg: #2158a0; --badge-paper-bd: #b9d2f0;
+  --badge-paper-uncertain-bg: #f2eefb; --badge-paper-uncertain-fg: #6b4fa0;
+  --badge-paper-uncertain-bd: #d6c8f0;
   --chip-baseline-bg: #eef0f3; --chip-baseline-fg: #444b56; --chip-baseline-bd: #d6dae1;
   --chip-foundation-bg: #f1e9fb; --chip-foundation-fg: #6b31c9; --chip-foundation-bd: #d9c4f4;
   --status-impl-bg: #e6f6ea; --status-impl-fg: #137333; --status-impl-bd: #9fd8ae;
@@ -1910,6 +1937,9 @@ _CSS = """
     --head: #1b2028;
     --badge-verified-bg: #12281a; --badge-verified-fg: #57cc7f; --badge-verified-bd: #2c5b3b;
     --badge-self-bg: #2e2410; --badge-self-fg: #e0a94b; --badge-self-bd: #5c4a1f;
+    --badge-paper-bg: #16233a; --badge-paper-fg: #7fb0ea; --badge-paper-bd: #2c4a70;
+    --badge-paper-uncertain-bg: #241c38; --badge-paper-uncertain-fg: #b79ce6;
+    --badge-paper-uncertain-bd: #3f2f5c;
     --chip-baseline-bg: #20262e; --chip-baseline-fg: #b6bdc8; --chip-baseline-bd: #333b46;
     --chip-foundation-bg: #241a35; --chip-foundation-fg: #b892ec; --chip-foundation-bd: #4a3670;
     --status-impl-bg: #12281a; --status-impl-fg: #57cc7f; --status-impl-bd: #2c5b3b;
@@ -2007,6 +2037,14 @@ td.num.primary .metric-val { font-weight: 700; }
 .badge-self {
   background: var(--badge-self-bg); color: var(--badge-self-fg);
   border-color: var(--badge-self-bd);
+}
+.badge-paper {
+  background: var(--badge-paper-bg); color: var(--badge-paper-fg);
+  border-color: var(--badge-paper-bd);
+}
+.badge-paper-uncertain {
+  background: var(--badge-paper-uncertain-bg); color: var(--badge-paper-uncertain-fg);
+  border-color: var(--badge-paper-uncertain-bd);
 }
 .chip { margin-left: 0.4rem; font-size: 0.68rem; padding: 0.02rem 0.45rem; }
 .chip-baseline {

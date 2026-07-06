@@ -1,0 +1,46 @@
+{
+  "created_at": "2026-07-06T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2016_10a",
+    "version": "10a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 18,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.7478
+    }
+  },
+  "model": {
+    "family": "foundation",
+    "name": "wirelessjepa-paper",
+    "pretrained": true,
+    "url": "https://arxiv.org/abs/2601.20190"
+  },
+  "regime": {
+    "k_shot": 500,
+    "name": "few_shot"
+  },
+  "result_id": "amc-wirelessjepa-paper-radioml2016-fewshot500-ood",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the WirelessJEPA authors (arXiv:2601.20190), NOT reproduced or re-run by this repo. Same dataset (RadioML 2016.10a, 11 classes, full SNR range -20..+18 dB) and evaluation protocol as our board's AMC track (docs/BIBLIOGRAPHY.md A.5). Paper's exact split indices are unpublished so sample-level overlap with our canonical split (amc-radioml2016-strat-snr-8010-seed42-v1) is not confirmed. No public weights; would require retraining the JEPA recipe to reproduce in-repo.",
+    "status": "from_paper"
+  }
+}

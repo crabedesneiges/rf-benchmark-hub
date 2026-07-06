@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — literature-reference verification tiers (`from_paper` / `from_paper_uncertain`)
+
+`result.schema.json` bumped **1.0.0 → 1.1.0** (additive, non-breaking; old rows and writers keep
+validating unchanged — `schema_version` is now an enum of both) to add two `verification.status`
+values for numbers copied from a model's own paper and hand-curated into a `result.json`, never
+run through `rfbench`: **`from_paper`** (paper's dataset AND our exact canonical split/protocol
+match) and **`from_paper_uncertain`** (only the dataset family matches; split/protocol overlap
+with our canonical setting is unconfirmed). Documented in `docs/SUBMISSION.md` ("Tier 3").
+
+- `leaderboard/site/generate.py`: new `badge-paper` / `badge-paper-uncertain` badge styles (light +
+  dark), verified > self_reported > from_paper > from_paper_uncertain trust order for same-score
+  tie-breaks, and an expanded Guide explanation of all four tiers.
+- Three new board rows: `leaderboard/results/amc/{iqfm,wirelessjepa}_paper.json`
+  (`from_paper` — IQFM 38.1% @ 50-shot, WirelessJEPA 74.78% @ 500-shot, both linear-probe OOD on
+  RadioML 2016.10a full SNR, our exact AMC setting) and
+  `leaderboard/results/interference_id/wirelessjepa_paper.json` (`from_paper_uncertain` — 63.1% on
+  a GNSS-jamming 6-class set that only plausibly matches our `interf_gnss6` Zenodo source; split
+  overlap unconfirmed). No `protocol_tech_id` row: WirelessJEPA's 94.26% figure is board-relevant
+  but there is no canonical split committed under `leaderboard/splits/` yet to cite honestly.
+- `docs/BIBLIOGRAPHY.md` A.5: IQFM and WirelessJEPA paragraphs now list, per canonical task, every
+  figure each paper reports downstream (not just the board-comparable AMC number), with an
+  explicit board-row/no-board-row verdict and why.
+
 ### Added — WirelessJEPA raw-IQ JEPA foundation-model wrapper (`wireless-jepa`)
 
 Adds WirelessJEPA (arXiv:2601.20190) as an evaluable board FM **without touching the frozen core**

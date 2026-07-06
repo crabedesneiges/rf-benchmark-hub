@@ -18,9 +18,9 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "description": "SemVer of THIS result schema. Frozen at Sprint-0; consumers pin the major. Lets the leaderboard reader migrate old rows.",
+      "description": "SemVer of THIS result schema. Frozen at Sprint-0; consumers pin the major. Lets the leaderboard reader migrate old rows. '1.1.0' (additive, non-breaking) added the 'from_paper'/'from_paper_uncertain' verification tiers; existing '1.0.0' rows and writers stay valid.",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
-      "const": "1.0.0"
+      "enum": ["1.0.0", "1.1.0"]
     },
     "result_id": {
       "type": "string",
@@ -277,14 +277,14 @@
     },
     "verification": {
       "type": "object",
-      "description": "Two-tier verification state (D4 / SUBMISSION.md). Starts 'self_reported'; a maintainer re-run within tolerance flips it to 'verified'. verified_* fields are REQUIRED iff status=='verified' (enforced by allOf), so a verified row can never lack provenance.",
+      "description": "Verification state (D4 / SUBMISSION.md), extended in schema 1.1.0 with two literature-only tiers that are NEVER re-run by us: 'self_reported' (harness-run, Tier-1) -> 'verified' (maintainer re-ran within tolerance, Tier-2) remain the only tiers a submitter can push to via `rfbench eval`/`submit`. 'from_paper' / 'from_paper_uncertain' are hand-curated bibliography rows (docs/BIBLIOGRAPHY.md) citing a number the model's own paper reports, never produced by rfbench. verified_* fields are REQUIRED iff status=='verified' (enforced by allOf), so a verified row can never lack provenance.",
       "required": ["status"],
       "additionalProperties": false,
       "properties": {
         "status": {
           "type": "string",
-          "description": "'self_reported' (emitted locally, Tier-1) or 'verified' (maintainer re-ran within tolerance, Tier-2).",
-          "enum": ["self_reported", "verified"]
+          "description": "'self_reported' (emitted locally, Tier-1), 'verified' (maintainer re-ran within tolerance, Tier-2), 'from_paper' (paper-reported number on the SAME dataset AND the board's canonical split/protocol, not re-run by us -- e.g. IQFM/WirelessJEPA on RadioML 2016.10a full-SNR, our exact AMC setting), or 'from_paper_uncertain' (paper-reported number on the same dataset FAMILY only -- split, exact preprocessing, or sample overlap with our canonical split is NOT confirmed identical, e.g. a GNSS-jamming or WiFi-standard number whose split provenance we could not verify against ours). `note` SHOULD cite the source and spell out exactly what is/isn't confirmed for the two paper tiers.",
+          "enum": ["self_reported", "verified", "from_paper", "from_paper_uncertain"]
         },
         "verified_by": {
           "type": "string",

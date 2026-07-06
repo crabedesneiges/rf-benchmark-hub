@@ -1,0 +1,46 @@
+{
+  "created_at": "2026-07-06T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2016_10a",
+    "version": "10a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 18,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.381
+    }
+  },
+  "model": {
+    "family": "foundation",
+    "name": "iqfm-paper",
+    "pretrained": true,
+    "url": "https://arxiv.org/abs/2506.06718"
+  },
+  "regime": {
+    "k_shot": 50,
+    "name": "few_shot"
+  },
+  "result_id": "amc-iqfm-paper-radioml2016-fewshot50-ood",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the IQFM authors (Mashaal & Abou-Zeid, arXiv:2506.06718v2), NOT reproduced or re-run by this repo. Same dataset (RadioML 2016.10a, 11 classes, full SNR range -20..+18 dB) and evaluation protocol as our board's AMC track (docs/BIBLIOGRAPHY.md A.5) -- the only reason this is 'from_paper' and not 'from_paper_uncertain'. The paper's exact train/probe/test sample indices are unpublished, so byte-for-byte overlap with our canonical split (amc-radioml2016-strat-snr-8010-seed42-v1) is not confirmed, only the dataset+protocol match. Weights are unpublished; our own in-repo retrain of the recipe (iqfm-base wrapper, scripts/pretrain/iqfm_simclr.py) is a SEPARATE, in-distribution number and must never be conflated with this figure.",
+    "status": "from_paper"
+  }
+}

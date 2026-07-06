@@ -43,6 +43,7 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+import rfbench.tasks.amc  # noqa: F401  -- import side effect registers the 'amc' task in TASKS
 from rfbench.core.registry import get_task
 from rfbench.models.foundation.shufflenet1d import EMBED_DIM_X0_5, build_shufflenet1d
 from rfbench.models.foundation.wireless_jepa import backbone_checkpoint_path

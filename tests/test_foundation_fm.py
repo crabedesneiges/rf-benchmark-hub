@@ -146,9 +146,9 @@ def test_embed_is_finite_and_one_row_per_sample(
     """embed() yields exactly one finite 128-d row per sample (the contract the probe needs).
 
     We assert the shape/finiteness contract rather than per-sample distinctness: with a
-    RANDOMLY-INITIALISED encoder and a zero CLS token the untrained CLS output can collapse
-    across samples. Distinctness is a property of the *pretrained* weights (loaded on the
-    cluster), not of this dependency-light smoke test.
+    RANDOMLY-INITIALISED encoder, the mean-pooled representation can collapse across samples.
+    Distinctness is a property of the *pretrained* weights (loaded on the cluster), not of this
+    dependency-light smoke test.
     """
     torch = pytest.importorskip("torch")
     monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
@@ -156,3 +156,78 @@ def test_embed_is_finite_and_one_row_per_sample(
     out = model.embed(_synthetic_iq_batch(batch_size=3))
     assert tuple(out.shape) == (3, _EMBED_DIM)
     assert bool(torch.isfinite(out).all())
+
+
+# --------------------------------------------------------------------------------------------------
+# torch-gated: architecture + adapter FIDELITY regression guards (WP-62 verification, 2026-07)
+# --------------------------------------------------------------------------------------------------
+def test_encoder_uses_custom_layernorm_alpha_bias_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reconstructed encoder exposes upstream custom-LayerNorm keys (alpha/bias), NOT weight/bias.
+
+    Regression guard for the fatal bug where ``nn.LayerNorm`` (``.weight``/``.bias``) was used
+    instead of the repo's custom ``LayerNormalization`` (``.alpha``/``.bias``): the real
+    ``checkpoint.pth`` stores ``...norm.alpha``/``...norm.bias`` for all 25 norms, so an
+    ``nn.LayerNorm`` reconstruction would silently leave every norm scale at random init.
+    """
+    pytest.importorskip("torch")
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    model = lwm_spectro.LwmSpectroModel(device="cpu")
+    model.embed(_synthetic_iq_batch(batch_size=1))  # triggers the lazy encoder build
+    keys = set(model._encoder.state_dict().keys())
+    for present in (
+        "embedding.norm.alpha",
+        "embedding.norm.bias",
+        "layers.0.norm1.alpha",
+        "layers.0.norm2.alpha",
+        "layers.11.norm2.bias",
+        "norm.alpha",
+        "norm.bias",
+    ):
+        assert present in keys, f"missing upstream custom-LayerNorm key {present}"
+    for forbidden in ("embedding.norm.weight", "layers.0.norm1.weight", "norm.weight"):
+        assert forbidden not in keys, f"nn.LayerNorm-style key {forbidden} must NOT exist"
+    # attention / FFN / projection keys present under the upstream names (so real weights load).
+    for present in (
+        "embedding.proj.weight",
+        "embedding.pos_embed.weight",
+        "layers.0.enc_self_attn.W_Q.weight",
+        "layers.0.enc_self_attn.linear.weight",
+        "layers.0.pos_ffn.fc1.weight",
+        "linear.weight",
+    ):
+        assert present in keys, f"missing upstream key {present}"
+
+
+def test_adapter_produces_1025x32_tokens_with_constant_cls() -> None:
+    """The IQ->token adapter yields (B, 1025, 32); row 0 is the constant-0.2 CLS token (upstream).
+
+    Regression guard for the CLS mismatch (upstream uses ``np.full(patch_size, 0.2)``, not zeros)
+    and for the ``(1024 patches + 1 CLS)`` sequence-length contract the encoder's positional
+    embedding (``Embedding(1025, 128)``) requires.
+    """
+    torch = pytest.importorskip("torch")
+    tokens = lwm_spectro._iq_to_lwm_tokens(_synthetic_iq_batch(batch_size=3)["iq"], torch)
+    assert tuple(tokens.shape) == (3, lwm_spectro.MAX_LEN, lwm_spectro.ELEMENT_LENGTH)
+    cls_expected = torch.full((3, lwm_spectro.ELEMENT_LENGTH), lwm_spectro.CLS_VALUE)
+    assert torch.allclose(tokens[:, 0, :], cls_expected)
+    assert bool(torch.isfinite(tokens).all())
+
+
+def test_missing_encoder_keys_raise_not_silent_random(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkpoint that does not populate the encoder RAISES (no partly-random 'pretrained' run).
+
+    This is the guard that would have caught the original silent-random-init bug: if the real
+    state_dict keys stop matching the reconstruction, loading must fail loudly instead of scoring a
+    half-random encoder as if it were the pretrained LWM-Spectro.
+    """
+    torch = pytest.importorskip("torch")
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    bogus = tmp_path / "bogus_checkpoint.pth"
+    torch.save({"totally.unrelated.key": torch.zeros(1)}, bogus)
+    model = lwm_spectro.LwmSpectroModel(device="cpu", checkpoint=bogus)
+    with pytest.raises(RuntimeError, match="MISSING"):
+        model.embed(_synthetic_iq_batch(batch_size=1))

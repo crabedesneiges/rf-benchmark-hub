@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — LWM-Spectro FM wrapper made faithful to the real weights (WP-62 verification)
+
+Ground-truthed the committed LWM-Spectro integration against the real HF repo `wi-lab/lwm-spectro`
+(`config.json`, `pretraining/pretrained_model.py`, `utils.py`) and fixed a chain of fidelity bugs
+that made the encoder run **partially random**. The prior board row
+(`leaderboard/results/amc/lwm-spectro-linear_probe.json`, `accuracy_overall=0.2274`) was produced by
+that broken encoder and is **removed** — it must not stand as the hub's first FM-vs-baseline line.
+
+- **FATAL — custom `LayerNormalization`.** Upstream every norm is a custom module storing
+  `.alpha`/`.bias`, NOT `nn.LayerNorm`'s `.weight`/`.bias`. The reconstruction used `nn.LayerNorm`, so
+  all 25 norm layers (50 tensors) silently failed to load and stayed at random init. Reimplemented
+  `LayerNormalization(alpha, bias)`; the real checkpoint now loads by name.
+- **Forward numerics.** MHA adds its residual internally (`residual + linear(attn)`); the FFN uses
+  **ReLU** (was GELU); the block is post-norm `norm1(mha(x))` → `norm2(a + ffn(a))`.
+- **Representation.** The frozen embedding is now the **mean over the sequence** of the raw encoder
+  output (upstream "pooling mean"), taken BEFORE the top-level `norm`/`linear` (those run only in the
+  masked-reconstruction branch; still defined so their keys load) — was `CLS[:,0]` through a spurious
+  extra norm.
+- **Tokenisation.** `[CLS]` is the upstream constant **0.2** vector (was zeros); normalisation is now
+  the **joint** per-sample `(x-mean)/std` over the interleaved real/imag tensor (was magnitude via
+  `abs`/`polar`/`angle`, which fed off-distribution tokens). The interleave + 4×4 patch order were
+  verified byte-identical to upstream and kept.
+- **Load guard.** `_load_weights` now RAISES if any encoder key is missing when a checkpoint is
+  present (refuses to score a partly-random encoder as "pretrained"); the exact bug class is now
+  CI-catchable, and unexpected recon-head keys are INFO-logged.
+- **Preprocessing honesty.** Upstream ships **no** IQ→spectrogram code (128×128 float16 spectrograms
+  are pre-computed externally; the exact 512-FFT recipe is unpublished), so the IQ→STFT front-end is a
+  best-effort approximation. `embed()` emits a loud one-time **UNVERIFIED** warning; any FM score is
+  **provisional** until the upstream generation config is confirmed.
+- **Regimes / SLURM.** `slurm/eval_fm_arm.sh` now handles `few_shot` (K as 3rd arg; the previous
+  `RegimeSpec(regime)` crashed with no `k_shot`) and **refuses** `from_scratch`/`full_finetune` (a raw
+  `forward` = untrained head ≈ chance; a real `full_finetune` needs a training loop — deferred).
+  `linear_probe` (the validated chain) stays the default. Download paths in `_download_lwm_spectro.py`
+  verified correct (`checkpoints/checkpoint.pth`, `moe_checkpoint.pth`, `experts/*`).
+- **License.** Corrected `docs/BIBLIOGRAPHY.md` (4 mentions): LWM-Spectro is **MIT** (declared in
+  `pyproject.toml`/`README_model.md`; no LICENSE file ships), NOT CC BY-NC-SA — publishing scores is
+  permitted (we never redistribute weights). Consistent with `docs/SOTA_REFERENCE.md` "verify".
+- **Tests.** New torch-gated regression guards in `tests/test_foundation_fm.py`: the encoder exposes
+  the custom `.alpha`/`.bias` norm keys (not `.weight`/`.bias`); the adapter yields `(B, 1025, 32)`
+  with a constant-0.2 CLS row; a non-matching checkpoint raises. Dep-free suite stays green;
+  `ruff`/`black --line-length 100` clean.
+
 ### Added — educational content on the leaderboard site (data-driven)
 
 - **Enriched task manifest** (`leaderboard/tasks.json`): each task now merges optional

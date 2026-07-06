@@ -174,7 +174,7 @@ Consolidated board-comparability table (AMC / RadioML only):
 | **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | not run | ✅ beats our MCLDNN 60.08 |
 | **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | 0.7734 (FABRICATED, SEI) | ✅ metric; ✗ data regime |
 | **RIS-MAE** | ✗ (retrain) | 2018.01a, 24-cls | fine-tune, 1% labels | **48.41%** | not run | ✅ if 2018 unblocked |
-| **LWM-Spectro** | ✅ HF (CC BY-NC-SA) | **none** (DeepMIMO 5-cls) | few-shot F1, real linear/FT head | 47–95 F1 (own data) | **22.74%** | ❌ no RadioML in paper |
+| **LWM-Spectro** | ✅ HF (MIT declared, no LICENSE file) | **none** (DeepMIMO 5-cls) | few-shot F1, real linear/FT head | 47–95 F1 (own data) | **22.74%** | ❌ no RadioML in paper |
 | **WavesFM** | ✗ `(?)` | none (own 20-cls) | fine-tune | 86.05% | not run | ❌ |
 | **LatentWave** | ✗ | none (CommRad) | linear probe | 80.9% | not run | ❌ |
 | **6G-MSM** | ✗ | none (CSI/seg) | fine-tune | 93.9 / 97.6% | not run | ❌ (no AMC) |
@@ -182,7 +182,11 @@ Consolidated board-comparability table (AMC / RadioML only):
 
 Primary sources & key facts:
 - **LWM-Spectro** (`wi-lab/lwm-spectro`, on our board) — Kim, Alikhani, Alkhateeb, arXiv:2601.08780
-  (2026-01, cs.IT). **CC BY-NC-SA 4.0 (non-commercial — flag before a public leaderboard).** 12-layer
+  (2026-01, cs.IT). **License: MIT is the only upstream signal — declared in `pyproject.toml`
+  (`license = {text = "MIT"}` + OSI classifier) and README_model.md ("License: MIT"), but NO standalone
+  LICENSE file ships (README frontmatter has `#license: mit` commented out; config.json has no license
+  field). Effective status: MIT declared, no LICENSE file present — permissive (commercial use allowed,
+  attribution via the paper citation); verify before a public leaderboard.** 12-layer
   Transformer d=128 h=8, 4×4 patches → seq 1024, 128×128 spectrogram input; MoE (WiFi/LTE/5G experts,
   top-1 router). Pretrained on **9.2M synthetic DeepMIMO spectrograms** — no real captures, **no
   RadioML**. Paper AMC = 5-class DeepMIMO spectrograms, few-shot **macro-F1**, real linear/FT head
@@ -428,8 +432,13 @@ Papers/models/datasets to add (deduped).
   this row is context, not a leaderboard entry.
 - **LWM base channel model** (arXiv:2411.08872) — note in the bibliography as LWM-Spectro's lineage but
   **exclude from AMC/SEI** (CSI-only tasks).
-- **License flag** — LWM-Spectro weights are **CC BY-NC-SA 4.0 (non-commercial)**. Record in the model
-  registry before publishing a public leaderboard row.
+- **License flag** — LWM-Spectro's only upstream license signal is **MIT** (`pyproject.toml`
+  `license = {text = "MIT"}` + OSI classifier, and README_model.md "License: MIT"), but **no standalone
+  LICENSE file ships** in the repo and the README frontmatter has `#license: mit` commented out
+  (config.json has no license field; `/raw/main/LICENSE` 404s). Effective status: **MIT declared, no
+  LICENSE file present** — permissive (commercial use allowed, attribution via the paper citation). Verify
+  and record in the model registry before publishing a public leaderboard row (consistent with
+  `docs/SOTA_REFERENCE.md` "license unstated → verify").
 - **WavesFM** — keep paper-only: no public weights/code URL found; its 86.05% is on a private 20-class
   spectrogram set, not RadioML. Do not list weights as obtainable until a repo is confirmed.
 
@@ -458,7 +467,8 @@ Papers/models/datasets to add (deduped).
   github.com/wineslab/deepsense-spectrum-sensing-datasets.
 - DeepSweep: Uvaydov et al., arXiv:2401.04805.
 - Sig53/TorchSig XCiT: Boegner et al., 2022, arXiv:2207.09918 — repo github.com/TorchDSP/torchsig.
-- LWM-Spectro: Kim, Alikhani, Alkhateeb, 2026, arXiv:2601.08780 — HF wi-lab/lwm-spectro (CC BY-NC-SA 4.0).
+- LWM-Spectro: Kim, Alikhani, Alkhateeb, 2026, arXiv:2601.08780 — HF wi-lab/lwm-spectro (MIT declared in
+  pyproject.toml/README_model.md; no LICENSE file in repo).
 - LWM (base): Alikhani, Charan, Alkhateeb, 2024, arXiv:2411.08872.
 - WavesFM: 2025, arXiv:2504.14100 (no public weights `(?)`).
 - IQFM: Mashaal, Abou-Zeid, 2025, arXiv:2506.06718v2.

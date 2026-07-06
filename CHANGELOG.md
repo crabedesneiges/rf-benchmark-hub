@@ -37,10 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Follow-up flagged (not in this fix):** `training.py` val-accuracy checkpoint selection with
   `best_acc=-1.0` silently reports the untrained epoch-0 snapshot for a run that never beats chance —
   a robustness gap (not the CLDNN root cause) worth hardening separately.
-- **Board:** CLDNN figure retained pending the seed-robustness confirmation + 150-epoch retrain
-  (target ≥ 0.50; `norm` already reached 0.5848 at 20 ep). Tests (`tests/test_cldnn.py`:
-  normalization applied on the default path, raw-skip identity under `input_norm=False`) +
-  `ruff`/`black`/`mypy` green.
+- **Seed-robustness confirmed** before the long retrain (job 86196, 4 seeds × 12 ep): `norm` scores
+  0.5631 / 0.5650 / 0.5690 / 0.5665 — tight and always ≫ 0.50 — while un-normalized `broken` swings
+  0.4978–0.5400 and **collapses to 0.1275 on seed 123**, directly demonstrating the init fragility
+  the normalization removes.
+- **Board updated:** CLDNN re-trained from scratch (RadioML 2016.10a, seed 42, 150 epochs, final
+  recipe) → **accuracy_overall 0.5805** (`leaderboard/results/amc/cldnn.json`, schema-valid +
+  PR-ready; 440 907 params, 1× GB200), the first honest figure for the paper-faithful 3-LSTM+skip
+  CLDNN under the final recipe (the prior 0.5876 was a superseded 2-LSTM/no-skip arch). MCLDNN
+  (0.6171) / ResNet (0.5661) untouched. Tests (`tests/test_cldnn.py`: normalization applied on the
+  default path, raw-skip identity under `input_norm=False`) + `ruff`/`black`/`mypy` green.
 
 ### Added — educational content on the leaderboard site (data-driven)
 
@@ -138,11 +144,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Re-trained from scratch (RadioML 2016.10a, seed 42, 150 epochs) under the fixed recipe
   (val-accuracy best-checkpoint + gradient clipping + paper-exact archs): **MCLDNN 0.6008 → 0.6171**
   and **ResNet 0.5606 → 0.5661**. Both now exceed their prior board scores.
-- **KNOWN ISSUE — CLDNN collapses to chance (0.0909) under the new recipe.** Gradient clipping ruled
-  out the LSTM-explosion/NaN hypothesis (no divergence logged); the 3-LSTM CLDNN instead stays stuck
-  at chance throughout training, even though the same architecture reached 0.5072 under the earlier
-  50-epoch val-loss recipe. Under investigation (per-epoch val-accuracy/LR trajectory diagnostic
-  pending). The board retains the last reproducible CLDNN figure until the fix lands.
+- **~~KNOWN ISSUE — CLDNN collapses to chance (0.0909)~~ RESOLVED** (see the top "Fixed — CLDNN
+  chance-collapse" entry): root-caused to a CLDNN input-conditioning fragility (tiny raw IQ + no
+  input normalization into the 3-LSTM stack collapses for some init draws) and fixed with per-sample
+  unit-variance input normalization inside `cldnn.py`. CLDNN re-trained from scratch under the same
+  final recipe now scores **0.5805** (paper-faithful 3-LSTM+skip arch; the prior 0.5876 board figure
+  was a superseded 2-LSTM/no-skip architecture). MCLDNN/ResNet unchanged.
 
 ### Added — Downstream-task prioritization mined from the FM bibliography
 

@@ -29,7 +29,9 @@ from rfbench.core.types import SplitName
 from rfbench.data.prepare.sei import (
     CANONICAL_SPLIT_IDS,
     SeiRecord,
+    _powder_ids,
     extract_lora_records,
+    extract_powder_records,
     extract_wisig_records,
     prepare_sei,
 )
@@ -551,3 +553,55 @@ def test_load_lora_records_reads_real_hdf5(tmp_path: Path, monkeypatch: pytest.M
     assert len(records) == 6
     assert [r[0] for r in records] == [1, 1, 2, 2, 3, 3]
     assert all(r[1] is None and r[2] is None for r in records)
+
+
+# --- POWDER (4-BS WiFi) closed-set prepare + record extraction (pure stdlib) ----------
+
+
+def test_powder_ids_parses_device_and_day() -> None:
+    """_powder_ids extracts (device, day) from [Waveform]_[Day]_[TransmitterBS]_[Set] names."""
+    assert _powder_ids("WiFi_Day1_MEB_1.sigmf-data") == ("MEB", "Day1")
+    assert _powder_ids("WiFi_Day2_Browning_3.sigmf-data") == ("Browning", "Day2")
+    # A deviating name falls back to (stem, unknown_day) rather than raising.
+    assert _powder_ids("weird.sigmf-data") == ("weird", "unknown_day")
+
+
+def test_extract_powder_records_one_per_frame() -> None:
+    """extract_powder_records emits one (device, None, day) record per frame, in file order."""
+    frame_counts = [("MEB", "Day1", 2), ("Honors", "Day1", 3), ("MEB", "Day2", 1)]
+    records = extract_powder_records(frame_counts)
+    assert len(records) == 6
+    assert [r[0] for r in records] == ["MEB", "MEB", "Honors", "Honors", "Honors", "MEB"]
+    assert all(r[1] is None for r in records)  # single fixed receiver
+    assert [r[2] for r in records] == ["Day1", "Day1", "Day1", "Day1", "Day1", "Day2"]
+
+
+def test_powder_closed_set_prepare(tmp_path: Path) -> None:
+    """POWDER closed_set: 80/10/10 stratified by device, its own canonical split id + sidecars."""
+    # 4 devices x 30 frames each (day-pooled closed set, like the FM evaluators).
+    records: list[SeiRecord] = [
+        (dev, None, day)
+        for dev in ("MEB", "Browning", "Behavioral", "Honors")
+        for day in ("Day1", "Day2")
+        for _ in range(15)
+    ]
+    split, manifest = prepare_sei(
+        "powder", "closed_set", out_dir=tmp_path, records=records, seed=42
+    )
+    assert split.canonical_split_id == CANONICAL_SPLIT_IDS["powder"]["closed_set"]
+    assert manifest.dataset == "powder"
+    total = sum(len(split.indices[s]) for s in _SPLITS)
+    assert total == len(records)  # every frame covered exactly once
+    # Each device appears in every partition (closed-set identity, stratified by device).
+    idx_file = tmp_path / "splits" / "powder" / f"{split.canonical_split_id}.idx.json"
+    assert idx_file.is_file()
+    for partition in _SPLITS:
+        devices = {records[i][0] for i in split.indices[partition]}
+        assert devices == {"MEB", "Browning", "Behavioral", "Honors"}
+
+
+def test_powder_supports_only_closed_set(tmp_path: Path) -> None:
+    """POWDER (single receiver) rejects the cross_receiver / cross_day conditions."""
+    records: list[SeiRecord] = [("MEB", None, "Day1"), ("Honors", None, "Day1")]
+    with pytest.raises(ValueError, match="does not support condition"):
+        prepare_sei("powder", "cross_receiver", out_dir=tmp_path, records=records)

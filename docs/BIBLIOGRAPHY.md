@@ -88,9 +88,11 @@ Headline rank-1 numbers to reproduce (primary sources):
 
 | Dataset | #cls | Model (paper) | Closed-set rank-1 | Cross-condition | Our loader / score |
 |---|---|---|---|---|---|
-| WiSig ManyTx | 150 | 2-D CNN (5 conv/3 dense) | ~53% (150 tx, non-eq, 50 sig) / ~80% (10 tx) | **cross-rx 99%→<33%**; cross-day 99%→drop | `wisig_cnn` (1-D CNN) — no board score (fabricated 0.9412 removed, `a689e86`) |
-| WiSig ManySig | ≤6 | same | >99% same-day/rx | cross-day degradation | — |
-| ORACLE | 16 | 2 conv + 2 FC, 2×128 raw IQ | **98.60%** | **cross-location 87.13%** | loader present (window=128); **no `oracle_cnn` model** |
+| WiSig ManyTx (`d006`) | 150 | 2-D CNN (5 conv/3 dense) | ~53% (150 tx, non-eq, 50 sig) / ~80% (10 tx), **all-rx/all-days pooled** | *(not a cross-rx protocol — see below)* | **`wisig_cnn_paper`** (paper-exact 2-D CNN) + `wisig_cnn` (1-D variant); training wired for the 3 grouped conditions (no board score yet — pending the cluster run) |
+| WiSig ManyRx | 10 | same, **equalized**, 1 day | ~99% same-Rx | **train-on-one-Rx 99%→<33%** (§VI.A, Fig. 10) | headline cross-rx experiment (equalized ManyRx, not ManyTx) |
+| WiSig ManySig | ≤6 | same | >99% same-day (Fig. 11) | cross-**day** degradation (§VI.B) | — |
+| ORACLE | 16 | 2 conv + 2 FC, 2×128 raw IQ | **98.60%** | **cross-location 87.13%** (Fig. 6) | **`oracle_cnn`** added (Sankhe 2019 exact); loader present (window=128); ORACLE data not yet on cluster |
+| POWDER 4-BS WiFi | 4 | CNN / triplet (512-slice) | same-day 99.98% | cross-day **76.24%** | **new track** (FM-comparable); download blocked (manual) — see §A.5 |
 | LoRa RFFI (JSAC'21) | 10 (study cites 25) | spectrogram-CNN (3 conv/1 FC) | **96.40%** (95.35% CFO-only) | 83.53% w/o CFO comp | loader reads WRONG dataset (see below); **no LoRa model** |
 
 Board note (updated 2026-06): the fabricated SEI rows — `iqfm` rank1 0.7734 on WiSig cross_receiver
@@ -101,16 +103,44 @@ reproduction target for a real WiSig run.
 
 Primary papers:
 - **WiSig** — Hanna, Karunaratne, Cabric, "WiSig: A Large-Scale WiFi Signal Dataset...," *IEEE Access*
-  10:22808–22818, 2022. DOI 10.1109/ACCESS.2022.3154488. arXiv:2112.15363.
-  Code: github.com/WiSig-dataset/wisig-examples. Data: cores.ee.ucla.edu/downloads/datasets/wisig/.
-  - Signal: **first 256 IQ samples** of the preamble → `(256, 2)`. **Unit average power normalized.**
-    ManyTx headline (`d006`) uses **non-equalized** data (`equalized=0`).
-  - Baseline CNN (`py/d006_ManyTx_ntx.py`): input `(256,2)`→`Reshape(256,2,1)`→5 conv blocks
-    (filters **8/16/16/32/16**, kernels (3,2)/(3,1), pools (2,1)/(2,2))→Flatten→Dense(100)→Dense(80)
-    →Dropout(0.5)→Dense(N, softmax). `padding='same'`, **L2 λ=1e-4**.
-  - Recipe: **Adam lr=5e-4**, categorical CE, **100 ep + early stop patience=5 on val_loss** (best
-    weights restored), **class_weight** for imbalance, **batch=32** (Keras default), split 80/10/10.
-    Reports **balanced** test accuracy.
+  10:22808–22818, 2022. **DOI 10.1109/ACCESS.2022.3154790** (IEEE doc 9721895; the earlier `...3154488`
+  cited here was wrong). arXiv:2112.15363. Code: github.com/WiSig-dataset/wisig-examples (default
+  branch **`master`**, code license **BSD-3**; `data_utilities.py` at repo root). Data:
+  cores.ee.ucla.edu/downloads/datasets/wisig/ (**dataset license CC BY-NC-SA 4.0** — distinct from the
+  BSD-3 code). *(Verbatim-code audit, 2026-07; the REPO is the source of truth.)*
+  - Signal: **first 256 IQ samples** of the preamble → `(256, 2)`. **Unit average power normalized**
+    per signal: `sig /= sqrt(mean_t(I²+Q²))` (`norm()` in `data_utilities.py`, applied after shuffle,
+    before split). ManyTx headline (`d006`) uses **non-equalized** data (`equalized=0`).
+  - Baseline CNN (`py/d006_ManyTx_ntx.py` `create_net`): input `(256,2)`→`Reshape(256,2,1)`→5 conv
+    blocks (filters **8/16/16/32/16**, kernels **(3,2)×3 then (3,1)×2**, `padding='same'`, ReLU) with
+    **only 4 max-pools** (2,1)/(2,1)/(2,2)/(2,1) — **the 5th conv is UNPOOLED** → Flatten (dim 256) →
+    Dense(100,relu)→Dense(80,relu)→**Dropout(0.5)**→Dense(N,softmax). **L2 λ=1e-4 on the three Dense
+    layers ONLY** (`kernel_regularizer=l2(1e-4)`; no conv is regularised — earlier "L2 on all
+    conv+dense" was wrong). No BatchNorm.
+  - Recipe: **Adam lr=5e-4**, categorical CE, **100 ep + early stop patience=5 on val_loss**, best
+    weights via `ModelCheckpoint(save_best_only)` + `load_weights` (there is no `restore_best_weights`
+    arg), **class_weight = max(count)/count** for imbalance, **batch=32** (Keras `fit` default), split
+    80/10/10. The paper reports **balanced** accuracy; the shipped `d006` metric plotted is Keras
+    **categorical_accuracy (unbalanced)** — we report `rank1_accuracy` (primary) **and**
+    `balanced_accuracy` (secondary) to cover both.
+  - **Cross-condition attribution (corrected)**: the headline **99%→<33% train-on-one-Rx** drop is a
+    **ManyRx** experiment (10 tx, 32 rx, **equalized**, single day; §VI.A, Fig. 10), NOT ManyTx. The
+    **ManyTx** (`d006`) run pools **all rx/days, non-equalized** for both train and test → ~**80%**
+    (10 tx) / ~**53%** (150 tx) (Fig. 14) — it is not a cross-receiver protocol. The **>99% same-day**
+    figure is a **ManySig** cross-day experiment (6 tx; §VI.B, Fig. 11). Our board's `cross_receiver`
+    / `cross_day` are stricter **grouped 80/10/10** conditions on ManyTx (whole rx/days held out),
+    distinct from these paper figures; the key result is the honest cross-receiver drop vs closed_set.
+- **POWDER RF Fingerprinting** — Reus-Muns, Jaisinghani, Sankhe, Chowdhury, "Trust in 5G Open RANs
+  through Machine Learning: RF Fingerprinting on the POWDER PAWR Platform," *IEEE GLOBECOM 2020*,
+  pp. 1–6 (GENESYS Lab, Northeastern; no arXiv). **The dataset used by BOTH FM SEI evaluators**
+  (WirelessJEPA ref [10], IQFM ref [34]) — not Gaskin/Kunz/Tractor. 4 WiFi base stations (Tx USRP
+  X310) → 1 fixed rx (USRP B210), SigMF, 5 MS/s @ 2.685 GHz, 2 days. Origin CNN: 512-sample slices,
+  same-day **99.98%** → cross-day **76.24%** (triplet cross-day 92.97%). Data: DRS Handle
+  `hdl.handle.net/2047/D20385049` → `neu:gm80mp276` (public, **no credentials**, but DRS anti-scrapes
+  → **manual download**; license unspecified). Our track: `closed_set` (day-pooled), 256-sample
+  frames, `from_scratch` `*_cnn` baseline; FM reference numbers are regime-separated (see §A.5).
+- **ORACLE** and the SOTA SEI baselines we add (`oracle_cnn`, `complex_cnn`, `resnet1d_sei`) are in
+  §C.2 with per-baseline reproduction audits.
 - **ORACLE** — Sankhe, Rajendran, Belgiovine, Chowdhury, Ioannidis, "ORACLE...," *IEEE INFOCOM 2019*.
   arXiv:1812.01124. DOI 10.1109/INFOCOM.2019.8737463. Data: genesys-lab.org/oracle.
   - 16 bit-identical USRP X310, single B210 rx, 802.11a, raw IQ **no equalization**, window **128** → `2×128`.
@@ -213,12 +243,19 @@ Primary sources & key facts:
 - **IQFM** — Mashaal, Abou-Zeid, arXiv:2506.06718v2 (2025). CC-BY 4.0, no weights. **ShuffleNetV2 0.5×,
   ~341k params**, contrastive SSL (SimCLR/InfoNCE), unit-max norm `iq/max(|iq|)`. OTA MIMO testbed.
   **OOD RML2016.10a: 38.1% @ 50 samples/class linear probe** (only IQFM RadioML figure).
-  **Does not evaluate WiSig SEI** — our 0.7734 SEI row is fabricated.
+  **SEI is on POWDER, not WiSig**: **96.05% @ 500 samples/class via LoRA fine-tune** (r=1, α=35,
+  ~84k trainable params; vs 96.64% fully supervised) on the 4-BS POWDER set (Reus-Muns GLOBECOM
+  2020). **Does not evaluate WiSig SEI** — our old 0.7734 WiSig row was fabricated (removed
+  `a689e86`). The POWDER LoRA 96.05% is a **different regime** from JEPA's linear-probe 83.4/90.5
+  and must be its own board column.
 - **WirelessJEPA** — arXiv:2601.20190 (2026). No weights. ShuffleNetV2-x0.5 (matched to IQFM), JEPA
   masked latent prediction, EMA teacher 0.996→1.0, no augmentation. Same OTA testbed as IQFM.
   **500-shot linear probe, OOD RML2016.10a (11 mods, −20…+18 dB): 74.78%** — the single most
   board-comparable public FM number, and it **beats our supervised MCLDNN (60.08%)**. Weights
-  unreleased → would require retraining the JEPA recipe.
+  unreleased → would require retraining the JEPA recipe. **SEI: POWDER 4-device, 500-shot linear
+  probe = 90.5%** (vs its reproduction of IQFM at 83.4%) — same-dataset, same-regime pair; our
+  POWDER track targets exactly this dataset (a `from_scratch` baseline is regime-separated from
+  these frozen-encoder probes).
 - **RIS-MAE** — Liu, Liu et al., arXiv:2508.00274 (2025). No weights. ViT-MAE encoder 12L d=768, 1D
   IQ patches of 8 (len 1024 → 128 patches), mask 75%. **2018.01a 24-cls, 1% labels, full SNR:
   48.41% OA / κ 0.4616** (beats MCLDNN 31.92 in that regime). Relevant only if 2018 unblocked.
@@ -345,34 +382,51 @@ Verdict: three real gap drivers — **4 vs 6 residual stacks**, **no AlphaDropou
 and critically **no unit-variance input normalization** (the paper's explicit preprocessing; its absence
 gives a systematic offset). BatchNorm partly compensates but not for the input scale.
 
-### B.4 WiSig-CNN — `rfbench/models/baselines/sei_cnn.py` — no board score (fabricated 0.9412 removed) vs paper ~53–99%
+### B.4 SEI baselines — reproduction audit (feat/sei-complete, 2026-07; verbatim-code checked)
 
-> **BOARD CLEANED (2026-06).** The 0.9412 placeholder row (synthetic fixture split, unearned
-> `verified` badge) was removed from the board in commit `a689e86`; the architecture mismatches
-> below still stand — `wisig_cnn` remains a compact 1-D CNN, not the paper's 2-D CNN.
+> **RESOLVED (2026-07).** The gap flagged here — `wisig_cnn` was a compact 1-D CNN, not the paper's
+> 2-D CNN — is closed by adding **`wisig_cnn_paper`** (the byte-faithful `create_net`), **`oracle_cnn`**
+> (Sankhe 2019 exact), and two SOTA-leaning baselines **`complex_cnn`** / **`resnet1d_sei`**, all wired
+> to a dedicated SEI training loop (`rfbench/training_sei.py`; the shared AMC `training.py` is
+> UNTOUCHED). The compact `wisig_cnn` (1-D) is retained as a documented board-seeding variant. No board
+> score yet — the WiSig cluster run is pending (this branch); rows below audit code-vs-source.
 
-| Aspect | Paper (Hanna 2022, `d006_ManyTx_ntx.py`) | Our code | Verdict |
+**`wisig_cnn_paper`** (`rfbench/models/baselines/wisig_cnn_paper.py`) vs `d006_ManyTx_ntx.py`
+(`master`, read verbatim):
+
+| Aspect | Paper (`create_net` / `data_utilities.py`) | Our `wisig_cnn_paper` | Verdict |
 |---|---|---|---|
-| Architecture | **2-D CNN** over `(256,2,1)`: 5 conv blocks 8/16/16/32/16, (3,2)/(3,1) kernels, (2,1)/(2,2) pools | **1-D CNN** over `(2,256)`: 3 conv blocks 32/64/128, k7, stride-2 pool + adaptive avg pool `sei_cnn.py:52,120-130` | **MISMATCH — architecture is different** (1-D compact vs paper 2-D) |
-| Head | Dense(100)→Dense(80)→Dropout(0.5)→Dense(N) | Linear(128)+ReLU→Linear(N), **no dropout** `sei_cnn.py:126-130` | MISMATCH |
-| Regularization | **L2 λ=1e-4** on all conv+dense | none | MISMATCH |
-| Input | first 256 IQ samples, **unit-average-power normalized**, non-equalized | `(256,2)` non-eq (loader `equalized=0` ✓), **NO unit-power normalization** `sei.py:345-380` | MISMATCH (layout ✓, normalization ✗ — gap driver) |
-| Optimizer / LR | **Adam lr=5e-4** | Adam lr=1e-3 (`training.py:205`) | MISMATCH |
-| Early stop | **100 ep, patience 5 on val_loss**, best weights | fixed epochs, no early stop | MISMATCH |
-| Class weighting | **class_weight** for imbalance | none | MISMATCH (matters in low-data ManyTx) |
-| Batch | 32 (Keras default) | 256 (`training.py`) | MISMATCH |
-| Metric | **balanced** test accuracy | plain `rank1_accuracy` | MISMATCH — cannot compare directly |
-| Split | 80/10/10 | 80/10/10 stratified-by-tx seed 42 | MATCH (ratios) |
-| Score provenance | ~53% (150 tx) / ~80% (10 tx) / >99% same-rx same-day | **0.9412 on a synthetic-fixture split**, badged `verified` | **MISMATCH — the 0.9412 is a placeholder, not a real WiSig run** |
+| Architecture | 2-D CNN `(256,2,1)`: conv 8/16/16/32/16, kernels (3,2)×3 then (3,1)×2, `same`, ReLU; **4 pools** (2,1)/(2,1)/(2,2)/(2,1), 5th conv unpooled; Flatten=256 | identical (`_SameConv2d`, `_CONV_SPEC`/`_POOL_SPEC`; flat-dim probe asserts 256) | **MATCH** |
+| Same-padding | Keras `same` (trailing pad on even kernels) | `_keras_same_pad` (asymmetric, trailing) | **MATCH** (byte-exact vs torch's leading-pad `'same'`) |
+| Head | Dense(100)→Dense(80)→Dropout(0.5)→Dense(N,softmax) | identical (softmax folded into CE/argmax) | **MATCH** |
+| Regularization | **L2 λ=1e-4 on the 3 Dense kernels ONLY** | `l2_penalty()` = Σ Dense kernels²; trainer adds `λ·penalty` to the loss (Keras-exact, not coupled weight_decay) | **MATCH** |
+| Input norm | per-signal unit-average-power `x/√mean_t(I²+Q²)` | `_unit_average_power_normalize` in-model (scale-invariant; tested) | **MATCH** |
+| Optimizer / recipe | Adam 5e-4, CE, class_weight=max/count, batch 32, 100 ep, patience 5 on **val_loss**, best-weights | `training_sei` reproduces all (weighted CE via `sum(w·CE)/N` = Keras semantics) | **MATCH** |
+| Metric | balanced (paper) / categorical (d006 code) | `rank1_accuracy` (primary) + `balanced_accuracy` (secondary) — covers both | **MATCH** |
+| Score | ~53% (150 tx) / ~80% (10 tx) pooled | **pending cluster run** (ManyTx.pkl present, splits committed) | UNKNOWN (not run) |
 
-Verdict: our `wisig_cnn` is a compact 1-D CNN and will **not** reproduce the paper's 2-D CNN numbers.
-To match WiSig, add a `wisig_cnn_paper` variant (exact 2-D stack, lr=5e-4, batch 32, class_weight,
-balanced accuracy, unit-power norm) and the **train-on-one-rx** protocol for the 99%→<33% cross-rx
-headline. The current 0.9412 result carries an unearned `verified` badge.
+**`oracle_cnn`** (`oracle_cnn.py`) vs Sankhe et al. INFOCOM 2019 (arXiv:1812.01124, Fig. 4): Conv
+50@(1×7) + Conv 50@(2×7) + FC 256 + FC 80 + softmax, input 2×128, dropout 0.5, L2 1e-4, Adam 1e-4,
+patience 10 → **MATCH** on arch/head/L2 (dropout 0.5 after each dense, verified). **Deviations
+(declared, ORACLE run deferred — no cluster data)**: (a) default per-signal unit-average-power
+`input_norm=True` (the paper's exact input scaling is under-specified; `input_norm=False` ablation
+provided); (b) the shared SEI loop early-stops on **val_loss** (WiSig recipe) whereas ORACLE's paper
+uses **val_acc, patience 10** — a minor recipe difference (both early-stop on convergence); the
+ORACLE **lr=1e-4** is set by `slurm/train_sei_arm.sh`. A `--monitor val_acc` option can be added when
+ORACLE data lands. ORACLE data not yet on the cluster → no run.
 
-There is also **no `oracle_cnn`** (paper 2-conv+2-FC, 2×128, lr=1e-4) and **no LoRa model** at all
-(paper needs a spectrogram front-end + CFO compensation). `wisig_cnn`'s length-agnostic pooling lets it
-run on ORACLE's 128-window, but it is the wrong architecture for both.
+**`complex_cnn`** (`complex_cnn.py`) vs `network_20_modrelu_short` (metehancekic/wireless-fingerprinting,
+MIT; Gopalakrishnan/Cekic/Madhow GLOBECOM 2019, arXiv:1905.09388): ComplexConv1d(100,k20,s10) → ModReLU
+→ ComplexConv1d(100,k10,s1) → ModReLU → |·| → GAP → Dense(100) → Dense(N), L2 1e-4, complex layers
+bias-free → **MATCH** (complex-multiply conv + Trabelsi modReLU reconstructed and unit-tested). We
+evaluate on our REAL WiSig/ORACLE splits (the repo's shipped data is simulated).
+
+**`resnet1d_sei`** (`resnet1d_sei.py`): ResNet-18-1D over raw IQ (Jian et al. IoT-Mag 2020 as the SEI
+motivation; He et al. 2016 residual design) — the depth/capacity axis the shallow WiSig/ORACLE CNNs
+don't cover. Standard residual net → reproducible; L2 via Adam weight_decay (no `l2_penalty` hook).
+
+Still open: **no LoRa model** (needs a spectrogram front-end + CFO compensation, C.2); the ORACLE
+cross-location and WiSig train-on-one-Rx reference protocols remain documented-only (C.2).
 
 ### B.5 LWM-Spectro — `rfbench/models/foundation/lwm_spectro.py` — our linear_probe 22.74% (no paper number)
 
@@ -411,9 +465,13 @@ RadioML reference."
    with wrong normalization (no log-scale, `[CLS]`=0) — and against a dataset the paper never
    evaluates. The 22.74% board row stands with that caveat.
 4. **SEI fabrications — REMOVED from the board** (`a689e86`): the 0.9412 fixture-split row and the
-   0.7734 iqfm row are gone. **STILL OPEN**: `wisig_cnn` remains the wrong architecture (1-D vs paper
-   2-D) with the wrong lr/batch and no unit-power norm — a real WiSig run needs `wisig_cnn_paper`
-   (C.2).
+   0.7734 iqfm row are gone. **Architecture gap — FIXED (2026-07, feat/sei-complete)**: added the
+   byte-faithful **`wisig_cnn_paper`** (exact 2-D CNN + WiSig recipe + unit-power norm + L2-on-Dense +
+   balanced accuracy), **`oracle_cnn`**, and SOTA-leaning **`complex_cnn`** / **`resnet1d_sei`**, all on
+   a dedicated **`training_sei.py`** loop (shared `training.py` UNTOUCHED). A **POWDER** track
+   (FM-comparable) is scaffolded but download-blocked (manual, DRS anti-scrape). **STILL OPEN**: the
+   WiSig board rows are pending the cluster run (this branch); ORACLE/POWDER data not yet local; no LoRa
+   model. See B.4 / C.2.
 
 ---
 
@@ -439,18 +497,34 @@ Papers/models/datasets to add (deduped).
   unblocked; keep peak ~95% vs full-range ~61% distinct on the board.
 
 ### C.2 SEI baselines, protocols & fixes
-- **`wisig_cnn_paper`** — the exact paper 2-D CNN over `(256,2,1)` (5 conv blocks 8/16/16/32/16, (3,2)/
-  (3,1) kernels, (2,1)/(2,2) pools, Dense 100/80/N, Dropout 0.5, L2 1e-4, Adam lr=5e-4, batch 32, 100 ep
-  + patience-5 early stop, **unit-power normalization**). Our compact 1-D `wisig_cnn` will not reproduce
-  the paper.
-- **WiSig cross-receiver train-on-one-rx protocol** — the 99%→<33% headline needs train-on-single-rx /
-  test-on-unseen-rx, distinct from our grouped 80/10/10 `cross_receiver`. Add as a reference protocol.
-- **WiSig balanced-accuracy metric** — the paper reports class-balanced test accuracy (equal per-class
-  resampling); add balanced rank-1 alongside `rank1_accuracy` for parity.
-- **`oracle_cnn`** — no ORACLE-specific model exists (only `wisig_cnn`). Add 2 conv (50@1×7, 50@2×7) +
-  FC(256) + FC(80) + softmax, input `2×128` raw IQ, Adam lr=1e-4, dropout 0.5, L2 1e-4, patience-10.
-- **ORACLE cross-location track** — the 98.6%→87.13% is a different-location split (ORACLE has one rx, so
-  our cross_receiver/cross_day don't apply). Add as an ORACLE reference track.
+- **✅ DONE `wisig_cnn_paper`** — the exact paper 2-D CNN over `(256,2,1)` (conv 8/16/16/32/16, (3,2)×3
+  then (3,1)×2 kernels, **4** pools, 5th conv unpooled, Dense 100/80/N, Dropout 0.5, **L2 1e-4 on the
+  Dense layers only**, Adam lr=5e-4, batch 32, 100 ep + patience-5 early stop on **val_loss**,
+  **unit-average-power norm**). `wisig_cnn_paper.py` + `training_sei.py`. `wisig_cnn` (1-D) retained as a
+  compact variant.
+- **✅ DONE WiSig balanced-accuracy metric** — `balanced_accuracy` (mean per-class recall) added as the
+  SEI closed-set SECONDARY metric alongside `rank1_accuracy` (`tasks/sei/metrics.py`).
+- **✅ DONE `oracle_cnn`** — 2 conv (50@1×7, 50@2×7) + FC(256) + FC(80) + softmax, input `2×128` raw IQ,
+  Adam lr=1e-4, dropout 0.5, L2 1e-4, patience-10 (`oracle_cnn.py`). *(ORACLE data not yet on the
+  cluster → no board row yet.)*
+- **✅ DONE SOTA baselines** — `complex_cnn` (Gopalakrishnan/Cekic/Madhow GLOBECOM 2019, arXiv:1905.09388;
+  faithful `network_20_modrelu_short`: complex conv + Trabelsi modReLU, MIT repo
+  metehancekic/wireless-fingerprinting) — the biggest inductive-bias contrast (phase-coupled) to the
+  real-valued CNNs; and `resnet1d_sei` (ResNet-18-1D; Jian et al. IoT-Mag 2020, He et al. CVPR 2016) —
+  the depth axis. Both raw-IQ, reproducible, wrapped + registered + CLI-reachable. *(Screened but
+  DEFERRED: Al-Shawabka INFOCOM 2020 — a channel study, not a packaged model; TripletDANN / SCL
+  contrastive — no runnable public code on WiSig/ORACLE yet.)*
+- **✅ DONE POWDER track** — the 4-BS WiFi set both FM SEI evaluators use (Reus-Muns GLOBECOM 2020);
+  `sei_powder.py` download (manual, DRS anti-bot) + `prepare` (indices/checksums) + closed_set track +
+  loader wired. **Blocked on the manual download** (403 anti-scrape); FM numbers are regime-separated
+  (linear-probe 90.5/83.4 vs LoRA 96.05 — never one column). See §A.5, EVALUATION_PROTOCOL §SEI.
+- **STILL OPEN — WiSig cross-receiver train-on-one-rx reference protocol** — the paper's 99%→<33% is a
+  **ManyRx / equalized / single-day** train-on-single-rx experiment, distinct from our stricter grouped
+  80/10/10 `cross_receiver` on ManyTx. Documented; not a board track (our grouped drop is the board
+  result).
+- **STILL OPEN — ORACLE cross-location track** — the 98.6%→87.13% is a different-location split (ORACLE
+  has one rx, so our cross_receiver/cross_day don't apply). Add as an ORACLE reference track once the
+  data is on the cluster.
 - **`lora_spectrogram_cnn`** — no LoRa model exists; the paper's best is a spectrogram (102×63) CNN (3
   conv 8/16/32 3×3 + BN + 1 FC), NOT raw-IQ. Add with an STFT (win 256/hop 128) front-end.
 - **CFO-compensation preprocessing for LoRa** — required to move the spectrogram-CNN ~83.5%→~95%+.
@@ -551,8 +625,23 @@ Papers/models/datasets to add (deduped).
   pyproject.toml/README_model.md; no LICENSE file in repo).
 - LWM (base): Alikhani, Charan, Alkhateeb, 2024, arXiv:2411.08872.
 - WavesFM: 2025, arXiv:2504.14100 (no public weights `(?)`).
-- IQFM: Mashaal, Abou-Zeid, 2025, arXiv:2506.06718v2.
-- WirelessJEPA: 2026, arXiv:2601.20190.
+- IQFM: Mashaal, Abou-Zeid, 2025, arXiv:2506.06718v2. SEI on POWDER (LoRA 96.05% @ 500/class).
+- WirelessJEPA: 2026, arXiv:2601.20190. SEI on POWDER (linear probe 90.5%; IQFM 83.4% reproduced).
+- WiSig: Hanna, Karunaratne, Cabric, *IEEE Access* 10:22808–22818, 2022, **DOI
+  10.1109/ACCESS.2022.3154790**, arXiv:2112.15363 — code github.com/WiSig-dataset/wisig-examples
+  (`master`, BSD-3); dataset CC BY-NC-SA 4.0.
+- POWDER RF Fingerprinting: Reus-Muns, Jaisinghani, Sankhe, Chowdhury, "Trust in 5G Open RANs through
+  ML: RF Fingerprinting on the POWDER PAWR Platform," *IEEE GLOBECOM 2020*, pp. 1–6 (GENESYS Lab,
+  Northeastern; no arXiv). Data: DRS `hdl.handle.net/2047/D20385049` (`neu:gm80mp276`), license
+  unspecified.
+- ORACLE: Sankhe, Rajendran, Belgiovine, Chowdhury, Ioannidis, "ORACLE...," *IEEE INFOCOM 2019*,
+  arXiv:1812.01124, DOI 10.1109/INFOCOM.2019.8737463 — 98.60% same-loc / 87.13% cross-loc (Fig. 6).
+- Complex-valued CNN (SEI SOTA): Gopalakrishnan, Cekic, Madhow, "Robust Wireless Fingerprinting via
+  Complex-Valued Neural Networks," *IEEE GLOBECOM 2019*, arXiv:1905.09388 (+ Asilomar 2021,
+  arXiv:2002.10791) — code github.com/metehancekic/wireless-fingerprinting (MIT); modReLU after
+  Trabelsi et al., "Deep Complex Networks," ICLR 2018.
+- ResNet-1D (SEI): Jian et al., "Deep Learning for RF Fingerprinting: A Massive Experimental Study,"
+  *IEEE IoT Magazine* 2020; residual design He et al., "Deep Residual Learning...," *CVPR 2016*.
 - RIS-MAE: Liu, Liu et al., 2025, arXiv:2508.00274.
 - LatentWave: 2026, arXiv:2606.06373.
 - 6G-MSM: Aboulfotouh, Eshaghbeigi, Abou-Zeid, 2024, arXiv:2411.09996.

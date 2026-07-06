@@ -61,6 +61,15 @@ class _InMemorySplit:
         """Return the number of samples in the split."""
         return len(self._samples)
 
+    def __getitem__(self, index: int) -> Batch:
+        """Return the ``index``-th per-sample batch (map-style access for a ``DataLoader``).
+
+        Needed so the SEI training loop (:mod:`rfbench.training_sei`) can wrap this split in a
+        ``torch.utils.data.DataLoader`` (which requires ``__getitem__``); the eval loop only
+        iterates, but map-style access is the more general contract.
+        """
+        return self._samples[index]
+
     def __iter__(self) -> Iterator[Batch]:
         """Iterate the per-sample batches in order (deterministic)."""
         return iter(self._samples)
@@ -157,7 +166,7 @@ class SeiDataset(Dataset):
         exactly like the AMC on-disk adapter.
         """
         indices = self._read_split_indices(split)
-        iq_all, records = _load_wisig_arrays(self.name)
+        iq_all, records = _load_sei_arrays(self.name)
         tx_ids = sorted({_tx_key(rec[0]) for rec in records})
         class_of = {tx: i for i, tx in enumerate(tx_ids)}
         samples: list[Batch] = [
@@ -209,6 +218,77 @@ def _tx_key(tx_id: object) -> tuple[int, str]:
     if isinstance(tx_id, str):
         return (0, tx_id)
     return (1, f"{tx_id!r}")
+
+
+def _load_sei_arrays(
+    name: str,
+) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
+    """Dispatch to the per-dataset flat ``(iq_rows, records)`` loader (WiSig / POWDER).
+
+    Each loader returns per-signal ``(window, 2)`` IQ rows + ``(tx, rx, day)`` records in the
+    EXACT order the matching :mod:`rfbench.data.prepare.sei` extractor used, so the committed
+    split indices line up element-for-element. Cluster-only (needs the real data + numpy).
+    """
+    if name == "wisig":
+        return _load_wisig_arrays(name)
+    if name == "powder":
+        return _load_powder_arrays(name)
+    raise NotImplementedError(
+        f"on-disk IQ loading is wired for WiSig and POWDER only; {name!r} has no array loader."
+    )
+
+
+def _load_powder_arrays(
+    name: str,
+) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
+    """Load flat ``(iq_rows, records)`` from the cached POWDER SigMF captures (lazy numpy).
+
+    Walks ``$RFBENCH_CACHE/powder/*.sigmf-data`` in sorted file order (the SAME order
+    :func:`rfbench.data.prepare.sei.load_powder_records` uses), reading each recording's
+    interleaved I/Q, slicing it into non-overlapping ``_POWDER_WINDOW``-sample frames and emitting
+    one ``(window, 2)`` row + one ``(device_id, None, day_id)`` record per frame -- so ``iq[k]``
+    corresponds to ``records[k]`` and both align with the committed split indices.
+    """
+    import json  # stdlib
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Loading SEI IQ needs numpy; install it with `pip install rfbench[tasks]`."
+        ) from exc
+
+    from rfbench.data.prepare._common import resolve_cache_dir
+    from rfbench.data.prepare.sei import _powder_ids, _sigmf_np_dtype
+
+    cache_dir = resolve_cache_dir(None)
+    root = cache_dir / name
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"POWDER not found at {root}; place the SigMF captures there first "
+            "(see rfbench.data.download.sei_powder for the manual-download procedure)."
+        )
+    window = _POWDER_WINDOW
+    iq: list[Any] = []
+    records: list[SeiRecord] = []
+    for data_path in sorted(root.rglob("*.sigmf-data")):
+        device_id, day_id = _powder_ids(data_path.name)
+        meta_path = data_path.with_suffix(".sigmf-meta")
+        dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
+        raw = np.fromfile(data_path, dtype=dtype).astype(np.float32)
+        n_complex = int(raw.size // 2)
+        n_frames = n_complex // window
+        if n_frames == 0:
+            continue
+        frames = raw[: n_frames * window * 2].reshape(n_frames, window, 2)
+        for row in frames:  # (window, 2) per frame
+            iq.append(row)
+            records.append((device_id, None, day_id))
+    return iq, records
+
+
+#: POWDER slice length (samples per frame); the FM convention (256), fed to the (window, 2) models.
+_POWDER_WINDOW = 256
 
 
 def _load_wisig_arrays(

@@ -51,8 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed — BIBLIOGRAPHY.md refreshed to the current board (post-recipe-fix)
 
 - **"Our score" values updated** to the live `leaderboard/results/**`: MCLDNN 60.08 → **61.71**
-  (now above the paper's 61.01), ResNet 56.06 → **56.61**; CLDNN keeps the old-recipe 58.76 with an
-  explicit ⚠ (collapses to chance under the final recipe, under investigation). Header convention
+  (now above the paper's 61.01), ResNet 56.06 → **56.61**; CLDNN → **58.05** (final recipe,
+  paper-faithful arch — the collapse noted at the time of this refresh was since root-caused and
+  fixed, see the CLDNN entry above). Header convention
   block now describes the **fixed 2026-06 recipe** (val-accuracy checkpoint, ReduceLROnPlateau,
   early stop, grad clip 5.0) instead of the old fixed-epoch recipe.
 - **Part B audit re-scoped as historical**: banners added to B.1–B.4 stating which mismatches were

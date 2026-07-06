@@ -30,7 +30,7 @@ figures (~90% @ +18 dB) are a different metric and are NOT used here.
 | Model | Reported overall (source) | Independent repro | Our score | Reproduction status |
 |---|---|---|---|---|
 | **MCLDNN** (Xu 2020) | **61.01%** (TCN-GRU T3) | 61.52% (TLDNN T2) | **61.71%** | Reproduced, **+0.7 pt** (final recipe, 2026-06) |
-| **CLDNN** (West & O'Shea 2017) | **60.56%** (TCN-GRU T3) / ~61% (orig. text) | — | **58.76%** ⚠ | Old-recipe figure retained; **collapses to chance (0.0909) under the final recipe — under investigation** (see CHANGELOG) |
+| **CLDNN** (West & O'Shea 2017) | **60.56%** (TCN-GRU T3) / ~61% (orig. text) | — | **58.05%** | Reproduced, −2.5 pt (final recipe, 2026-07; paper-faithful 3-LSTM+skip arch + per-sample input norm — the collapse was an input-scale init fragility, fixed) |
 | **ResNet** (O'Shea 2018) | **57.32%** (TLDNN T2) / 56.38% (TCN-GRU) | — | **56.61%** | Reproduced, −0.7 pt (final recipe; 3-stack len-128 adaptation) |
 | VT-CNN2 / CNN2 (O'Shea 2016) | ~56.98% (TCN-GRU T3) | — | not run | Missing |
 | LSTM2 (Rajendran 2018) | 61.02% (TLDNN T2) / 58.49% (TCN-GRU) | — | not run | Missing |
@@ -43,9 +43,11 @@ figures (~90% @ +18 dB) are a different metric and are NOT used here.
 
 Honest ceiling on 2016.10a is ~61–63% (11 classes). The 2026-06 recipe fix (val-accuracy checkpoint +
 LR schedule + early stopping — Part B item 1, now addressed) closed the gap: MCLDNN now sits **above**
-its paper target (61.71 vs 61.01) and ResNet within 0.7 pt. CLDNN is the outlier: it trained fine under
-the old 50-epoch recipe (58.76%) but collapses to chance under the final 150-epoch recipe (gradient
-clipping ruled out NaN/explosion; per-epoch diagnostic pending).
+its paper target (61.71 vs 61.01) and ResNet within 0.7 pt. CLDNN's chance-collapse under the final
+recipe was root-caused (2026-07) to an input-scale init fragility — RadioML's ~1e-2-RMS IQ fed to a
+no-norm/no-BN 3-LSTM stack — and fixed by per-sample unit-variance input normalization (the ResNet
+transform); the retrained 58.05% is the first honest figure for the paper-faithful arch (the prior
+58.76% was the superseded 2-LSTM/no-skip arch).
 
 Primary papers:
 - **MCLDNN** — Xu, Luo, Chen, Luo, Wu, "A Spatiotemporal Multi-Channel Learning Framework for Automatic
@@ -290,12 +292,13 @@ Verdict: architecture close but the head lost its two dropout layers and its sec
 the biggest levers for 60.08→61 are the **epoch/early-stopping budget** and the **LR schedule**, then
 the **dropout-regularized 2-dense head**.
 
-### B.2 CLDNN — `rfbench/models/baselines/cldnn.py` — our 58.76% (old recipe) vs paper 60.56%
+### B.2 CLDNN — `rfbench/models/baselines/cldnn.py` — our **58.05%** vs paper 60.56%
 
-> **ARCH FIXED, SCORE REGRESSED (2026-06).** The raw-waveform skip and 3rd LSTM below were added in
-> the paper-conformance pass, but the fixed model **collapses to chance (0.0909) under the final
-> 150-epoch recipe** (grad clipping ruled out NaN; per-epoch diagnostic pending — see CHANGELOG).
-> The board retains the old-recipe 58.76%. Table kept as the historical audit record.
+> **RESOLVED (2026-07).** The raw-waveform skip and 3rd LSTM below were added in the 2026-06
+> paper-conformance pass; the resulting chance-collapse was root-caused to an input-scale init
+> fragility (tiny ~1e-2-RMS IQ into a no-norm/no-BN deep LSTM) and fixed with per-sample
+> unit-variance input normalization (`input_norm=True` default). Retrained under the final recipe:
+> **58.05%** on the board. Table kept as the historical audit record.
 
 | Aspect | Paper (West & O'Shea 2017) | Our code | Verdict |
 |---|---|---|---|
@@ -398,8 +401,8 @@ RadioML reference."
 2. **Architecture fidelity — FIXED** (paper-conformance pass): CLDNN got its **raw-waveform skip +
    3rd LSTM**, ResNet its **unit-variance input norm + AlphaDropout + 2-dense head** (3 stacks as the
    len-128 adaptation), MCLDNN its **concat fusion (100 filters) + dropout-regularized 2-dense head**.
-   **Open regression**: paper-exact CLDNN collapses to chance under the final recipe (board keeps the
-   old-recipe 58.76%; diagnostic pending).
+   The paper-exact CLDNN's chance-collapse was root-caused and fixed (2026-07, per-sample input
+   normalization); board score **58.05%**.
 3. **LWM-Spectro linear_probe — STILL OPEN**: nearest-centroid (not logreg) on an **approximate STFT**
    with wrong normalization (no log-scale, `[CLS]`=0) — and against a dataset the paper never
    evaluates. The 22.74% board row stands with that caveat.

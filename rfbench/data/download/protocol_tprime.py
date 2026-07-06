@@ -71,15 +71,21 @@ def download_tprime_wifi4(
     source_url: str | None = None,
     cache: str | Path | None = None,
     force: bool = False,
+    manual_archive: str | Path | None = None,
 ) -> Path:
     """Fetch + extract the T-PRIME WiFi archive into ``$RFBENCH_CACHE/tprime_wifi4/``.
 
-    The archive is fetched from ``source_url`` (a direct DRS artifact URL) if given, else from
-    :data:`_ARCHIVE_URL`. Because the DRS item link is item-specific and not embedded here, a
-    ``source_url`` (or a cluster-side edit of :data:`_ARCHIVE_URL`) is REQUIRED: a clear error
-    points at :data:`DRS_COLLECTION_PAGE` otherwise. If the destination already holds extracted
-    files and ``force`` is ``False`` the download is skipped (idempotent). Returns the
-    extraction directory.
+    The archive is fetched from ``source_url`` if given, else from :data:`_ARCHIVE_URL` (the
+    DS 3.0 DRS item, confirmed above). If the destination already holds extracted files and
+    ``force`` is ``False`` the download is skipped (idempotent). Returns the extraction
+    directory.
+
+    The DRS host has served an incomplete TLS certificate chain (missing intermediate) in the
+    past, which a strict client correctly refuses; downgrading verification here would be a
+    silent, code-level TLS weakening applied to every future run. Instead, pass
+    ``manual_archive=`` with the path to an archive fetched out-of-band (browser, or a
+    deliberate one-off ``curl``/pinned-CA command run by a human) -- it is extracted with the
+    same PEP 706 path-traversal guard as the network path, with no code-level trust downgrade.
 
     Heavy deps are imported lazily; NEVER called in unit tests.
     """
@@ -88,12 +94,23 @@ def download_tprime_wifi4(
     if not force and _has_extracted_files(dest_dir):
         return dest_dir
 
+    if manual_archive is not None:
+        archive = Path(manual_archive)
+        if not archive.is_file():
+            raise FileNotFoundError(f"manual_archive {archive} does not exist")
+        _extract_archive(archive, dest_dir)
+        if not _has_extracted_files(dest_dir):
+            raise FileNotFoundError(
+                f"extracted {archive} but no files landed under {dest_dir}; check the archive."
+            )
+        return dest_dir
+
     url = source_url or _ARCHIVE_URL
     if not url:
         raise ValueError(
-            "no T-PRIME download URL: the DRS item link is item-specific and not embedded. "
-            f"Find the ~66 GB artifact on {DRS_COLLECTION_PAGE} and pass its direct URL as "
-            "source_url= (or set _ARCHIVE_URL on the cluster)."
+            f"no T-PRIME download URL; find the DS 3.0 artifact on {DRS_COLLECTION_PAGE} and "
+            "pass its direct URL as source_url=, or fetch it out-of-band and pass "
+            "manual_archive=<path> (see this function's docstring)."
         )
 
     try:
@@ -143,7 +160,9 @@ def _extract_archive(archive: Path, dest_dir: Path) -> None:
             zf.extractall(dest_dir)  # noqa: S202 - trusted dataset archive
     elif tarfile.is_tarfile(archive):
         with tarfile.open(archive) as tf:
-            tf.extractall(dest_dir)  # noqa: S202 - trusted dataset archive
+            # PEP 706: reject path-traversal/symlink members even for a "trusted"
+            # archive (defense-in-depth if the transfer channel is ever downgraded).
+            tf.extractall(dest_dir, filter=getattr(tarfile, "data_filter", None))
     # else: the download was already the raw file; nothing to do.
 
 

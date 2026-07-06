@@ -530,7 +530,12 @@ def _cmd_data_download(args: argparse.Namespace) -> int:
         "are lazy; real runs need rfbench[data]/rfbench[detection] on the cluster)."
     )
     try:
-        path = _download_dispatch(dataset, cache=args.cache, source_url=args.source_url)
+        path = _download_dispatch(
+            dataset,
+            cache=args.cache,
+            source_url=args.source_url,
+            manual_archive=args.manual_archive,
+        )
     except (ValueError, FileNotFoundError, RuntimeError, NotImplementedError) as exc:
         print(f"error: [data download] {dataset}: {exc}", file=sys.stderr)
         return EXIT_FAILURE
@@ -538,7 +543,9 @@ def _cmd_data_download(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _download_dispatch(dataset: str, *, cache: str, source_url: str | None) -> Path:
+def _download_dispatch(
+    dataset: str, *, cache: str, source_url: str | None, manual_archive: str | None = None
+) -> Path:
     """Dispatch a dataset id to its (lazy) download/generation function (cluster-only)."""
     if dataset in ("radioml_2016_10a", "radioml_2018_01a"):
         from rfbench.data.download.amc_radioml import download_radioml
@@ -575,7 +582,9 @@ def _download_dispatch(dataset: str, *, cache: str, source_url: str | None) -> P
     if dataset == "tprime_wifi4":
         from rfbench.data.download.protocol_tprime import download_tprime_wifi4
 
-        return download_tprime_wifi4(source_url=source_url, cache=cache)
+        return download_tprime_wifi4(
+            source_url=source_url, cache=cache, manual_archive=manual_archive
+        )
     raise ValueError(
         f"no download function wired for {dataset!r} yet "
         "(known: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, lora, raddet, "
@@ -1218,6 +1227,17 @@ def _build_data_parser(
         default=None,
         metavar="URL",
         help="EULA-gated archive URL for datasets whose link is not embedded (RadioML/WiSig).",
+    )
+    download.add_argument(
+        "--manual-archive",
+        dest="manual_archive",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to an already-fetched archive to extract instead of downloading (tprime_wifi4 "
+            "only) -- for hosts whose TLS chain a strict client correctly refuses; fetch the "
+            "archive out-of-band and point here rather than weakening verification in code."
+        ),
     )
     download.set_defaults(func=_cmd_data_download)
 

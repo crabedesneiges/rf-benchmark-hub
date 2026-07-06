@@ -103,7 +103,9 @@ def _extract_archive(archive: Path, dest_dir: Path) -> None:
             zf.extractall(dest_dir)  # noqa: S202 - trusted dataset archive
     elif tarfile.is_tarfile(archive):
         with tarfile.open(archive) as tf:
-            tf.extractall(dest_dir)  # noqa: S202 - trusted dataset archive
+            # PEP 706: reject path-traversal/symlink members even for a "trusted"
+            # archive (defense-in-depth if the transfer channel is ever downgraded).
+            tf.extractall(dest_dir, filter=getattr(tarfile, "data_filter", None))
     # else: the download was already the raw file; nothing to do.
 
 

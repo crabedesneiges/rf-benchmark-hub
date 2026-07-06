@@ -1058,8 +1058,10 @@ def _render_group_table(
         for i, row in enumerate(ordered, start=1)
     )
     return (
+        '<div class="table-scroll">'
         f'<table data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
         f"{header}<tbody>\n{body_rows}\n</tbody></table>"
+        "</div>"
     )
 
 
@@ -1975,7 +1977,8 @@ main { max-width: 1080px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
   border-bottom: 1px solid var(--line); font-weight: 600;
 }
 
-table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { border-collapse: collapse; width: 100%; min-width: 480px; font-size: 0.9rem; }
 th, td {
   border-bottom: 1px solid var(--line); padding: 0.5rem 0.7rem; text-align: left;
   vertical-align: middle;

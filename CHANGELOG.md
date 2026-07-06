@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — board/manifest/doc integrity audit (post-redesign)
+
+Self-review pass after the (solo, unreviewed) site redesign — the intended multi-agent
+adversarial audit could not run (subagents blocked on the account's monthly spend limit), so this
+was done in the main loop and is flagged as such.
+
+- **`interference_id` promoted `wip` → `implemented`** in `leaderboard/tasks.json`: it has a real
+  board result (`interf_cnn` 0.9987) but was still declared work-in-progress, so the live site
+  mislabeled a working leaderboard as WIP. Blurb/description updated (dropped "baseline pending
+  cluster training"). Homepage "Implemented" stat now reads 4.
+- **New honesty guard** `tests/test_committed_manifest_status_matches_committed_results`: any task
+  with a committed `result.json` must be declared `implemented` (would have failed on the bug
+  above; prevents the staleness class from recurring).
+- **`docs/NEXT_STEPS.md` rewritten** to the real 2026-07-06 state: P0 marked done (ResNet fixed,
+  board cleaned, recipe done, CLDNN collapse resolved 0.5805), `interference_id` 0.9987 landed,
+  SEI/FM flagged in-flight, site redesign + Pages-deploy-flaky noted, roadmap re-prioritised.
+- **`README.md` badge links fixed**: CI badge pointed at the stale template org
+  (`rf-benchmark-hub/rf-benchmark-hub` → `crabedesneiges/rf-benchmark-hub`); the Leaderboard badge
+  link was missing its `https://` scheme (rendered as a broken relative link on GitHub).
+- Verified (no change needed): all 4 committed result files still schema-valid; HTML tag-balance
+  clean on all 15 generated pages; the homepage filter JS reads attributes the HTML actually
+  renders (`data-status`/`data-filter` sets match); `docs/BIBLIOGRAPHY.md` "Our score" already
+  current (61.71/58.05/56.61); no stale "no runtime JS/CDN" doc claims remain.
+
 ### Fixed — LWM-Spectro FM wrapper made faithful to the real weights (WP-62 verification)
 
 Ground-truthed the committed LWM-Spectro integration against the real HF repo `wi-lab/lwm-spectro`

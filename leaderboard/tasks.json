@@ -132,11 +132,11 @@
     {
       "id": "interference_id",
       "title": "Interference identification",
-      "status": "wip",
+      "status": "implemented",
       "priority": "P2",
       "scope": "terrestrial_iq",
-      "blurb": "Multi-class jamming / interference recognition (GNSS jamming 6-class IQ). Task added; baseline pending cluster training.",
-      "description": "Recognize the type of interference or jamming affecting a received signal as a multi-class label (e.g. GNSS jamming conditions). It matters for GNSS resilience and jammer characterization. Task added; baseline pending cluster training.",
+      "blurb": "Multi-class jamming / interference recognition (GNSS jamming 6-class IQ). Baseline interf_cnn on the board (0.9987 accuracy).",
+      "description": "Recognize the type of interference or jamming affecting a received signal as a multi-class label (e.g. GNSS jamming conditions). It matters for GNSS resilience and jammer characterization. The compact interf_cnn 1-D IQ baseline is on the board.",
       "dataset": {
         "name": "interf-gnss6",
         "source": "Swinney & Woods 2021, Zenodo record 4629685 (DOI 10.5281/zenodo.4629685); archive Raw_IQ_Dataset.zip ~1.9 GB",

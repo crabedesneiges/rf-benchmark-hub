@@ -4,9 +4,9 @@
 One frozen, canonical protocol per task; specialised baselines and fine-tuned foundation
 models compared under the *same* rules, on the *same* splits, with the *same* metrics.
 
-[![CI](https://github.com/rf-benchmark-hub/rf-benchmark-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/rf-benchmark-hub/rf-benchmark-hub/actions/workflows/ci.yml)
+[![CI](https://github.com/crabedesneiges/rf-benchmark-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/crabedesneiges/rf-benchmark-hub/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Leaderboard](https://img.shields.io/badge/leaderboard-GitHub_Pages-brightgreen.svg)](crabedesneiges.github.io/rf-benchmark-hub/)
+[![Leaderboard](https://img.shields.io/badge/leaderboard-GitHub_Pages-brightgreen.svg)](https://crabedesneiges.github.io/rf-benchmark-hub/)
 
 Scope is **terrestrial RF only** — automatic modulation classification (AMC),
 specific emitter identification / RF fingerprinting (SEI), wideband detection, and

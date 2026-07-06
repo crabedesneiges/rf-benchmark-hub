@@ -631,6 +631,29 @@ def test_committed_manifest_declares_every_canonical_task() -> None:
         assert entry.title
 
 
+def test_committed_manifest_status_matches_committed_results() -> None:
+    """Honesty guard: any task with a REAL committed result must be declared 'implemented'.
+
+    Catches the class of staleness where a task lands a baseline on the board but its manifest
+    status is left at 'wip'/'planned' (so the live site mislabels a working leaderboard as
+    work-in-progress). A task with zero committed results may be any status; a task WITH results
+    must not be wip/planned.
+    """
+    declared = generate.load_manifest()
+    results_dir = REPO_ROOT / "leaderboard" / "results"
+    tasks_with_results = {
+        p.parent.name for p in results_dir.rglob("*.json") if p.name != ".gitkeep"
+    }
+    for task_id in tasks_with_results:
+        entry = declared.get(task_id)
+        if entry is None:  # undeclared-but-has-results is allowed (manifest is additive)
+            continue
+        assert entry.status == "implemented", (
+            f"{task_id} has committed results on the board but is declared "
+            f"status={entry.status!r}; a task with a real baseline must be 'implemented'."
+        )
+
+
 def test_index_lists_every_declared_task(tmp_path: Path) -> None:
     """Every DECLARED task appears on the index -- implemented ones AND WIP ones.
 

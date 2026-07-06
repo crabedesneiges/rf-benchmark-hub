@@ -29,10 +29,12 @@ the **reference papers** announce, so our reproductions can be compared apples-t
 | **TorchSig YOLO** | ✅ same | spectrogram | — | detection | only public detection checkpoint found |
 | **WavesFM** | ⚠️ URL unconfirmed | raw IQ (2,C,T) | 256 | AMC+SEI+detect | best coverage *if* weights obtainable |
 | **IQFM** (Mashaal, Abou-Zeid) | ✗ paper-only (CC-BY 4.0) | raw IQ (2,L), unit-max | 1024 | AMC | wrapper `iqfm-base` implemented; ShuffleNetV2-x0.5 1-D (335k params), SimCLR; retrain in-repo (NOT the paper's OOD 38.1%) |
+| **WirelessJEPA** (arXiv:2601.20190) | ✗ paper-only | raw IQ (2,L), unit-max | 1024 | AMC | wrapper `wireless-jepa` implemented; SHARES IQFM's ShuffleNetV2-x0.5 backbone (matched); JEPA masked-latent + EMA teacher, no aug; retrain in-repo (NOT the paper's OOD 74.78%) |
 
-Code/paper-only (no public weights): RIS-MAE, LatentWave, 6G-MSM, WirelessJEPA, most SSL-SEI.
-IQFM (above): weights unpublished, but its recipe is now a board wrapper — we pre-train our own
-ShuffleNetV2-x0.5 backbone with SimCLR on RadioML-train (`scripts/pretrain/iqfm_simclr.py`).
+Code/paper-only (no public weights): RIS-MAE, LatentWave, 6G-MSM, most SSL-SEI.
+IQFM + WirelessJEPA (above): weights unpublished, but their recipes are now board wrappers sharing
+one `shufflenet1d.py` backbone — we pre-train our own with SimCLR (`scripts/pretrain/iqfm_simclr.py`)
+and JEPA (`scripts/pretrain/wireless_jepa.py`) on RadioML-train (in-distribution, not the papers' OOD).
 
 ### Datasets (real, on the cluster)
 | Dataset | Task | Status | Split indices |

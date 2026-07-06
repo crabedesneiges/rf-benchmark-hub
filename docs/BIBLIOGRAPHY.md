@@ -178,7 +178,7 @@ Consolidated board-comparability table (AMC / RadioML only):
 
 | Model | Weights | RadioML setting | Protocol | Reported | Our score | Board-comparable? |
 |---|---|---|---|---|---|---|
-| **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | not run | ✅ beats our MCLDNN 61.71 |
+| **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | wrapper implemented (`wireless-jepa`), in-repo retrain pending — NOT the paper's OOD 74.78% | ✅ beats our MCLDNN 61.71 |
 | **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | wrapper implemented (`iqfm-base`), in-repo retrain pending — NOT the paper's OOD 38.1% | ✅ metric; ✗ data regime |
 | **RIS-MAE** | ✗ (retrain) | 2018.01a, 24-cls | fine-tune, 1% labels | **48.41%** | not run | ✅ if 2018 unblocked |
 | **LWM-Spectro** | ✅ HF (MIT declared, no LICENSE file) | **none** (DeepMIMO 5-cls) | few-shot F1, real linear/FT head | 47–95 F1 (own data) | **no row** (OOD; removed) | ❌ no RadioML in paper — own task reproduced (B.5) |
@@ -226,6 +226,14 @@ Primary sources & key facts:
   **500-shot linear probe, OOD RML2016.10a (11 mods, −20…+18 dB): 74.78%** — the single most
   board-comparable public FM number, and it **beats our supervised MCLDNN (60.08%)**. Weights
   unreleased → would require retraining the JEPA recipe.
+  **Status (2026-07): board wrapper `wireless-jepa` IMPLEMENTED**
+  (`rfbench/models/foundation/wireless_jepa.py`), reusing IQFM's shared 1-D ShuffleNetV2-x0.5
+  backbone `shufflenet1d.py` (the "matched to IQFM" contract — same `build_shufflenet1d`, 335,096
+  params). Weights unpublished → we (re-)pre-train the JEPA recipe IN-REPO (masked-latent + EMA
+  teacher 0.996→1.0, no augmentation) on RadioML-train delabelised
+  (`scripts/pretrain/wireless_jepa.py`, `slurm/pretrain_wireless_jepa_arm.sh`), which is
+  **in-distribution, NOT the paper's OOD OTA setting** — any resulting score is ours and must never
+  be presented as 74.78%. No `result.json` committed until a real cluster run lands.
 - **RIS-MAE** — Liu, Liu et al., arXiv:2508.00274 (2025). No weights. ViT-MAE encoder 12L d=768, 1D
   IQ patches of 8 (len 1024 → 128 patches), mask 75%. **2018.01a 24-cls, 1% labels, full SNR:
   48.41% OA / κ 0.4616** (beats MCLDNN 31.92 in that regime). Relevant only if 2018 unblocked.
@@ -514,6 +522,9 @@ Papers/models/datasets to add (deduped).
 - **WirelessJEPA** (arXiv:2601.20190) — ADD as the top FM row: 74.78% linear-probe on RML2016.10a full-SNR
   11-class is the ONLY public FM number directly comparable to our board, and it beats supervised MCLDNN
   (60.08). Weights unreleased → retrain the JEPA recipe (ShuffleNetV2-x0.5, EMA teacher).
+  **DONE (2026-07): wrapper `wireless-jepa` implemented** (shares IQFM's `shufflenet1d.py` backbone);
+  JEPA retrain scripts landed (`scripts/pretrain/wireless_jepa.py`). Our in-repo retrain is
+  in-distribution, NOT the paper's OOD — the 74.78% is never claimed as ours.
 - **IQFM** (arXiv:2506.06718v2) — REPLACE the fabricated SEI/WiSig rank1=0.7734 row with the real number:
   RML2016.10a **38.1% @ 50 samples/class linear probe (OOD)**. Arch = ShuffleNetV2 0.5×, ~341k params,
   unit-max norm, SimCLR.

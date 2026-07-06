@@ -18,13 +18,18 @@ the four locked regimes (D5). This package holds the reusable plumbing:
   (ShuffleNetV2-x0.5 backbone) registered as ``"iqfm-base"``; re-exported here so its
   ``@register_model`` fires on package import. Its torch backbone loads lazily, so importing
   this package stays dependency-free;
+* :class:`~rfbench.models.foundation.wireless_jepa.WirelessJepa` -- the WirelessJEPA raw-IQ JEPA
+  foundation model registered as ``"wireless-jepa"``; shares IQFM's ShuffleNetV2-x0.5 backbone
+  ("matched to IQFM"), differing only in the pre-training objective (JEPA vs SimCLR). Re-exported
+  here so its ``@register_model`` fires on package import;
 * :mod:`rfbench.models.foundation._template` -- the stub a contributor copies (see
   ``docs/ADDING_A_MODEL.md``).
 
-Importing this package **registers the example FM and IQFM** in
+Importing this package **registers the example FM, IQFM and WirelessJEPA** in
 :data:`rfbench.core.registry.MODELS` (the ``@register_model`` decorators on
-:class:`DummyFoundationModel` / :class:`IqfmBase` fire as an import side effect), exactly as the
-task packages register their tasks. Import stays dependency-free: stdlib + the frozen core + the
+:class:`DummyFoundationModel` / :class:`IqfmBase` / :class:`WirelessJepa` fire as an import side
+effect), exactly as the task packages register their tasks. Import stays dependency-free: stdlib
++ the frozen core + the
 pure-stdlib regimes only; ``torch``/``numpy`` load lazily behind ``rfbench[torch]`` via
 :func:`~rfbench.models.foundation.base.require_torch`. (The LWM-Spectro wrapper is deliberately
 NOT re-exported here — it registers only on an explicit
@@ -47,6 +52,7 @@ from rfbench.models.foundation.dummy import (
 )
 from rfbench.models.foundation.iqfm import IqfmBase
 from rfbench.models.foundation.shufflenet1d import build_shufflenet1d
+from rfbench.models.foundation.wireless_jepa import WirelessJepa
 
 __all__ = [
     # Generic wrapper + bridge
@@ -62,4 +68,6 @@ __all__ = [
     # IQFM raw-IQ SSL FM + its reusable backbone
     "IqfmBase",
     "build_shufflenet1d",
+    # WirelessJEPA raw-IQ JEPA FM (shares IQFM's backbone)
+    "WirelessJepa",
 ]

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — WirelessJEPA raw-IQ JEPA foundation-model wrapper (`wireless-jepa`)
+
+Adds WirelessJEPA (arXiv:2601.20190) as an evaluable board FM **without touching the frozen core**
+(`rfbench/core/`, `schemas/`, `rfbench/regimes/`, `evaluate()` all unchanged) — a pure new wrapper
+per `docs/ADDING_A_MODEL.md`, **stacked on the IQFM wrapper** whose shared backbone it reuses.
+WirelessJEPA's 74.78% (RML2016.10a, 11-cls, −20…+18 dB, 500-shot linear probe) is the single most
+board-comparable public FM number and **beats our supervised MCLDNN (61.71%)**. Phase 1 (wrapper +
+tests) is CPU-only and mergeable; Phase 2 (JEPA pre-training + eval) ships as cluster scripts, NOT
+yet run.
+
+- **Wrapper** `rfbench/models/foundation/wireless_jepa.py`: `WirelessJepa(FoundationModel)`,
+  `@register_model("wireless-jepa")`, no positional args. **Reuses IQFM's shared
+  `build_shufflenet1d()`** (the paper's "matched to IQFM" — same ShuffleNetV2-x0.5, 335,096 params)
+  as the frozen JEPA context/target encoder; `embed()` = frozen `(B, 1024)` features with unit-max
+  input norm (adopted as the matched-family convention; WJEPA's exact input norm is unpublished,
+  flagged). No task head → inherits `forward()` (probing only). Same honesty guards as IQFM /
+  LWM-Spectro: no checkpoint → random init + `pretrained=False` + warning; checkpoint present but
+  keys don't match → RAISES. Loads the **EMA target encoder** (the representation the paper probes).
+- **Registration** re-exported from `rfbench/models/foundation/__init__.py` (import stays
+  dependency-free; torch loads only on first `embed`).
+- **HONESTY / provenance.** WirelessJEPA's weights are **not published**; the 74.78% is an **OOD**
+  figure (pre-trained on the authors' OTA MIMO testbed we do NOT have). We reproduce only the
+  *recipe*: `scripts/pretrain/wireless_jepa.py` + `slurm/pretrain_wireless_jepa_arm.sh` (re-)pre-train
+  the shared backbone with **JEPA** — masked-latent prediction + EMA teacher (0.996→1.0 cosine),
+  **no data augmentation** (contiguous time-block masking is the only SSL signal) — on RadioML
+  2016.10a **train** delabelised (seed 42), **in-distribution, NOT the paper's OOD setting**. The
+  exact masking recipe is unpublished → documented approximation. Any resulting score is **ours**,
+  labelled as such, and **never** presented as 74.78%. **No `result.json` committed** — the board
+  row waits on a real cluster run.
+- **Tests** `tests/test_wireless_jepa.py`: dep-free (package import registers `wireless-jepa`, cheap
+  construction, cache-path helpers) + torch-gated (`embed` → `(B, 1024)`, param count = shared
+  backbone, unit-max applied, missing-checkpoint flips `pretrained`, non-matching checkpoint raises,
+  **shares-IQFM-backbone** round-trip). Verified on CPU torch: all 10 pass; the JEPA loop
+  (mask → context/target encode → predictor → smooth-L1 → EMA update) runs, back-props to the
+  context encoder only, and moves the target via EMA. Dep-free suite green; `ruff` + `mypy` (strict,
+  73 files) clean.
+- **Docs** `docs/BIBLIOGRAPHY.md` (§A.5 + §C.5 status → wrapper implemented) +
+  `docs/SOTA_REFERENCE.md` (FM inventory row) updated.
+
 ### Added — IQFM raw-IQ SSL foundation-model wrapper (`iqfm-base`)
 
 Adds IQFM (Mashaal & Abou-Zeid, arXiv:2506.06718v2, CC-BY 4.0) as an evaluable board FM **without

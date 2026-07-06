@@ -4,8 +4,17 @@ T-PRIME (Belgiovine et al., "T-PRIME: Transformer-based Protocol Identification 
 Machine-learning at the Edge", arXiv:2401.04837, extended IEEE INFOCOM 2024; Genesys Lab /
 Northeastern, code at github.com/genesys-neu/t-prime) is a **real over-the-air** raw-IQ
 dataset of four 802.11 standards (``802.11b``, ``802.11g``, ``802.11n``, ``802.11ax``),
-captured at 20 MHz. The corpus (~66 GB) is hosted on Northeastern's Digital Repository
-Service (DRS collection ``neu:h989s847q``) and is openly downloadable (no login).
+captured at 20 MHz. The corpus is hosted on Northeastern's Digital Repository Service (DRS)
+and is openly downloadable (no login).
+
+CONFIRMED (2026-07, cross-checked against ``t-prime/data/README.md``'s dataset table): the
+single-protocol OTA capture we need is **DS 3.0** ("OTA, single protocol, signals collected in
+multiple rooms, 7279 transmissions") -- NOT the ``neu:h989s847q`` collection previously
+referenced here, which is the *multi-protocol overlapping-mixture* DS 3.3 (item
+``neu:h989s8544``, wrong task: overlap detection, not single-label 4-class classification).
+DS 3.0's handle link (``http://hdl.handle.net/2047/D20621423``) resolves (302) to DRS item
+``neu:h989s8519``; the direct artifact follows the same ``downloads/<item>?datastream_id=content``
+pattern used by the sibling ORACLE dataset from the same lab.
 
 We never redistribute the archive (D3): this only *fetches* the DRS artifact into the local
 cache and extracts it; nothing is ever committed. The transfer (``requests``) is imported
@@ -15,13 +24,9 @@ dependency-free and it is NEVER exercised in CI (no network, no heavy deps).
 LICENSE: the DRS landing page states no explicit redistribution license -- the data is
 openly downloadable but its terms are unconfirmed. We fetch it for local use only.
 
-TODO (cluster): confirm the exact DRS download URL for the 66 GB artifact (the collection
-page ``neu:h989s847q`` lists the item(s); the direct ``downloads/`` link is item-specific).
-Set :data:`_ARCHIVE_URL` to that link, or pass ``source_url=`` at call time. Also confirm the
-on-disk ``.bin`` layout (interleaved float32 ``[I0, Q0, I1, Q1, ...]`` is assumed by the
-loader).
-
-On the cluster: run inside the ARM venv, with ``$RFBENCH_CACHE`` pointing at Lustre.
+On the cluster: run inside the ARM venv, with ``$RFBENCH_CACHE`` pointing at Lustre. If the
+``downloads/`` URL below 404s (DRS item links can be item-specific), fall back to resolving
+``DS3_0_HANDLE_URL`` manually and pass the resulting artifact URL as ``source_url=``.
 """
 
 from __future__ import annotations
@@ -30,15 +35,25 @@ from pathlib import Path
 
 from rfbench.data.prepare._common import resolve_cache_dir
 
-#: Official Northeastern DRS collection page (dataset description + download links live here).
-DRS_COLLECTION_PAGE = "https://repository.library.northeastern.edu/collections/neu:h989s847q"
+#: T-PRIME's own dataset table (ground truth for which DS id maps to which capture mode).
+DATA_README = "https://github.com/genesys-neu/t-prime/blob/main/data/README.md"
+
+#: DS 3.0 (single-protocol OTA, multi-room, 7279 transmissions) -- the dataset this module
+#: fetches. Resolves (302) to the DRS item below.
+DS3_0_HANDLE_URL = "http://hdl.handle.net/2047/D20621423"
+
+#: Official Northeastern DRS item page for DS 3.0 (confirmed via the handle-link redirect).
+DRS_COLLECTION_PAGE = "https://repository.library.northeastern.edu/files/neu:h989s8519"
 
 #: T-PRIME code + split scaffolding (raw data is on the DRS, not here).
 CODE_REPO = "https://github.com/genesys-neu/t-prime"
 
-#: Direct download URL for the raw-IQ archive. UNCONFIRMED: the DRS item link is not embedded
-#: (item-specific under the collection); pass ``source_url=`` or set this on the cluster.
-_ARCHIVE_URL: str | None = None
+#: Direct download URL for the DS 3.0 raw-IQ archive (``DATASET3_0.zip``), following the DRS
+#: ``downloads/<item>?datastream_id=content`` pattern confirmed on the lab's ORACLE dataset.
+#: Pass ``source_url=`` to override if this 404s (DRS item-download links can rot/change).
+_ARCHIVE_URL: str | None = (
+    "https://repository.library.northeastern.edu/downloads/neu:h989s8519?datastream_id=content"
+)
 
 #: Archive filename fetched from the DRS (nominal; overridden by the URL's basename).
 _ARCHIVE_NAME = "tprime_wifi4.tar.gz"
@@ -133,6 +148,8 @@ def _extract_archive(archive: Path, dest_dir: Path) -> None:
 
 
 __all__ = [
+    "DATA_README",
+    "DS3_0_HANDLE_URL",
     "DRS_COLLECTION_PAGE",
     "CODE_REPO",
     "download_tprime_wifi4",

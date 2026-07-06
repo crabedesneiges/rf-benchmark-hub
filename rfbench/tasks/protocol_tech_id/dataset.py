@@ -190,14 +190,18 @@ def _load_protocol_arrays(name: str) -> tuple[list[Any], list[str]]:
     and within each class the ``.bin`` captures are read in sorted-path order (the same order
     the label loader enumerates). Cluster-only.
 
-    Each raw-IQ ``.bin`` capture is read as flat interleaved float32 ``[I0, Q0, I1, Q1, ...]``
-    into a ``(2, L)`` window, I on row 0 / Q on row 1, matching the T-PRIME channel-first
-    layout the ``tprime`` baseline consumes.
+    Each raw-IQ ``.bin`` capture is read as **native complex128** (CONFIRMED 2026-07 against
+    the official loader, ``t-prime/preprocessing/TPrime_dataset.py``:
+    ``np.fromfile(path, dtype=np.complex128)`` -- NOT interleaved float32 pairs, the
+    previously-assumed layout) and split into a ``(2, L)`` float32 window, I on row 0 / Q on
+    row 1, matching the T-PRIME channel-first layout the ``tprime`` baseline consumes.
 
-    TODO (cluster): confirm the on-disk dtype/interleaving of the T-PRIME ``.bin`` files
-    (float32 interleaved is assumed here; some captures store complex64). If a capture is a
-    long recording rather than one window, tile it with the SAME window length + stride the
-    label loader uses so the committed split indices remain aligned.
+    TODO (cluster): the official loader tiles a long recording into fixed-``slice_len``
+    windows with stride ``slice_len - int(slice_len * overlap_ratio)``
+    (``TPrime_dataset.generate_windows``); confirm whether DS 3.0's per-capture ``.bin`` files
+    are already single fixed-length windows or long recordings needing the same tiling here,
+    and if the latter, tile with the SAME window length + stride the label loader uses so the
+    committed split indices remain aligned.
     """
     if name != "tprime_wifi4":
         raise NotImplementedError(f"on-disk array loading for {name!r} is not wired.")
@@ -229,14 +233,16 @@ def _load_protocol_arrays(name: str) -> tuple[list[Any], list[str]]:
     for class_name in PROTOCOL_CLASSES:
         for path in _iter_class_files(ds_dir, dir_names[class_name]):
             # Read one raw-IQ file into a (2, L) float32 array (I on row 0, Q on row 1).
-            # Handles numpy .npy and a flat interleaved binary [I0, Q0, I1, Q1, ...]
-            # (.bin/.iq/.dat/.sigmf-data). Cluster-only; confirm the actual format there.
+            # .npy: whatever layout was saved. .bin/.iq/.dat/.sigmf-data: native complex128,
+            # matching the official T-PRIME loader (np.fromfile(path, dtype=np.complex128)) --
+            # confirmed against t-prime/preprocessing/TPrime_dataset.py, 2026-07.
             suffix = path.suffix.lower()
             if suffix == ".npy":
                 arr = np.asarray(np.load(path), dtype=np.float32)
                 window = arr if arr.shape[0] == 2 else arr.reshape(2, -1)
-            else:  # flat interleaved [I, Q, ...] -> (2, L)
-                window = np.fromfile(path, dtype=np.float32).reshape(-1, 2).T
+            else:  # native complex128 -> (2, L) float32
+                complex_iq = np.fromfile(path, dtype=np.complex128)
+                window = np.stack([complex_iq.real, complex_iq.imag]).astype(np.float32)
             iq.append(window)
             class_names.append(class_name)
     return iq, class_names

@@ -3,10 +3,14 @@
 Builds the canonical split per the SPLIT POLICY (``docs/EVALUATION_PROTOCOL.md``
 §protocol_tech_id):
 
-* **tprime-wifi4** (T-PRIME, Genesys Lab / Northeastern, DRS collection
-  ``neu:h989s847q``, paper arXiv:2401.04837, code github.com/genesys-neu/t-prime)
-  is the **real over-the-air raw-IQ 4-class** WiFi-standard set (``802.11b``,
-  ``802.11g``, ``802.11n``, ``802.11ax``). The T-PRIME repo/README ships **no**
+* **tprime-wifi4** (T-PRIME, Genesys Lab / Northeastern, DRS item ``neu:h989s8519``
+  = dataset **DS 3.0** in the T-PRIME data table, paper arXiv:2401.04837, code
+  github.com/genesys-neu/t-prime) is the **real over-the-air raw-IQ 4-class**
+  WiFi-standard set (``802.11b``, ``802.11g``, ``802.11n``, ``802.11ax``), single
+  protocol per capture, multi-room, 7279 transmissions. CONFIRMED (2026-07) against
+  ``t-prime/data/README.md``'s dataset table -- DS 3.0 is the single-protocol capture;
+  DS 3.1-3.4 are multi-protocol *overlapping-mixture* captures for a different task
+  (overlap detection) and must NOT be used here. The T-PRIME repo/README ships **no**
   train/test index lists (only capture folders per protocol), so -- per the split
   policy's "official-if-exists, else deterministic" rule -- there is no official
   split to adopt here: we generate a deterministic **80/10/10** split **stratified
@@ -48,9 +52,9 @@ CANONICAL_SPLIT_IDS: dict[str, str] = {
 }
 
 #: Official source URL recorded in the dataset's manifest (provenance, never redistributed).
-#: The Northeastern DRS collection landing page (dataset), not the code repo.
+#: The Northeastern DRS item page for DS 3.0 (the single-protocol capture), not the code repo.
 SOURCE_URLS: dict[str, str] = {
-    "tprime_wifi4": "https://repository.library.northeastern.edu/collections/neu:h989s847q",
+    "tprime_wifi4": "https://repository.library.northeastern.edu/files/neu:h989s8519",
 }
 
 #: The 4 WiFi-standard classes, in canonical order. This is the class index order the

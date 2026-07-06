@@ -1,11 +1,12 @@
 {
-  "$comment": "Declared downstream tasks for the RF-Benchmark-Hub leaderboard. The site generator (leaderboard/site/generate.py) renders EVERY task listed here: tasks with valid result JSONs render full leaderboard tables/plots; tasks without results render a WIP card + a minimal WIP page. Canonical task ids, titles, priority (P1/P2/P3) and scope buckets mirror docs/DOWNSTREAM_TASKS.md. 'status' is the declared build state: implemented (has or will have results), wip (task/track defined, baseline pending), planned (blocked / out-of-current-scope, e.g. CSI/channel-domain). Each entry ALSO carries educational content rendered as an explanatory header on the task page: 'description' (one-paragraph what/why), a 'dataset' card ({name, source, n_classes, modality, real_or_synthetic, conditions, license, split}), and metric definitions ('primary_metric' = {name, definition}; 'secondary_metrics' = list of {name, definition}). These educational fields are OPTIONAL: an entry without them renders the same generic header minus the missing pieces. Keep this list in sync with docs/DOWNSTREAM_TASKS.md.",
+  "$comment": "Declared downstream tasks for the RF-Benchmark-Hub leaderboard. The site generator (leaderboard/site/generate.py) renders EVERY task listed here: tasks with valid result JSONs render full leaderboard tables/plots; tasks without results render a WIP card + a minimal WIP page. Canonical task ids, titles, priority (P1/P2/P3) and scope buckets mirror docs/DOWNSTREAM_TASKS.md. 'scope' is 'terrestrial_iq' (raw-IQ signal tasks, the board's current focus) or 'csi_sensing' (CSI/channel-domain tasks, a separate out-of-scope track) -- optional, defaults to 'terrestrial_iq' if absent; it drives the site's homepage/sidebar section grouping. 'status' is the declared build state: implemented (has or will have results), wip (task/track defined, baseline pending), planned (blocked / out-of-current-scope, e.g. CSI/channel-domain). Each entry ALSO carries educational content rendered as an explanatory header on the task page: 'description' (one-paragraph what/why), a 'dataset' card ({name, source, n_classes, modality, real_or_synthetic, conditions, license, split}), and metric definitions ('primary_metric' = {name, definition}; 'secondary_metrics' = list of {name, definition}). These educational fields are OPTIONAL: an entry without them renders the same generic header minus the missing pieces. Keep this list in sync with docs/DOWNSTREAM_TASKS.md.",
   "tasks": [
     {
       "id": "amc",
       "title": "Automatic modulation classification",
       "status": "implemented",
       "priority": "P1",
+      "scope": "terrestrial_iq",
       "blurb": "Predict the modulation scheme of a raw-IQ window (RadioML 2016.10a, full SNR range). The board's most mature track.",
       "description": "Predict the modulation scheme of a short raw-IQ window (e.g. BPSK, QPSK, QAM, FM). It is the foundational RF classification task and the board's most mature track, used to compare specialized baselines against fine-tuned foundation models.",
       "dataset": {
@@ -38,13 +39,14 @@
       "title": "Specific emitter identification",
       "status": "implemented",
       "priority": "P1",
+      "scope": "terrestrial_iq",
       "blurb": "Identify the transmitting device from hardware imperfections (WiSig), with closed-set / cross-receiver / cross-day tracks.",
       "description": "Identify the specific transmitting device from hardware imperfections (RF fingerprint), predicting emitter identity rather than modulation. It matters for device authentication and spoofing detection, and is reported on separate closed-set / cross-receiver / cross-day tracks.",
       "dataset": {
         "name": "WiSig (ManyTx)",
         "source": "Hanna, Karunaratne, Cabric, IEEE Access 10:22808-22818, 2022 (DOI 10.1109/ACCESS.2022.3154488; arXiv:2112.15363; data cores.ee.ucla.edu/downloads/datasets/wisig/)",
         "n_classes": "up to 150 transmitters (ManyTx)",
-        "modality": "raw IQ (256,2) — first 256 preamble samples, non-equalized, unit-average-power normalized",
+        "modality": "raw IQ (256,2) \u2014 first 256 preamble samples, non-equalized, unit-average-power normalized",
         "real_or_synthetic": "real (over-the-air WiFi captures)",
         "conditions": "closed-set / cross-receiver / cross-day tracks reported separately",
         "license": "unstated in repo docs",
@@ -70,6 +72,7 @@
       "title": "Wideband detection",
       "status": "implemented",
       "priority": "P2",
+      "scope": "terrestrial_iq",
       "blurb": "Locate and identify signals in time-frequency (RadDet), primary mAP with mAR and IoU.",
       "description": "Locate and identify signals in the time-frequency plane, drawing boxes over a spectrogram to detect where and what signals are present. It matters for wideband spectrum monitoring where many emitters coexist.",
       "dataset": {
@@ -102,6 +105,7 @@
       "title": "Spectrum sensing",
       "status": "wip",
       "priority": "P3",
+      "scope": "terrestrial_iq",
       "blurb": "Per-subband occupancy detection under a target false-alarm rate (DeepSense, pd@pfa=0.1). Track defined; no baseline submitted yet.",
       "description": "Detect per-subband spectrum occupancy (presence/absence of a signal in each frequency subband) under a target false-alarm rate. It matters for dynamic spectrum access and cognitive radio. Track defined; no baseline submitted yet.",
       "dataset": {
@@ -130,6 +134,7 @@
       "title": "Interference identification",
       "status": "wip",
       "priority": "P2",
+      "scope": "terrestrial_iq",
       "blurb": "Multi-class jamming / interference recognition (GNSS jamming 6-class IQ). Task added; baseline pending cluster training.",
       "description": "Recognize the type of interference or jamming affecting a received signal as a multi-class label (e.g. GNSS jamming conditions). It matters for GNSS resilience and jammer characterization. Task added; baseline pending cluster training.",
       "dataset": {
@@ -158,6 +163,7 @@
       "title": "Protocol / technology identification",
       "status": "wip",
       "priority": "P2",
+      "scope": "terrestrial_iq",
       "blurb": "Recognise the WiFi 802.11 standard (ax/b/n/g) from raw IQ (T-PRIME). Task added; baseline pending cluster training.",
       "description": "Recognize the WiFi 802.11 standard (b/g/n/ax) from raw IQ, identifying the protocol/technology rather than the modulation. It matters for spectrum inventory and standard-aware coexistence. Task added; baseline pending cluster training.",
       "dataset": {
@@ -186,12 +192,13 @@
       "title": "SNR / mobility recognition",
       "status": "wip",
       "priority": "P2",
+      "scope": "terrestrial_iq",
       "blurb": "Joint (SNR bin x mobility/Doppler regime) classification on spectrograms (DeepMIMO Phoenix). Spectrogram track; dataset + baseline pending.",
       "description": "Jointly classify a signal into a single combined (SNR bin x mobility/Doppler regime) label from a spectrogram, rather than regressing SNR. It matters for link adaptation and context-aware receivers. Spectrogram track; dataset and baseline pending.",
       "dataset": {
         "name": "DeepMIMO Phoenix (TBD / proposed)",
         "source": "recommended in DOWNSTREAM_TASKS.md (LWM-Spectro Task 2, arXiv:2601.08780); no adopted dataset yet",
-        "n_classes": "joint (SNR bin x pedestrian/vehicular) classes — TBD",
+        "n_classes": "joint (SNR bin x pedestrian/vehicular) classes \u2014 TBD",
         "modality": "spectrogram",
         "real_or_synthetic": "synthetic (DeepMIMO)",
         "conditions": "joint SNR-bin x mobility/Doppler regime; TBD",
@@ -214,12 +221,13 @@
       "title": "Beam prediction",
       "status": "planned",
       "priority": "P1",
-      "blurb": "Best-beam / beam-index prediction from CSI (DeepMIMO). CSI/channel-domain — out of the current terrestrial-IQ scope; separate CSI track.",
+      "scope": "csi_sensing",
+      "blurb": "Best-beam / beam-index prediction from CSI (DeepMIMO). CSI/channel-domain \u2014 out of the current terrestrial-IQ scope; separate CSI track.",
       "description": "Predict the best beam / beam index from a predefined mmWave codebook given channel/CSI input (e.g. sub-6 GHz CSI to strongest mmWave beam). It matters for reducing beam-alignment overhead in 5G/6G. CSI/channel-domain, out of the current terrestrial-IQ scope; separate CSI track.",
       "dataset": {
         "name": "DeepMIMO (TBD / proposed)",
         "source": "recommended in DOWNSTREAM_TASKS.md (a city scenario held out from pretraining); no adopted dataset yet",
-        "n_classes": "codebook size fixed per scenario manifest — TBD",
+        "n_classes": "codebook size fixed per scenario manifest \u2014 TBD",
         "modality": "CSI / channel",
         "real_or_synthetic": "synthetic (DeepMIMO)",
         "conditions": "held-out city scenario; TBD",
@@ -242,12 +250,13 @@
       "title": "Direction finding",
       "status": "planned",
       "priority": "P1",
+      "scope": "csi_sensing",
       "blurb": "Angle-of-arrival estimation from a multi-antenna array. Blocked on a public multi-rx dataset (both FM evals use private OTA testbeds).",
       "description": "Estimate the angle-of-arrival (direction-of-arrival) of a signal from spatial phase across a multi-antenna array, as discrete angle-bin classification or angle regression. It matters for localization and emitter tracking. Blocked on a public multi-rx dataset (both FM evals use private OTA testbeds).",
       "dataset": {
         "name": "TBD / proposed (no public canonical AoA dataset)",
         "source": "DOWNSTREAM_TASKS.md notes both FM evals (WirelessJEPA, IQFM) are on private OTA MIMO testbeds; needs a public multi-rx dataset first",
-        "n_classes": "discrete angle bins (e.g. 225 x 10-deg bins on IQFM testbed) — TBD",
+        "n_classes": "discrete angle bins (e.g. 225 x 10-deg bins on IQFM testbed) \u2014 TBD",
         "modality": "multi-antenna raw IQ",
         "real_or_synthetic": "TBD (private OTA MIMO testbeds in cited work)",
         "conditions": "multi-antenna array; angle-bin classification or angular-error regression",
@@ -270,7 +279,8 @@
       "title": "Line-of-sight / NLOS",
       "status": "planned",
       "priority": "P1",
-      "blurb": "Line-of-sight vs non-line-of-sight classification from CSI (DeepMIMO). CSI/channel-domain — out of current scope; separate CSI track.",
+      "scope": "csi_sensing",
+      "blurb": "Line-of-sight vs non-line-of-sight classification from CSI (DeepMIMO). CSI/channel-domain \u2014 out of current scope; separate CSI track.",
       "description": "Classify a link as line-of-sight vs non-line-of-sight from channel/CSI embeddings. It matters for reliable ranging, positioning and channel-aware scheduling. CSI/channel-domain, out of current scope; separate CSI track.",
       "dataset": {
         "name": "DeepMIMO (TBD / proposed)",
@@ -298,6 +308,7 @@
       "title": "Positioning",
       "status": "planned",
       "priority": "P1",
+      "scope": "csi_sensing",
       "blurb": "Localization / geolocation from CSI (5G NR, mean positioning error in metres). CSI-domain + needs a regression-metric protocol entry.",
       "description": "Estimate transmitter/user 2D-3D coordinates (localization/geolocation) from CSI as a regression to physical location. It matters for indoor/outdoor positioning without GNSS. CSI-domain and needs a regression-metric protocol entry.",
       "dataset": {
@@ -305,14 +316,14 @@
         "source": "recommended in DOWNSTREAM_TASKS.md (DeepMIMO outdoor, or the WavesFM real 476-location set if released); no adopted dataset yet",
         "n_classes": "N/A (regression to coordinates)",
         "modality": "CSI / channel (5G NR)",
-        "real_or_synthetic": "synthetic (DeepMIMO outdoor) or real (WavesFM set) — TBD",
+        "real_or_synthetic": "synthetic (DeepMIMO outdoor) or real (WavesFM set) \u2014 TBD",
         "conditions": "outdoor 5G NR CSI; TBD",
         "license": "TBD / proposed",
         "split": "proposed 80/10/10 seed 42 (pos-<dataset>-8010-seed42-v1)"
       },
       "primary_metric": {
         "name": "mean_positioning_error",
-        "definition": "Mean positioning error in meters (lower is better) — a regression metric requiring a regression-metric entry in the protocol."
+        "definition": "Mean positioning error in meters (lower is better) \u2014 a regression metric requiring a regression-metric entry in the protocol."
       },
       "secondary_metrics": []
     },
@@ -321,7 +332,8 @@
       "title": "Human activity recognition",
       "status": "planned",
       "priority": "P1",
-      "blurb": "Human activity recognition from WiFi CSI (6-class). CSI-sensing domain — out of the current signal scope; separate CSI / RF-sensing track.",
+      "scope": "csi_sensing",
+      "blurb": "Human activity recognition from WiFi CSI (6-class). CSI-sensing domain \u2014 out of the current signal scope; separate CSI / RF-sensing track.",
       "description": "Recognize human activities (e.g. 6 motion classes) from WiFi CSI measurements. It matters for device-free RF sensing applications like fall detection and smart-home monitoring. CSI-sensing domain, out of the current signal scope; separate CSI / RF-sensing track.",
       "dataset": {
         "name": "WiFi-CSI HAR set (TBD / proposed)",
@@ -349,6 +361,7 @@
       "title": "Channel estimation",
       "status": "planned",
       "priority": "P2",
+      "scope": "csi_sensing",
       "blurb": "MIMO-OFDM channel estimation (regression to MSE). CSI/channel-domain + needs a regression-metric protocol entry; separate CSI track.",
       "description": "Estimate the MIMO-OFDM channel response between user and base station, as a regression whose quality is scored by MSE. It matters for receiver performance and CSI feedback/compression in massive-MIMO systems. CSI/channel-domain and needs a regression-metric protocol entry; separate CSI track.",
       "dataset": {
@@ -356,7 +369,7 @@
         "source": "recommended in DOWNSTREAM_TASKS.md (WavesFM: simulated uplink MIMO-OFDM, 16-antenna BS, 3GPP UMi); no adopted dataset yet",
         "n_classes": "N/A (regression to channel response)",
         "modality": "CSI / channel (MIMO-OFDM)",
-        "real_or_synthetic": "synthetic (simulated 3GPP UMi) — TBD",
+        "real_or_synthetic": "synthetic (simulated 3GPP UMi) \u2014 TBD",
         "conditions": "16-antenna BS uplink, 3GPP UMi; TBD",
         "license": "TBD / proposed",
         "split": "proposed 80/10/10 seed 42 (chanest-<dataset>-8010-seed42-v1)"

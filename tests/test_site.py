@@ -755,6 +755,41 @@ def test_load_manifest_bad_status_defaults_to_wip(tmp_path: Path) -> None:
     assert declared["amc"].status == "wip"
 
 
+def test_load_manifest_scope_defaults_to_terrestrial_iq(tmp_path: Path) -> None:
+    """An entry with no 'scope' key (or an unknown value) defaults to terrestrial_iq."""
+    manifest = tmp_path / "tasks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {"id": "amc", "title": "AMC", "status": "implemented"},
+                    {"id": "har", "title": "HAR", "status": "planned", "scope": "bogus"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    declared = generate.load_manifest(manifest)
+    assert declared["amc"].scope == "terrestrial_iq"
+    assert declared["har"].scope == "terrestrial_iq"
+
+
+def test_committed_manifest_scope_matches_downstream_tasks_doc() -> None:
+    """The committed manifest's scope split matches DOWNSTREAM_TASKS.md's CSI/terrestrial split."""
+    declared = generate.load_manifest()
+    csi_ids = {t for t, e in declared.items() if e.scope == "csi_sensing"}
+    assert csi_ids == {
+        "beam_prediction",
+        "direction_finding",
+        "los_nlos",
+        "positioning",
+        "har",
+        "channel_estimation",
+    }
+    terrestrial_ids = {t for t, e in declared.items() if e.scope == "terrestrial_iq"}
+    assert terrestrial_ids == set(declared) - csi_ids
+
+
 # --------------------------------------------------------------------------------------------------
 # Educational content: per-task explanatory header + shared Guide page.
 # --------------------------------------------------------------------------------------------------
@@ -857,6 +892,107 @@ def test_task_header_omitted_for_undeclared_task(tmp_path: Path) -> None:
     assert "x-net" in html_text
 
 
+# --------------------------------------------------------------------------------------------------
+# Task-page two-column layout: sidebar, details/submit cards, dataset-card relocation.
+# --------------------------------------------------------------------------------------------------
+def test_task_page_has_sidebar_grouped_by_scope(tmp_path: Path) -> None:
+    """The task page's sidebar groups every nav task by scope (Terrestrial IQ / CSI-sensing)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert '<nav class="task-sidebar"' in amc_html
+    assert 'href="har.html"' in amc_html  # a CSI-sensing task listed in the sidebar
+    assert 'href="sei.html"' in amc_html  # a terrestrial-IQ task listed in the sidebar
+
+
+def test_task_sidebar_marks_current_task_active(tmp_path: Path) -> None:
+    """The sidebar highlights the current task's own link."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    sidebar = amc_html[amc_html.index('<nav class="task-sidebar"') :]
+    assert 'class="sidebar-task-link sidebar-task-active" href="amc.html"' in sidebar
+    assert 'class="sidebar-task-link sidebar-task-active" href="sei.html"' not in sidebar
+
+
+def test_task_details_card_renders_status_and_dataset(tmp_path: Path) -> None:
+    """The compact 'Task details' sidebar card shows dataset + primary metric for AMC."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert '<div class="task-details-card">' in amc_html
+    assert "RadioML 2016.10a" in amc_html
+    assert "accuracy_overall" in amc_html
+
+
+def test_submit_card_links_to_submission_guide(tmp_path: Path) -> None:
+    """Both the top-nav Submit tab and the task-page sidebar CTA link SUBMISSION.md."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert "docs/SUBMISSION.md" in index_html
+    assert "docs/SUBMISSION.md" in amc_html
+    assert '<div class="submit-card">' in amc_html
+
+
+def test_wip_page_empty_state_has_no_table_or_plot_svg(tmp_path: Path) -> None:
+    """The redesigned empty state still carries zero <table>/plot SVG, and a distinct glyph."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    page = (out / "spectrum_sensing.html").read_text(encoding="utf-8")
+    assert "<table" not in page
+    assert 'class="plot"' not in page
+    assert 'class="empty-glyph"' in page
+    assert "No baseline submitted yet" in page
+
+
+def test_dataset_card_and_metrics_block_still_render_in_main_column(tmp_path: Path) -> None:
+    """Regression guard: the full dataset-card/metrics-block still render on amc.html.
+
+    They moved from the hero header into the main column (below the description, above the
+    leaderboard) to make room for the new compact sidebar summary -- nothing was deleted.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert '<div class="dataset-card">' in amc_html
+    assert '<div class="metrics-block">' in amc_html
+    main_pos = amc_html.index('<div class="task-main">')
+    dataset_pos = amc_html.index('<div class="dataset-card">')
+    table_pos = amc_html.index("<table")
+    assert main_pos < dataset_pos < table_pos
+
+
+def test_rank_one_gets_rank_badge(tmp_path: Path) -> None:
+    """The #1 row in a leaderboard table gets a filled rank badge, others stay plain numbers."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert '<span class="rank-badge">1</span>' in amc_html
+
+
 def test_guide_page_written_with_iq_and_glossary(tmp_path: Path) -> None:
     """build_site writes guide.html with the I/Q section and the metrics glossary.
 
@@ -907,6 +1043,127 @@ def test_guide_linked_in_nav_on_every_page(tmp_path: Path) -> None:
     # On the Guide page itself, the Guide chip is the active one.
     guide_html = (out / "guide.html").read_text(encoding="utf-8")
     assert "nav-chip nav-chip-guide nav-chip-active" in guide_html
+
+
+def test_google_fonts_link_present_on_every_page(tmp_path: Path) -> None:
+    """Every page loads the board's Space Grotesk / IBM Plex Google Fonts link once."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    for name in ("index.html", "amc.html", "spectrum_sensing.html", "guide.html"):
+        page = (out / name).read_text(encoding="utf-8")
+        assert "fonts.googleapis.com" in page
+        assert "Space+Grotesk" in page
+
+
+# --------------------------------------------------------------------------------------------------
+# Homepage redesign: stats row, scope sections, filter bar, search/filter script.
+# --------------------------------------------------------------------------------------------------
+def test_index_stats_row_counts_match_manifest_and_results(tmp_path: Path) -> None:
+    """The homepage's 4 stat numbers are computed live from the manifest + loaded results."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    declared = generate.load_manifest()
+    grouped: dict[str, list[dict]] = {}
+    for row in generate.load_results(results):
+        grouped.setdefault(row["task"]["name"], []).append(row)
+    expected = generate._compute_stats(grouped, declared)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    for value in expected.values():
+        assert f'<span class="stat-value">{value}</span>' in index_html
+    assert expected["tasks_defined"] == len(declared)
+    assert expected["live"] == 2  # amc + sei both have >=1 valid result in the fixture tree
+
+
+def test_index_has_two_scope_sections_correctly_populated(tmp_path: Path) -> None:
+    """The homepage splits cards into Terrestrial IQ / CSI-RF-sensing sections by scope."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    # Restrict position checks to the <main> body (the header's nav chips also link every
+    # task, in a different, unrelated order).
+    main_html = index_html[index_html.index("<main>") :]
+    assert 'data-scope="terrestrial_iq"' in main_html
+    assert 'data-scope="csi_sensing"' in main_html
+    terrestrial_pos = main_html.index('data-scope="terrestrial_iq"')
+    csi_pos = main_html.index('data-scope="csi_sensing"')
+    amc_pos = main_html.index("amc.html")
+    har_pos = main_html.index("har.html")
+    # amc (terrestrial) sits within the terrestrial section, before the CSI section starts;
+    # har (csi_sensing) sits at/after the CSI section heading.
+    assert terrestrial_pos < amc_pos < csi_pos <= har_pos
+
+
+def test_task_card_carries_data_status(tmp_path: Path) -> None:
+    """Each task card exposes its declared status via a data-status attribute (JS filter hook)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    assert 'data-status="implemented"' in index_html  # amc
+    assert 'data-status="wip"' in index_html  # spectrum_sensing / interference_id / ...
+    assert 'data-status="planned"' in index_html  # beam_prediction / har / ...
+
+
+def test_filter_bar_and_search_input_present(tmp_path: Path) -> None:
+    """The homepage renders the search box and all 4 status filter pills."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    assert 'id="task-search"' in index_html
+    for value in ("all", "implemented", "wip", "planned"):
+        assert f'data-filter="{value}"' in index_html
+
+
+def test_index_has_inline_filter_script(tmp_path: Path) -> None:
+    """The homepage embeds the vanilla-JS search/filter script inline."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    assert "<script>" in index_html
+    assert "getElementById('task-search')" in index_html
+    assert "filter-pill" in index_html
+
+
+def test_task_and_guide_pages_have_no_inline_script(tmp_path: Path) -> None:
+    """The search/filter script is homepage-only -- every other page stays zero-JS."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    for name in ("amc.html", "spectrum_sensing.html", "guide.html"):
+        page = (out / name).read_text(encoding="utf-8")
+        assert "<script>" not in page
+
+
+def test_submit_tab_links_to_submission_guide(tmp_path: Path) -> None:
+    """The homepage's Submit tab links to docs/SUBMISSION.md on GitHub (no submit.html page)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    assert "docs/SUBMISSION.md" in index_html
+    assert not (out / "submit.html").exists()
 
 
 def test_render_guide_is_self_contained() -> None:

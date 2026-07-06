@@ -3,10 +3,14 @@
 Reads every ``leaderboard/results/**/*.json`` row (each MUST validate against
 ``schemas/result.schema.json``), groups the valid rows by task, and renders a polished,
 **fully static** HTML site into an ``--out`` directory. The generator is stdlib-only (no
-Jinja, no Chart.js, no CDN, no runtime JS): pages are assembled with manual string
-building + ``html.escape``, and every chart is an **inline SVG** whose polylines are
-computed here in Python. The one non-stdlib dependency is ``jsonschema`` (a hard dep of
-the harness), imported LAZILY so importing this module stays dependency-free.
+Jinja, no Chart.js, no build step): pages are assembled with manual string building +
+``html.escape``, and every chart is an **inline SVG** whose polylines are computed here in
+Python. The one non-stdlib dependency is ``jsonschema`` (a hard dep of the harness),
+imported LAZILY so importing this module stays dependency-free. The site's only external
+network / runtime additions are a single Google Fonts ``<link>`` (Space Grotesk / IBM Plex,
+every selector falls back to system fonts if it's blocked) and a small homepage-only inline
+vanilla-JS search/filter script (no dependencies, degrades to "everything visible" if JS is
+disabled) -- every other page stays zero-JS.
 
 The renderer is **data-driven, never task-specific**:
 
@@ -16,7 +20,9 @@ The renderer is **data-driven, never task-specific**:
   yet) render a WIP card on the index and a minimal "Work in progress" task page -- never a
   broken empty table. Any task that has results but is missing from the manifest is still
   rendered (the manifest is additive, not a filter). The manifest supplies each task's
-  title, ``status`` (implemented | wip | planned), ``priority`` (P1/P2/P3) and a short blurb.
+  title, ``status`` (implemented | wip | planned), ``priority`` (P1/P2/P3), a short blurb,
+  and an optional ``scope`` (``terrestrial_iq`` | ``csi_sensing``, default ``terrestrial_iq``)
+  that groups tasks into the homepage/sidebar's two sections.
 * A fixed display order is applied to the known tasks (amc, sei, wideband_detection,
   spectrum_sensing, ...) then any others land alphabetically. No task is hardcoded into the
   rendering path.
@@ -119,6 +125,23 @@ _STATUS_BADGE: dict[str, tuple[str, str]] = {
 
 #: Fallback status when a manifest entry omits/typos ``status`` (treated as WIP -> no table).
 _DEFAULT_STATUS: str = "wip"
+
+#: The two board sections a declared task can belong to (drives homepage/sidebar grouping).
+#: ``terrestrial_iq`` = raw-IQ signal tasks (the board's current focus); ``csi_sensing`` =
+#: CSI/channel-domain tasks (a separate out-of-scope track, see docs/DOWNSTREAM_TASKS.md).
+_SCOPE_TITLES: dict[str, str] = {
+    "terrestrial_iq": "Terrestrial IQ tasks",
+    "csi_sensing": "CSI / RF-sensing tasks",
+}
+
+#: Fallback scope when a manifest entry omits/typos ``scope``.
+_DEFAULT_SCOPE: str = "terrestrial_iq"
+
+
+def _scope_label(scope: str) -> str:
+    """Human label for a task scope bucket (falls back to a de-underscored form)."""
+    return _SCOPE_TITLES.get(scope, scope.replace("_", " "))
+
 
 #: Stable display order of the four locked regimes (D5); unknown regimes sort after.
 REGIME_ORDER: tuple[str, ...] = (
@@ -298,6 +321,23 @@ _GUIDE: dict[str, Any] = {
 #: The Guide's fixed slug (rendered to ``<guide>.html`` + linked in the nav on every page).
 _GUIDE_SLUG: str = "guide"
 
+#: The live GitHub repo (matches the deployed GitHub Pages origin, not the README's stale
+#: template-org badge links).
+_REPO_URL: str = "https://github.com/crabedesneiges/rf-benchmark-hub"
+
+#: The submission guide on GitHub -- target of the "Submit" top-nav tab and the task-page
+#: "Submit a result" sidebar card. No standalone submit.html page exists on this site.
+_SUBMISSION_GUIDE_URL: str = f"{_REPO_URL}/blob/main/docs/SUBMISSION.md"
+
+#: A generic "code repository" glyph (NOT the GitHub Octocat, to avoid any trademark/asset
+#: concern) used as the homepage's repo-link icon.
+_REPO_ICON_SVG: str = (
+    '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" '
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+    'stroke-linejoin="round"><polyline points="8 6 2 12 8 18"></polyline>'
+    '<polyline points="16 6 22 12 16 18"></polyline></svg>'
+)
+
 #: Distinct (color, dash-pattern) pairs cycled across model lines in a curve plot. Chosen
 #: for contrast in both light and dark themes; the dash pattern makes lines distinguishable
 #: without relying on color alone (accessibility).
@@ -421,6 +461,7 @@ class DeclaredTask(NamedTuple):
     dataset: dict[str, str] = {}  # noqa: RUF012 - NamedTuple default, never mutated
     primary_metric: MetricDef | None = None
     secondary_metrics: tuple[MetricDef, ...] = ()
+    scope: str = _DEFAULT_SCOPE
 
     def status_label(self) -> str:
         """Human label for the declared status (falls back to a de-underscored form)."""
@@ -512,6 +553,9 @@ def load_manifest(manifest_path: str | Path | None = None) -> dict[str, Declared
         status = entry.get("status")
         if status not in _STATUS_BADGE:
             status = _DEFAULT_STATUS
+        scope = entry.get("scope")
+        if scope not in _SCOPE_TITLES:
+            scope = _DEFAULT_SCOPE
         priority = entry.get("priority")
         secondary_raw = entry.get("secondary_metrics")
         secondary = tuple(
@@ -532,6 +576,7 @@ def load_manifest(manifest_path: str | Path | None = None) -> dict[str, Declared
             dataset=_parse_dataset(entry.get("dataset")),
             primary_metric=_parse_metric_def(entry.get("primary_metric")),
             secondary_metrics=secondary,
+            scope=str(scope),
         )
     return declared
 
@@ -964,9 +1009,10 @@ def _render_row(
             metric_cells.append(f'<td class="num">{formatted}</td>')
 
     badge = _render_badge(_status(row))
+    rank_html = f'<span class="rank-badge">{rank}</span>' if rank == 1 else str(rank)
     return (
         "<tr>"
-        f'<td class="rank num">{rank}</td>'
+        f'<td class="rank num">{rank_html}</td>'
         f'<td class="model"><span class="model-name">{name}</span>{chip}'
         f'<span class="params">{params}</span></td>'
         f"{''.join(metric_cells)}"
@@ -1170,13 +1216,20 @@ def _render_metrics_block(entry: DeclaredTask) -> str:
     )
 
 
-def _render_task_header(entry: DeclaredTask | None) -> str:
+def _render_task_header(
+    entry: DeclaredTask | None, *, include_dataset_and_metrics: bool = True
+) -> str:
     """Render the explanatory header (description + dataset card + metric defs) for a task.
 
     Every piece is optional and driven by the manifest, so an ``entry`` of ``None`` (task
     not in the manifest) or an entry missing any educational field simply omits that piece.
     Returns an empty string when there is nothing educational to show, so the generic
     leaderboard rendering below is never disturbed.
+
+    ``include_dataset_and_metrics=False`` renders only the description callout, omitting the
+    dataset-card/metrics-block grid -- used by the two-column task-page layout, which instead
+    renders that same dataset card + metrics block (unchanged) further down the main column,
+    alongside a new compact "Task details" sidebar summary (see ``_render_task_details_card``).
     """
     if entry is None:
         return ""
@@ -1188,38 +1241,161 @@ def _render_task_header(entry: DeclaredTask | None) -> str:
             f"<p>{_esc(entry.description)}</p>"
             "</div>"
         )
-    card = _render_dataset_card(entry.dataset)
-    metrics = _render_metrics_block(entry)
-    if card or metrics:
-        parts.append(f'<div class="task-header-grid">{card}{metrics}</div>')
+    if include_dataset_and_metrics:
+        card = _render_dataset_card(entry.dataset)
+        metrics = _render_metrics_block(entry)
+        if card or metrics:
+            parts.append(f'<div class="task-header-grid">{card}{metrics}</div>')
     if not parts:
         return ""
     return f'<section class="task-header">{"".join(parts)}</section>'
 
 
-def render_wip_page(entry: DeclaredTask, nav_task_ids: list[str]) -> str:
+def _render_task_sidebar(
+    nav_task_ids: list[str], declared: dict[str, DeclaredTask], current: str
+) -> str:
+    """Render the task-to-task sidebar, grouped by scope, current task highlighted.
+
+    Purely additive: this is a NEW navigation surface inside the two-column task-page body.
+    It does not replace or alter ``_task_nav``'s output (the top header's Home/task/Guide
+    chips), so the tests pinning that nav's exact markup are unaffected.
+    """
+    buckets = _partition_by_scope(nav_task_ids, declared)
+    groups: list[str] = []
+    for scope in ("terrestrial_iq", "csi_sensing"):
+        task_ids = buckets.get(scope)
+        if not task_ids:
+            continue
+        links: list[str] = []
+        for task_id in task_ids:
+            entry = declared.get(task_id)
+            title = _task_title(task_id, declared)
+            dot_class = f"dot-{entry.status_class()}" if entry is not None else "dot-status-wip"
+            priority = (
+                f'<span class="sidebar-priority">{_esc(entry.priority)}</span>'
+                if (entry is not None and entry.priority)
+                else ""
+            )
+            active = " sidebar-task-active" if task_id == current else ""
+            links.append(
+                f'<a class="sidebar-task-link{active}" href="{_esc(task_id)}.html">'
+                f'<span class="dot {dot_class}"></span>'
+                f'<span class="sidebar-task-title">{_esc(title)}</span>{priority}'
+                "</a>"
+            )
+        groups.append(
+            f'<div class="sidebar-group"><h3>{_esc(_scope_label(scope))}</h3>{"".join(links)}</div>'
+        )
+    return f'<nav class="task-sidebar" aria-label="Task navigation">{"".join(groups)}</nav>'
+
+
+def _render_task_details_card(
+    entry: DeclaredTask | None, task_name: str, rows: list[dict[str, Any]] | None
+) -> str:
+    """Render the compact "Task details" sidebar card (status, dataset, metric, models).
+
+    Returns an empty string for an undeclared task (``entry is None``), mirroring
+    ``_render_task_header``'s optionality contract, so an undeclared-but-has-results page
+    (manifest additive) still renders sensibly with no crash.
+    """
+    if entry is None:
+        return ""
+    rows = rows or []
+    dataset_name = entry.dataset.get("name")
+    primary_name = entry.primary_metric.name if entry.primary_metric is not None else None
+    tracks = sorted({_track_name(r) for r in rows}) if rows else []
+    n_models = len({str(r["model"]["name"]) for r in rows}) if rows else 0
+
+    fields: list[tuple[str, str]] = [
+        ("Status", entry.status_label()),
+        ("Priority", entry.priority or "—"),
+    ]
+    if dataset_name:
+        fields.append(("Dataset", dataset_name))
+    if primary_name:
+        fields.append(("Primary metric", primary_name))
+    fields.append(("Track", ", ".join(_track_label(t) for t in tracks) if tracks else "—"))
+    fields.append(("Models on board", str(n_models)))
+
+    rows_html = "".join(
+        f'<div class="details-row"><dt>{_esc(k)}</dt><dd>{_esc(v)}</dd></div>' for k, v in fields
+    )
+    return (
+        '<div class="task-details-card"><h3>Task details</h3>'
+        f'<dl class="details-grid">{rows_html}</dl></div>'
+    )
+
+
+def _render_submit_card() -> str:
+    """Render the static "Submit a result" sidebar CTA (links to docs/SUBMISSION.md)."""
+    return (
+        '<div class="submit-card"><h3>Submit a result</h3>'
+        "<p>Add a JSON result validated against result.schema.json and open a pull "
+        "request. Rows are auto-ranked on merge.</p>"
+        f'<a class="submit-cta" target="_blank" rel="noopener" '
+        f'href="{_esc(_SUBMISSION_GUIDE_URL)}">Submission guide</a>'
+        "</div>"
+    )
+
+
+#: A generic "empty tray" glyph for the no-baseline empty state (stdlib inline SVG, no new
+#: binary assets; a distinct class from ``.plot`` keeps the "no plot on a WIP page" test true).
+_EMPTY_STATE_SVG: str = (
+    '<svg class="empty-glyph" viewBox="0 0 24 24" width="32" height="32" aria-hidden="true" '
+    'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
+    'stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"></rect>'
+    '<line x1="8" y1="12" x2="16" y2="12"></line></svg>'
+)
+
+
+def render_wip_page(
+    entry: DeclaredTask, nav_task_ids: list[str], declared: dict[str, DeclaredTask] | None = None
+) -> str:
     """Render a minimal "work in progress" page for a declared task with no results.
 
     Shows the task title, a clear WIP badge/state and the manifest blurb -- but NO
     leaderboard table and NO plots, so a task without a baseline never renders a broken
     empty table. Kept deliberately spare; it is replaced by the full leaderboard the moment
-    a valid ``result.json`` for the task lands.
+    a valid ``result.json`` for the task lands. Uses the same two-column shell (sidebar +
+    main + details/submit cards) as ``render_task_page``.
     """
+    declared = declared if declared is not None else {entry.id: entry}
     title = entry.title
     badge = _render_status_badge(entry)
-    header = _render_task_header(entry)
+    header = _render_task_header(entry, include_dataset_and_metrics=False)
+    dataset_card = _render_dataset_card(entry.dataset)
+    metrics_block = _render_metrics_block(entry)
     blurb = f'<p class="wip-blurb">{_esc(entry.blurb)}</p>' if entry.blurb else ""
+    sidebar = _render_task_sidebar(nav_task_ids, declared, entry.id)
+    details_card = _render_task_details_card(entry, entry.id, None)
+    submit_card = _render_submit_card()
     body = (
         '<section class="task">'
+        f'<p class="breadcrumb"><a href="index.html">Tasks</a> / {_esc(title)}</p>'
         f'<h2 class="task-title">{_esc(title)}</h2>'
         f'<p class="task-meta">{badge}</p>'
         f"{header}"
+        '<div class="task-layout">'
+        f"{sidebar}"
+        '<div class="task-main">'
+        f"{dataset_card}{metrics_block}"
         '<div class="wip-card">'
-        '<p class="wip-state"><strong>Work in progress</strong> &mdash; no baseline yet.</p>'
+        '<div class="empty-state-card">'
+        f'<p class="wip-kicker">Work in progress</p>'
+        f"{_EMPTY_STATE_SVG}"
+        '<p class="empty-state-heading">No baseline submitted yet</p>'
         '<p class="note">This task is declared in the benchmark but has no submitted '
         "results on the board yet. A leaderboard (tables + plots) will appear here "
         "automatically once a valid result is added.</p>"
         f"{blurb}"
+        f'<a class="submit-cta" target="_blank" rel="noopener" '
+        f'href="{_esc(_SUBMISSION_GUIDE_URL)}">Read the submission guide</a>'
+        "</div>"
+        "</div>"
+        "</div>"
+        '<aside class="task-sidebar-right">'
+        f"{details_card}{submit_card}"
+        "</aside>"
         "</div>"
         "</section>"
     )
@@ -1246,7 +1422,10 @@ def render_task_page(
     declared = declared or {}
     title = _task_title(task_name, declared)
     dataset_line = _task_meta_line(task_name, rows)
-    header = _render_task_header(declared.get(task_name))
+    entry = declared.get(task_name)
+    header = _render_task_header(entry, include_dataset_and_metrics=False)
+    dataset_card = _render_dataset_card(entry.dataset) if entry is not None else ""
+    metrics_block = _render_metrics_block(entry) if entry is not None else ""
 
     # (regime, track) -> rows, preserving input order within each leaf group.
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -1260,19 +1439,32 @@ def render_task_page(
         for group_rows in (groups[(regime, track)],)
     ]
 
+    nav_ids = nav_task_ids if nav_task_ids is not None else [task_name]
+    sidebar = _render_task_sidebar(nav_ids, declared, task_name)
+    details_card = _render_task_details_card(entry, task_name, rows)
+    submit_card = _render_submit_card()
     body = (
         '<section class="task">'
+        f'<p class="breadcrumb"><a href="index.html">Tasks</a> / {_esc(title)}</p>'
         f'<h2 class="task-title">{_esc(title)}</h2>'
         f'<p class="task-meta">{dataset_line}</p>'
         f"{header}"
+        '<div class="task-layout">'
+        f"{sidebar}"
+        '<div class="task-main">'
+        f"{dataset_card}{metrics_block}"
         f'<p class="note">Each (regime, track) is ranked separately &mdash; a table or plot '
         "never mixes two regimes nor two tracks (protocol invariant). Badges mark "
         "maintainer-verified rows vs self-reported ones.</p>"
         f"{''.join(sections)}"
+        "</div>"
+        '<aside class="task-sidebar-right">'
+        f"{details_card}{submit_card}"
+        "</aside>"
+        "</div>"
         "</section>"
     )
     page_title = f"{title} — RF-Benchmark-Hub"
-    nav_ids = nav_task_ids if nav_task_ids is not None else [task_name]
     return _page(page_title, body, task_nav=_task_nav(nav_ids, task_name))
 
 
@@ -1298,18 +1490,22 @@ def _render_result_card(
     best_model, best_score, primary = _best_summary(rows)
     entry = declared.get(task_name)
     badge = _render_status_badge(entry) if entry is not None else ""
+    status = entry.status if entry is not None else "implemented"
     blurb = (
         f'<span class="card-blurb">{_esc(entry.blurb)}</span>'
         if entry is not None and entry.blurb
         else ""
     )
     return (
-        f'<a class="task-card" href="{_esc(task_name)}.html">'
+        f'<a class="task-card hover-elevate" data-status="{_esc(status)}" '
+        f'href="{_esc(task_name)}.html">'
         f'<span class="card-title">{_esc(title)}</span>{badge}'
         f"{blurb}"
         f'<span class="card-sub">{_esc(f"{n_rows} results · {n_models} models")}</span>'
+        '<div class="card-best-box">'
         f'<span class="card-best">Best: <strong>{_esc(best_model)}</strong> '
         f"&middot; {_esc(primary)} = <strong>{_esc(best_score)}</strong></span>"
+        "</div>"
         "</a>"
     )
 
@@ -1319,47 +1515,158 @@ def _render_wip_card(entry: DeclaredTask) -> str:
     badge = _render_status_badge(entry)
     blurb = f'<span class="card-blurb">{_esc(entry.blurb)}</span>' if entry.blurb else ""
     return (
-        f'<a class="task-card task-card-wip" href="{_esc(entry.id)}.html">'
+        f'<a class="task-card task-card-wip hover-elevate" data-status="{_esc(entry.status)}" '
+        f'href="{_esc(entry.id)}.html">'
         f'<span class="card-title">{_esc(entry.title)}</span>{badge}'
-        '<span class="card-sub">no baseline yet</span>'
         f"{blurb}"
+        '<div class="card-nobaseline-box"><span class="card-sub">no baseline yet</span></div>'
         "</a>"
     )
+
+
+def _partition_by_scope(
+    task_ids: list[str], declared: dict[str, DeclaredTask]
+) -> dict[str, list[str]]:
+    """Split ``task_ids`` into scope buckets (``terrestrial_iq``/``csi_sensing``), order kept.
+
+    A task absent from ``declared`` (results-only, manifest additive) falls back to
+    :data:`_DEFAULT_SCOPE` so it still lands in a section rather than being dropped.
+    """
+    buckets: dict[str, list[str]] = {}
+    for task_id in task_ids:
+        entry = declared.get(task_id)
+        scope = entry.scope if entry is not None else _DEFAULT_SCOPE
+        buckets.setdefault(scope, []).append(task_id)
+    return buckets
+
+
+def _compute_stats(
+    grouped: dict[str, list[dict[str, Any]]], declared: dict[str, DeclaredTask]
+) -> dict[str, int]:
+    """Derive the homepage stats-row counts from data ``render_index`` already has.
+
+    ``live`` counts every task (declared or not) that has at least one valid result --
+    matching the additive-manifest invariant. ``eval_tracks`` counts distinct
+    ``(task, regime, track)`` triples across every loaded result, a live measure of how many
+    separate (never-mixed) leaderboard comparisons the board currently reports.
+    """
+    n_implemented = sum(1 for e in declared.values() if e.status == "implemented")
+    n_live = sum(1 for rows in grouped.values() if rows)
+    n_eval_groups = len(
+        {
+            (task, _regime_name(row), _track_name(row))
+            for task, rows in grouped.items()
+            for row in rows
+        }
+    )
+    return {
+        "tasks_defined": len(declared),
+        "implemented": n_implemented,
+        "live": n_live,
+        "eval_tracks": n_eval_groups,
+    }
+
+
+def _render_stats_row(stats: dict[str, int]) -> str:
+    """Render the homepage's 4 big-number stat cards."""
+    items = (
+        (stats["tasks_defined"], "Tasks defined"),
+        (stats["implemented"], "Implemented"),
+        (stats["live"], "Live leaderboard" if stats["live"] == 1 else "Live leaderboards"),
+        (stats["eval_tracks"], "Evaluation tracks"),
+    )
+    cards = "".join(
+        f'<div class="stat-card"><span class="stat-value">{n}</span>'
+        f'<span class="stat-label">{_esc(label)}</span></div>'
+        for n, label in items
+    )
+    return f'<div class="stats-row">{cards}</div>'
+
+
+def _render_filter_bar() -> str:
+    """Render the homepage's search input + status filter pills (wired by the inline JS)."""
+    pills = (
+        ("all", "All tasks", True),
+        ("implemented", "Implemented", False),
+        ("wip", "In progress", False),
+        ("planned", "Planned", False),
+    )
+    pill_html = "".join(
+        f'<button type="button" class="filter-pill{" filter-pill-active" if active else ""}" '
+        f'data-filter="{value}">{_esc(label)}</button>'
+        for value, label, active in pills
+    )
+    return (
+        '<div class="filter-bar">'
+        '<input type="search" id="task-search" class="search-input" '
+        'placeholder="Search a task, dataset or metric...">'
+        f'<div class="filter-pills">{pill_html}</div>'
+        "</div>"
+    )
+
+
+def _render_index_sections(
+    grouped: dict[str, list[dict[str, Any]]],
+    declared: dict[str, DeclaredTask],
+    ordered_tasks: list[str],
+) -> str:
+    """Render the homepage's task cards grouped into scope sections (skip empty sections)."""
+    buckets = _partition_by_scope(ordered_tasks, declared)
+    sections: list[str] = []
+    for scope in ("terrestrial_iq", "csi_sensing"):
+        task_ids = buckets.get(scope)
+        if not task_ids:
+            continue
+        cards: list[str] = []
+        for task_name in task_ids:
+            rows = grouped.get(task_name)
+            if rows:
+                cards.append(_render_result_card(task_name, rows, declared))
+            else:
+                entry = declared.get(task_name)
+                if entry is None:  # pragma: no cover - defensive; ids came from declared/grouped
+                    continue
+                cards.append(_render_wip_card(entry))
+        sections.append(
+            f'<section class="task-scope-section" data-scope="{scope}">'
+            f'<h2 class="scope-heading">{_esc(_scope_label(scope))} '
+            f'<span class="scope-count">({len(task_ids)})</span></h2>'
+            f'<div class="card-grid">{"".join(cards)}</div>'
+            "</section>"
+        )
+    return "".join(sections)
 
 
 def render_index(
     grouped: dict[str, list[dict[str, Any]]],
     declared: dict[str, DeclaredTask] | None = None,
 ) -> str:
-    """Render the ``index.html`` landing page: one card per DECLARED task.
+    """Render the ``index.html`` landing page: one card per DECLARED task, grouped by scope.
 
     Every declared task appears: tasks that have results get a best-score card linking to
     their full leaderboard; declared tasks without results get a WIP card (no scores) linking
     to a minimal WIP page. Any task that has results but is absent from the manifest is still
     shown (the manifest is additive, not a filter), so nothing silently drops off the board.
+    Cards are grouped into two sections (Terrestrial IQ / CSI-RF-sensing) by each task's
+    declared ``scope``; a section with zero tasks is omitted.
     """
     declared = declared or {}
     ordered_tasks = _all_task_ids(grouped, declared)
-    cards: list[str] = []
-    for task_name in ordered_tasks:
-        rows = grouped.get(task_name)
-        if rows:
-            cards.append(_render_result_card(task_name, rows, declared))
-        else:
-            entry = declared.get(task_name)
-            if entry is None:  # pragma: no cover - defensive; ids came from declared/grouped
-                continue
-            cards.append(_render_wip_card(entry))
+    sections_html = _render_index_sections(grouped, declared, ordered_tasks)
 
-    if cards:
+    if sections_html:
+        stats = _compute_stats(grouped, declared)
         body = (
             '<section class="task">'
-            '<p class="note">Reproducible benchmarks for terrestrial RF machine-learning '
-            "tasks, comparing specialised baselines against fine-tuned foundation models. "
-            "Each task ranks submissions by its primary metric; regimes and tracks are never "
-            "mixed in a comparison. Tasks marked <em>work in progress</em> are declared but "
-            "have no baseline on the board yet.</p>"
-            f'<div class="card-grid">{"".join(cards)}</div>'
+            '<p class="hero-eyebrow">Terrestrial RF &middot; Machine Learning</p>'
+            '<h1 class="hero-title">RF machine-learning leaderboards</h1>'
+            '<p class="hero-lead">Reproducible benchmarks for terrestrial RF '
+            "machine-learning tasks, comparing specialised baselines against fine-tuned "
+            "foundation models. Each task ranks submissions by its primary metric; regimes "
+            "and tracks are never mixed in a comparison.</p>"
+            f"{_render_stats_row(stats)}"
+            f"{_render_filter_bar()}"
+            f"{sections_html}"
             "</section>"
         )
     else:
@@ -1368,7 +1675,23 @@ def render_index(
             '<p class="note">No tasks declared or results yet.</p>'
             "</section>"
         )
-    return _page("RF-Benchmark-Hub Leaderboard", body, task_nav=_task_nav(ordered_tasks, None))
+    extra_header = (
+        '<div class="top-tabs">'
+        '<a class="top-tab top-tab-active" href="index.html">Tasks</a>'
+        f'<a class="top-tab" href="{_GUIDE_SLUG}.html">Guide</a>'
+        '<a class="top-tab" target="_blank" rel="noopener" '
+        f'href="{_esc(_SUBMISSION_GUIDE_URL)}">Submit</a>'
+        "</div>"
+        '<a class="icon-link" aria-label="GitHub repository" target="_blank" rel="noopener" '
+        f'href="{_esc(_REPO_URL)}">{_REPO_ICON_SVG}</a>'
+    )
+    return _page(
+        "RF-Benchmark-Hub Leaderboard",
+        body,
+        task_nav=_task_nav(ordered_tasks, None),
+        extra_header=extra_header,
+        extra_body=f"<script>{_JS}</script>" if sections_html else "",
+    )
 
 
 def _render_regimes_section() -> str:
@@ -1479,14 +1802,40 @@ def _task_nav(task_names: list[str], current: str | None) -> str:
     return f'<nav class="nav">{"".join(chips)}</nav>'
 
 
-def _page(title: str, body: str, task_nav: str) -> str:
-    """Assemble a complete standalone HTML page (header + nav + body + footer)."""
+#: Google Fonts request for the board's typeface pair (Space Grotesk headings, IBM Plex Sans
+#: body, IBM Plex Mono code/metrics) -- the ONE external network dependency this site has;
+#: every selector falls back to system fonts (see ``--font-*`` in ``_CSS``) if it's blocked.
+_GOOGLE_FONTS_LINK: str = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
+    '<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700'
+    '&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" '
+    'rel="stylesheet">\n'
+)
+
+
+def _page(
+    title: str,
+    body: str,
+    task_nav: str,
+    *,
+    extra_header: str = "",
+    extra_body: str = "",
+) -> str:
+    """Assemble a complete standalone HTML page (header + nav + body + footer).
+
+    ``extra_header`` renders inside ``.site-header`` after the nav (homepage-only search/tabs
+    bar, see ``render_index``); ``extra_body`` renders just before ``</body>`` (homepage-only
+    inline filter script, see ``render_index``). Both default to empty so every other page
+    (task pages, WIP pages, the guide) is unaffected.
+    """
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en">\n<head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_esc(title)}</title>\n"
+        f"{_GOOGLE_FONTS_LINK}"
         f"<style>{_CSS}</style>\n"
         "</head>\n<body>\n"
         '<header class="site-header">'
@@ -1498,11 +1847,14 @@ def _page(title: str, body: str, task_nav: str) -> str:
         "machine learning</span>"
         "</div></div>"
         f"{task_nav}"
+        f"{extra_header}"
         "</header>\n"
         f"<main>\n{body}\n</main>\n"
         '<footer class="site-footer"><p>Generated by leaderboard/site/generate.py '
-        "&mdash; every row validated against result.schema.json. No runtime dependencies; "
-        "charts are inline SVG.</p></footer>\n"
+        "&mdash; every row validated against result.schema.json. Charts are inline SVG "
+        "computed here in Python; a Google Fonts link and a small homepage-only inline "
+        "filter script are the only external/runtime additions.</p></footer>\n"
+        f"{extra_body}"
         "</body>\n</html>\n"
     )
 
@@ -1529,9 +1881,13 @@ _CSS = """
   --muted: #5c6470;
   --line: #e2e5ea;
   --line-strong: #cbd0d8;
-  --accent: #0b5fff;
+  --accent: #2f6bff;
   --accent-soft: #e8f0ff;
   --head: #f4f5f7;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-heading: "Space Grotesk", var(--font-body);
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --badge-verified-bg: #e6f6ea; --badge-verified-fg: #137333; --badge-verified-bd: #9fd8ae;
   --badge-self-bg: #fff4e5; --badge-self-fg: #a15c00; --badge-self-bd: #f0c891;
   --chip-baseline-bg: #eef0f3; --chip-baseline-fg: #444b56; --chip-baseline-bd: #d6dae1;
@@ -1551,7 +1907,7 @@ _CSS = """
     --muted: #9aa3b0;
     --line: #262c35;
     --line-strong: #333b46;
-    --accent: #5b8dff;
+    --accent: #6f97ff;
     --accent-soft: #1a2740;
     --head: #1b2028;
     --badge-verified-bg: #12281a; --badge-verified-fg: #57cc7f; --badge-verified-bd: #2c5b3b;
@@ -1568,12 +1924,20 @@ _CSS = """
 * { box-sizing: border-box; }
 html { color-scheme: light dark; }
 body {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-body);
   color: var(--fg); background: var(--bg); margin: 0;
   line-height: 1.5; -webkit-font-smoothing: antialiased;
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+h1, h2, h3, .task-title, .card-title, .brand-name, .group-title {
+  font-family: var(--font-heading); font-weight: 600; letter-spacing: -0.01em;
+}
+.hover-elevate { transition: box-shadow .15s ease, border-color .15s ease; }
+.hover-elevate:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+@media (prefers-color-scheme: dark) {
+  .hover-elevate:hover { box-shadow: 0 2px 14px rgba(0,0,0,0.35); }
+}
 
 .site-header {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem;
@@ -1597,13 +1961,13 @@ a:hover { text-decoration: underline; }
 main { max-width: 1080px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
 .task-title { font-size: 1.4rem; margin: 0.5rem 0 0.25rem; letter-spacing: -0.01em; }
 .task-meta {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   color: var(--muted); font-size: 0.8rem; margin: 0 0 0.75rem;
 }
 .note { color: var(--muted); font-size: 0.85rem; margin: 0.25rem 0 1.25rem; }
 
 .group {
-  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
   padding: 1rem 1.1rem 1.25rem; margin: 0 0 1.5rem;
 }
 .group-title {
@@ -1675,12 +2039,163 @@ td.num.primary .metric-val { font-weight: 700; }
 .plot .grid { stroke: var(--grid); stroke-width: 1; }
 .plot .axis { stroke: var(--line-strong); stroke-width: 1; }
 .plot .tick { fill: var(--muted); font-size: 11px;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+  font-family: var(--font-mono); }
 .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin-top: 0.5rem; }
 .legend-item {
   display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--muted);
 }
 .legend-swatch { width: 24px; height: 10px; flex: none; }
+
+.top-tabs { display: flex; gap: 0.25rem; }
+.top-tab {
+  font-size: 0.85rem; font-weight: 500; padding: 0.35rem 0.7rem; border-radius: 8px;
+  color: var(--muted);
+}
+.top-tab:hover { color: var(--fg); text-decoration: none; background: var(--surface-2); }
+.top-tab-active { color: var(--accent); font-weight: 600; }
+.icon-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 8px; color: var(--muted); margin-left: 0.5rem;
+}
+.icon-link:hover { color: var(--fg); background: var(--surface-2); text-decoration: none; }
+
+.hero-eyebrow {
+  color: var(--accent); font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; margin: 0.5rem 0 0.5rem;
+}
+.hero-title {
+  font-size: 2.1rem; margin: 0 0 0.6rem; letter-spacing: -0.02em;
+}
+.hero-lead { color: var(--muted); font-size: 0.95rem; max-width: 68ch; margin: 0 0 1.5rem; }
+
+.stats-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem; margin: 0 0 1.5rem;
+}
+.stat-card {
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+  padding: 0.9rem 1.1rem; display: flex; flex-direction: column; gap: 0.15rem;
+}
+.stat-value {
+  font-family: var(--font-heading); font-size: 1.9rem; font-weight: 700; color: var(--fg);
+}
+.stat-label { color: var(--muted); font-size: 0.8rem; }
+
+.filter-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 0 0 1.5rem;
+}
+.search-input {
+  flex: 1 1 260px; min-width: 200px; padding: 0.5rem 0.85rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+  font-family: var(--font-body); font-size: 0.88rem;
+}
+.search-input:focus { outline: none; border-color: var(--accent); }
+.filter-pills { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.filter-pill {
+  font-family: var(--font-body); font-size: 0.82rem; padding: 0.35rem 0.8rem;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--fg); cursor: pointer;
+}
+.filter-pill:hover { border-color: var(--line-strong); }
+.filter-pill-active {
+  background: var(--fg); color: var(--bg); border-color: var(--fg);
+}
+@media (prefers-color-scheme: dark) {
+  .filter-pill-active { background: var(--fg); color: var(--bg); }
+}
+
+.scope-heading {
+  font-size: 1.15rem; margin: 1.75rem 0 0.9rem; padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.scope-heading:first-of-type { margin-top: 0.5rem; }
+.scope-count { color: var(--muted); font-weight: 400; font-size: 0.9rem; }
+
+.card-best-box, .card-nobaseline-box {
+  border-radius: 10px; padding: 0.5rem 0.7rem; margin-top: 0.25rem;
+}
+.card-best-box { background: var(--accent-soft); }
+.card-nobaseline-box { background: var(--surface-2); border: 1px dashed var(--line-strong); }
+.card-best-box .card-best { color: var(--fg); font-size: 0.85rem; }
+.card-nobaseline-box .card-sub { color: var(--muted); }
+
+.breadcrumb { color: var(--muted); font-size: 0.8rem; margin: 0 0 0.4rem; }
+.breadcrumb a { color: var(--muted); }
+.breadcrumb a:hover { color: var(--accent); }
+
+.task-layout {
+  display: grid; grid-template-columns: 220px minmax(0, 1fr) 260px; gap: 1.5rem;
+  align-items: start; margin-top: 1rem;
+}
+@media (max-width: 900px) {
+  .task-layout { grid-template-columns: 1fr; }
+}
+.task-main { min-width: 0; }
+
+.task-sidebar { display: flex; flex-direction: column; gap: 1.25rem; }
+.sidebar-group h3 {
+  font-family: var(--font-heading); font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted); margin: 0 0 0.5rem;
+}
+.sidebar-task-link {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.4rem;
+  border-radius: 8px; color: var(--fg); font-size: 0.85rem;
+}
+.sidebar-task-link:hover { background: var(--surface-2); text-decoration: none; }
+.sidebar-task-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.sidebar-task-title { flex: 1 1 auto; }
+.sidebar-priority { color: var(--muted); font-size: 0.72rem; }
+.dot {
+  width: 8px; height: 8px; border-radius: 999px; flex: none; background: var(--status-wip-fg);
+}
+.dot-status-implemented { background: var(--status-impl-fg); }
+.dot-status-wip { background: var(--status-wip-fg); }
+.dot-status-planned { background: var(--status-planned-fg); }
+
+.task-sidebar-right { display: flex; flex-direction: column; gap: 1rem; }
+.task-details-card, .submit-card {
+  border: 1px solid var(--line); border-radius: 14px; padding: 1rem 1.1rem;
+}
+.task-details-card { background: var(--surface); }
+.task-details-card h3, .submit-card h3 {
+  font-family: var(--font-heading); font-size: 0.9rem; margin: 0 0 0.75rem;
+}
+.details-grid { margin: 0; display: grid; gap: 0.5rem; }
+.details-row {
+  display: flex; justify-content: space-between; gap: 0.75rem; font-size: 0.82rem;
+}
+.details-row dt { color: var(--muted); margin: 0; }
+.details-row dd { margin: 0; text-align: right; }
+.submit-card {
+  background: var(--accent-soft); border-color: var(--accent);
+}
+.submit-card p { font-size: 0.82rem; color: var(--fg); margin: 0 0 0.9rem; }
+.submit-cta {
+  display: inline-block; background: var(--accent); color: #fff; font-weight: 600;
+  font-size: 0.85rem; padding: 0.5rem 0.9rem; border-radius: 8px;
+}
+.submit-cta:hover { text-decoration: none; opacity: 0.9; }
+
+.empty-state-card {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  padding: 2rem 1.5rem;
+}
+.wip-kicker {
+  color: var(--status-wip-fg); font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; margin: 0 0 0.75rem;
+}
+.empty-glyph { color: var(--muted); margin: 0 0 0.75rem; }
+.empty-state-heading {
+  font-family: var(--font-heading); font-size: 1.1rem; font-weight: 600; margin: 0 0 0.4rem;
+}
+.empty-state-card .note { max-width: 42ch; }
+.empty-state-card .submit-cta { margin-top: 0.75rem; }
+
+.rank-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 999px; background: var(--accent); color: #fff;
+  font-size: 0.78rem; font-weight: 700;
+}
 
 .card-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -1688,13 +2203,18 @@ td.num.primary .metric-val { font-weight: 700; }
 }
 .task-card {
   display: flex; flex-direction: column; gap: 0.35rem; color: var(--fg);
-  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
-  padding: 1rem 1.1rem;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+  padding: 1rem 1.1rem; transition: box-shadow .15s ease, border-color .15s ease;
 }
-.task-card:hover { border-color: var(--accent); text-decoration: none; }
+.task-card:hover {
+  border-color: var(--accent); text-decoration: none; box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  .task-card:hover { box-shadow: 0 2px 14px rgba(0,0,0,0.35); }
+}
 .card-title { font-weight: 700; font-size: 1.05rem; }
 .card-sub { color: var(--muted); font-size: 0.8rem;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+  font-family: var(--font-mono); }
 .card-best { font-size: 0.85rem; }
 .card-blurb { color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
 .task-card-wip { border-style: dashed; }
@@ -1718,7 +2238,7 @@ td.num.primary .metric-val { font-weight: 700; }
   border-color: var(--status-planned-bd);
 }
 .wip-card {
-  border: 1px dashed var(--status-wip-bd); border-radius: 12px; background: var(--surface);
+  border: 1px dashed var(--status-wip-bd); border-radius: 14px; background: var(--surface);
   padding: 1.1rem 1.25rem; margin: 0 0 1.5rem;
 }
 .wip-state { font-size: 1rem; margin: 0 0 0.5rem; }
@@ -1740,7 +2260,7 @@ td.num.primary .metric-val { font-weight: 700; }
   gap: 1rem; align-items: start;
 }
 .dataset-card, .metrics-block {
-  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2);
   padding: 0.9rem 1.1rem;
 }
 .ds-title { margin: 0 0 0.6rem; font-size: 0.95rem; }
@@ -1753,14 +2273,14 @@ td.num.primary .metric-val { font-weight: 700; }
 .ds-row { display: contents; }
 .ds-key {
   color: var(--muted); font-size: 0.78rem; white-space: nowrap;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 .ds-val { margin: 0; font-size: 0.82rem; color: var(--fg); }
 .metric-def-list { margin: 0; padding: 0; list-style: none;
   display: flex; flex-direction: column; gap: 0.5rem; }
 .metric-def { font-size: 0.82rem; color: var(--fg); }
 .metric-def-name {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8rem; color: var(--accent);
 }
 .metric-def-tag {
@@ -1779,13 +2299,13 @@ td.num.primary .metric-val { font-weight: 700; }
 .guide-deflist { margin: 0.5rem 0 0; display: flex; flex-direction: column; gap: 0.75rem; }
 .guide-def dt { margin: 0 0 0.15rem; }
 .guide-def dt code {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.85rem; color: var(--accent); font-weight: 600;
 }
 .guide-def dd { margin: 0; font-size: 0.9rem; color: var(--fg); max-width: 74ch; }
 .glossary { margin-top: 0.75rem; }
 .glossary-name code {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.82rem; color: var(--accent);
 }
 .glossary-def { font-size: 0.88rem; color: var(--fg); }
@@ -1797,6 +2317,38 @@ td.num.primary .metric-val { font-weight: 700; }
 .site-footer { border-top: 1px solid var(--line); background: var(--surface); }
 .site-footer p { max-width: 1080px; margin: 0 auto; padding: 1rem 1.5rem;
   color: var(--muted); font-size: 0.78rem; }
+"""
+
+#: Homepage-only inline search/filter script -- vanilla JS, no dependencies, no build step.
+#: Degrades gracefully with JS disabled: cards carry no default ``display:none``, so every
+#: card stays visible and the search box / pills are simply inert. Injected via ``_page``'s
+#: ``extra_body`` kwarg (``render_index`` only); every other page has zero ``<script>``.
+_JS: str = """
+(function () {
+  var search = document.getElementById('task-search');
+  var pills = document.querySelectorAll('.filter-pill');
+  var cards = document.querySelectorAll('.task-card');
+  var activeStatus = 'all';
+
+  function applyFilters() {
+    var query = (search && search.value || '').trim().toLowerCase();
+    cards.forEach(function (card) {
+      var matchesStatus = activeStatus === 'all' || card.dataset.status === activeStatus;
+      var matchesQuery = !query || card.textContent.toLowerCase().indexOf(query) !== -1;
+      card.style.display = (matchesStatus && matchesQuery) ? '' : 'none';
+    });
+  }
+
+  if (search) { search.addEventListener('input', applyFilters); }
+  pills.forEach(function (pill) {
+    pill.addEventListener('click', function () {
+      pills.forEach(function (p) { p.classList.remove('filter-pill-active'); });
+      pill.classList.add('filter-pill-active');
+      activeStatus = pill.dataset.filter;
+      applyFilters();
+    });
+  });
+})();
 """
 
 
@@ -1834,7 +2386,7 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
     for task_id, entry in declared.items():
         if grouped.get(task_id):
             continue
-        page = render_wip_page(entry, nav_task_ids=nav_ids)
+        page = render_wip_page(entry, nav_task_ids=nav_ids, declared=declared)
         (out_path / f"{task_id}.html").write_text(page, encoding="utf-8")
 
     # Shared educational Guide page (linked from the nav on every page).

@@ -200,14 +200,16 @@ def test_encoder_uses_custom_layernorm_alpha_bias_keys(
         assert present in keys, f"missing upstream key {present}"
 
 
-def test_adapter_produces_1025x32_tokens_with_constant_cls() -> None:
-    """The IQ->token adapter yields (B, 1025, 32); row 0 is the constant-0.2 CLS token (upstream).
+def test_adapter_produces_1025x16_tokens_with_constant_cls() -> None:
+    """The IQ->token adapter yields (B, 1025, 16); row 0 is the constant-0.2 CLS token (upstream).
 
-    Regression guard for the CLS mismatch (upstream uses ``np.full(patch_size, 0.2)``, not zeros)
-    and for the ``(1024 patches + 1 CLS)`` sequence-length contract the encoder's positional
-    embedding (``Embedding(1025, 128)``) requires.
+    Regression guard for (a) the element width -- 16, matching the shipped ``embedding.proj`` =
+    ``Linear(16, 128)`` (a single-channel 4x4 patch, NOT a 32-wide real/imag-interleaved one);
+    (b) the CLS mismatch (upstream uses ``np.full(patch_size, 0.2)``, not zeros); (c) the
+    ``(1024 patches + 1 CLS)`` sequence-length contract of ``Embedding(1025, 128)``.
     """
     torch = pytest.importorskip("torch")
+    assert lwm_spectro.ELEMENT_LENGTH == 16
     tokens = lwm_spectro._iq_to_lwm_tokens(_synthetic_iq_batch(batch_size=3)["iq"], torch)
     assert tuple(tokens.shape) == (3, lwm_spectro.MAX_LEN, lwm_spectro.ELEMENT_LENGTH)
     cls_expected = torch.full((3, lwm_spectro.ELEMENT_LENGTH), lwm_spectro.CLS_VALUE)

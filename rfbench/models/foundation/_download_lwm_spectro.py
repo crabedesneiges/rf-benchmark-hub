@@ -2,10 +2,11 @@
 
 LWM-Spectro (``wi-lab/lwm-spectro`` on the Hugging Face Hub) is a **public, non-gated**
 RF foundation model: a 12-layer, ``d_model=128`` Transformer pretrained on RF spectrograms,
-plus a Mixture-of-Experts head over WiFi / LTE / 5G experts. The pretraining backbone
-checkpoint (``checkpoints/checkpoint.pth``) is the weight file this benchmark loads into
-:class:`~rfbench.models.foundation.lwm_spectro.LwmSpectroModel`; the MoE / expert files are
-fetched too so the full model is available on the cluster if needed.
+plus a Mixture-of-Experts head over WiFi / LTE / 5G experts. The real 12-layer LWM encoders are the
+per-protocol **expert** files (``experts/<proto>_expert.pth``); the wrapper loads one as its frozen
+backbone (:class:`~rfbench.models.foundation.lwm_spectro.LwmSpectroModel`). NOTE
+``checkpoints/checkpoint.pth`` is the ``snr_mobility`` MoE bundle (router + classifier), NOT the
+encoder -- it is fetched for completeness only.
 
 This module is the **guarded weights fetcher**: heavy deps (``huggingface_hub``) are imported
 lazily inside the function, and NOTHING here is called from the unit tests (they run in the
@@ -29,19 +30,32 @@ HF_REPO_ID = "wi-lab/lwm-spectro"
 #: Sub-directory of ``$RFBENCH_CACHE`` the weights land in (kept off the dataset trees).
 CACHE_SUBDIR = "lwm-spectro"
 
-#: The pretraining backbone checkpoint the wrapper's ``embed`` loads (12-layer LWM encoder).
-BACKBONE_CHECKPOINT = "checkpoints/checkpoint.pth"
-
-#: The Mixture-of-Experts head checkpoint (protocol router + task classifier), fetched for
-#: completeness so the full MoE model can be reconstructed on the cluster.
-MOE_CHECKPOINT = "moe_checkpoint.pth"
-
-#: The per-protocol expert weights and the hub config -- the remaining artefacts of the model.
-EXTRA_FILES: tuple[str, ...] = (
-    "config.json",
+#: The per-protocol **expert** files ARE the real 12-layer LWM encoders (verified: each is a
+#: 203-tensor state_dict with ``module.embedding.proj``/``layers.i...``/``norm.alpha`` keys). The
+#: wrapper's ``embed`` loads ONE of these as the frozen backbone.
+EXPERT_CHECKPOINTS: tuple[str, ...] = (
     "experts/WiFi_expert.pth",
     "experts/LTE_expert.pth",
     "experts/5G_expert.pth",
+)
+
+#: Default protocol expert whose encoder is used as the frozen backbone. The three experts are
+#: fine-tuned from a shared pretraining base (epoch-0 checkpoints), so any is a reasonable generic
+#: RF encoder; WiFi is the default. Override via ``LwmSpectroModel(expert=...)``.
+DEFAULT_EXPERT = "WiFi"
+
+#: The encoder-backbone checkpoint the wrapper loads by default (a protocol expert, NOT the MoE).
+BACKBONE_CHECKPOINT = f"experts/{DEFAULT_EXPERT}_expert.pth"
+
+#: The MoE bundle (``checkpoints/checkpoint.pth``) is the ``snr_mobility`` downstream router +
+#: classifier + expert list -- NOT the encoder. Fetched for completeness only; never loaded as the
+#: backbone. (``moe_checkpoint.pth`` is a same-shaped duplicate bundle.)
+MOE_CHECKPOINT = "checkpoints/checkpoint.pth"
+
+#: The remaining artefacts (top-level MoE bundle + hub config) fetched for completeness.
+EXTRA_FILES: tuple[str, ...] = (
+    "config.json",
+    "moe_checkpoint.pth",
 )
 
 #: Actionable message if ``huggingface_hub`` is missing (the extra that ships it).
@@ -75,9 +89,13 @@ def lwm_spectro_dir(cache: str | Path | None = None) -> Path:
     return _cache_root(cache) / CACHE_SUBDIR
 
 
-def backbone_checkpoint_path(cache: str | Path | None = None) -> Path:
-    """Return the expected local path of the pretraining backbone checkpoint (may not exist)."""
-    return lwm_spectro_dir(cache) / BACKBONE_CHECKPOINT
+def backbone_checkpoint_path(cache: str | Path | None = None, expert: str = DEFAULT_EXPERT) -> Path:
+    """Return the local path of the encoder-backbone (a protocol expert; may not exist).
+
+    ``expert`` selects which protocol expert's LWM encoder to load (``WiFi`` / ``LTE`` / ``5G``);
+    the default is :data:`DEFAULT_EXPERT`.
+    """
+    return lwm_spectro_dir(cache) / f"experts/{expert}_expert.pth"
 
 
 def download_lwm_spectro(
@@ -104,9 +122,10 @@ def download_lwm_spectro(
     dest = lwm_spectro_dir(cache)
     dest.mkdir(parents=True, exist_ok=True)
 
-    wanted = [BACKBONE_CHECKPOINT, MOE_CHECKPOINT]
+    # Always fetch the default backbone expert; `include_experts` adds the other protocols.
+    wanted = [MOE_CHECKPOINT, *EXTRA_FILES, BACKBONE_CHECKPOINT]
     if include_experts:
-        wanted.extend(EXTRA_FILES)
+        wanted.extend(e for e in EXPERT_CHECKPOINTS if e != BACKBONE_CHECKPOINT)
 
     for filename in wanted:
         hf_hub_download(
@@ -142,6 +161,8 @@ __all__ = [
     "BACKBONE_CHECKPOINT",
     "MOE_CHECKPOINT",
     "EXTRA_FILES",
+    "EXPERT_CHECKPOINTS",
+    "DEFAULT_EXPERT",
     "lwm_spectro_dir",
     "backbone_checkpoint_path",
     "download_lwm_spectro",

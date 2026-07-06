@@ -15,6 +15,15 @@ that made the encoder run **partially random**. The prior board row
 (`leaderboard/results/amc/lwm-spectro-linear_probe.json`, `accuracy_overall=0.2274`) was produced by
 that broken encoder and is **removed** — it must not stand as the hub's first FM-vs-baseline line.
 
+- **Encoder source (found via on-cluster tensor inspection).** The wrapper loaded
+  `checkpoints/checkpoint.pth` as the encoder, but that file is the `snr_mobility` **MoE bundle**
+  (router + classifier + expert list, no encoder tensors). The real 12-layer LWM encoders are the
+  per-protocol **expert** files `experts/{WiFi,LTE,5G}_expert.pth` (203-tensor state_dicts, keys
+  `module.`-prefixed). The wrapper now loads one expert (default `WiFi`, `expert=` selectable); the
+  load guard below is what surfaced the mismatch (all 201 keys missing).
+- **Token width — 16, not 32.** The expert weights prove `embedding.proj` = `Linear(16, 128)` and
+  `decoder_bias` = `(16,)`: the spectrogram is **single-channel** (a 4×4 patch = 16 values), NOT the
+  real/imag-interleaved 32-wide layout previously assumed. `ELEMENT_LENGTH` 32→16, interleave removed.
 - **FATAL — custom `LayerNormalization`.** Upstream every norm is a custom module storing
   `.alpha`/`.bias`, NOT `nn.LayerNorm`'s `.weight`/`.bias`. The reconstruction used `nn.LayerNorm`, so
   all 25 norm layers (50 tensors) silently failed to load and stayed at random init. Reimplemented
@@ -25,10 +34,10 @@ that broken encoder and is **removed** — it must not stand as the hub's first 
   output (upstream "pooling mean"), taken BEFORE the top-level `norm`/`linear` (those run only in the
   masked-reconstruction branch; still defined so their keys load) — was `CLS[:,0]` through a spurious
   extra norm.
-- **Tokenisation.** `[CLS]` is the upstream constant **0.2** vector (was zeros); normalisation is now
-  the **joint** per-sample `(x-mean)/std` over the interleaved real/imag tensor (was magnitude via
-  `abs`/`polar`/`angle`, which fed off-distribution tokens). The interleave + 4×4 patch order were
-  verified byte-identical to upstream and kept.
+- **Tokenisation.** The adapter now builds a **single-channel log-magnitude (dB)** 128×128
+  spectrogram (was a complex STFT with a magnitude `abs`/`polar`/`angle` normalisation that fed
+  off-distribution tokens), 4×4-patched to `(1024, 16)`; `[CLS]` is the upstream constant **0.2**
+  vector (was zeros); per-sample `(x-mean)/std` normalisation matches the upstream `mean_db`/`std_db`.
 - **Load guard.** `_load_weights` now RAISES if any encoder key is missing when a checkpoint is
   present (refuses to score a partly-random encoder as "pretrained"); the exact bug class is now
   CI-catchable, and unexpected recon-head keys are INFO-logged.
@@ -39,13 +48,13 @@ that broken encoder and is **removed** — it must not stand as the hub's first 
 - **Regimes / SLURM.** `slurm/eval_fm_arm.sh` now handles `few_shot` (K as 3rd arg; the previous
   `RegimeSpec(regime)` crashed with no `k_shot`) and **refuses** `from_scratch`/`full_finetune` (a raw
   `forward` = untrained head ≈ chance; a real `full_finetune` needs a training loop — deferred).
-  `linear_probe` (the validated chain) stays the default. Download paths in `_download_lwm_spectro.py`
-  verified correct (`checkpoints/checkpoint.pth`, `moe_checkpoint.pth`, `experts/*`).
+  `linear_probe` (the validated chain) stays the default. `_download_lwm_spectro.py` now treats the
+  `experts/*_expert.pth` files as the encoder backbone (the MoE bundle is fetched for completeness).
 - **License.** Corrected `docs/BIBLIOGRAPHY.md` (4 mentions): LWM-Spectro is **MIT** (declared in
   `pyproject.toml`/`README_model.md`; no LICENSE file ships), NOT CC BY-NC-SA — publishing scores is
   permitted (we never redistribute weights). Consistent with `docs/SOTA_REFERENCE.md` "verify".
 - **Tests.** New torch-gated regression guards in `tests/test_foundation_fm.py`: the encoder exposes
-  the custom `.alpha`/`.bias` norm keys (not `.weight`/`.bias`); the adapter yields `(B, 1025, 32)`
+  the custom `.alpha`/`.bias` norm keys (not `.weight`/`.bias`); the adapter yields `(B, 1025, 16)`
   with a constant-0.2 CLS row; a non-matching checkpoint raises. Dep-free suite stays green;
   `ruff`/`black --line-length 100` clean.
 

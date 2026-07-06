@@ -19,9 +19,16 @@ their protocol classes (WiFi/LTE/5G) are not the AMC label set, and importing ar
 an HF snapshot at eval time is fragile. Instead we reconstruct the LWM encoder here and load the
 *real* pretrained weights into it by matching the checkpoint's ``state_dict`` keys.
 
-ARCHITECTURE FIDELITY (verified 2026-07 against upstream ``pretraining/pretrained_model.py`` +
-``utils.py``). The reconstruction below mirrors the real module tree so the published
-``checkpoints/checkpoint.pth`` ``state_dict`` loads by name:
+WHICH checkpoint holds the encoder (verified 2026-07 by inspecting the real tensors). NOT
+``checkpoints/checkpoint.pth`` -- that is the ``snr_mobility`` MoE bundle (router + classifier +
+expert list, 14 classes), with NO encoder tensors. The real 12-layer LWM encoders are the
+per-protocol **expert** files ``experts/{WiFi,LTE,5G}_expert.pth`` (each a 203-tensor state_dict
+with ``module.embedding.proj``/``layers.i...``/``norm.alpha`` keys). The experts are fine-tuned from
+a shared pretraining base, so any is a reasonable RF encoder; we load one (default ``WiFi``).
+
+ARCHITECTURE FIDELITY (verified against the shipped expert weights). The reconstruction below
+mirrors the real module tree so an expert's ``state_dict`` loads by name (keys are ``module.``-
+prefixed and stripped on load):
 
 * Every normalisation is a **custom** ``LayerNormalization`` storing ``.alpha`` / ``.bias`` (NOT
   ``nn.LayerNorm``'s ``.weight`` / ``.bias``) -- this is the load-bearing detail: using
@@ -37,17 +44,20 @@ ARCHITECTURE FIDELITY (verified 2026-07 against upstream ``pretraining/pretraine
   not a learned parameter.
 
 Input adapter (UNVERIFIED preprocessing -- see :func:`_iq_to_lwm_tokens`). AMC samples are RadioML
-2016.10a IQ windows of shape ``(2, 128)``; LWM-Spectro consumes a **128x128 complex spectrogram**.
-CRITICALLY, upstream ships **no** IQ->spectrogram code: the 128x128 spectrograms are pre-computed
-externally (config.json ``input_shape=[128,128]``, ``input_dtype='float16'``) and the exact STFT
-(only "512-FFT" is stated on the card -- hop, window, magnitude-vs-complex, and the resize are all
-unpublished). We therefore implement a *best-effort approximation* (STFT ``n_fft=512``, then the
-repo's **verified** real/imag-interleave + joint per-sample normalisation + 4x4 ``patch_maker``:
-element_length ``4*4*2 = 32``, ``32*32 = 1024`` patches + 1 CLS = ``max_len=1025``).
-The tokenisation (interleave + patch order + CLS constant + joint normalisation) is faithful to
-upstream; the STFT front-end is NOT and CANNOT be reproduced from public artifacts. Any resulting
-FM score is therefore **provisional / UNVERIFIED** until the upstream spectrogram-generation config
-is obtained; :meth:`embed` warns loudly to that effect.
+2016.10a IQ windows of shape ``(2, 128)``; LWM-Spectro consumes a **128x128 SINGLE-CHANNEL
+spectrogram** -- the expert weights prove this: ``embedding.proj`` is ``Linear(16, 128)`` and
+``decoder_bias`` is ``(16,)``, so a 4x4 patch is ``4*4 = 16`` values (NOT the ``4*4*2 = 32`` a
+complex real/imag layout would give). CRITICALLY, upstream ships **no** IQ->spectrogram code: the
+128x128 spectrograms are pre-computed externally (config.json ``input_shape=[128,128]``,
+``input_dtype='float16'``) and the exact STFT (only "512-FFT" is stated on the card -- hop, window,
+and the resize are unpublished). We therefore implement a *best-effort approximation*: STFT
+``n_fft=512`` -> **log-magnitude** (dB; the ``mean_db``/``std_db`` upstream names imply
+a dB spectrogram) -> resize to 128x128 -> per-sample ``(x-mean)/std`` -> 4x4 ``patch_maker``
+(element_length ``16``, ``32*32 = 1024`` patches + 1 CLS = ``max_len=1025``). The token LAYOUT
+(patch order + CLS constant 0.2 + 16-wide width + per-sample normalisation) matches the shipped
+weights; the STFT front-end is NOT and CANNOT be reproduced from public artifacts. Any resulting FM
+score is therefore **provisional / UNVERIFIED** until the upstream spectrogram-generation config is
+obtained; :meth:`embed` warns loudly to that effect.
 
 HARD CONSTRAINT: ``import rfbench.models.foundation`` stays dependency-free. ``torch`` is imported
 lazily via :func:`~rfbench.models.foundation.base.require_torch` inside the loader/forward/embed;
@@ -71,10 +81,12 @@ from rfbench.models.foundation.base import FoundationModel, require_torch
 
 _LOG = logging.getLogger(__name__)
 
-# --- LWM-Spectro encoder hyper-parameters (verified vs upstream pretrained_model.py + config) ----
-#: Per-token feature width fed to the encoder: a 4x4 patch of the real/imag-interleaved
-#: spectrogram -> ``4 * 4 * 2 = 32`` values per token.
-ELEMENT_LENGTH = 32
+# --- LWM-Spectro encoder hyper-parameters (verified against the SHIPPED expert checkpoints) ------
+#: Per-token feature width fed to the encoder: a 4x4 patch of the SINGLE-CHANNEL 128x128
+#: spectrogram -> ``4 * 4 = 16`` values per token. Verified from the real expert weights
+#: (``embedding.proj.weight`` has shape ``(128, 16)`` and ``decoder_bias`` shape ``(16,)``), which
+#: rules out the real/imag-interleaved 32-wide layout: the spectrogram is single-channel.
+ELEMENT_LENGTH = 16
 #: Transformer hidden width (also the returned embedding dim).
 D_MODEL = 128
 #: Number of Transformer encoder layers.
@@ -86,7 +98,7 @@ MAX_LEN = 1025
 #: Feed-forward hidden width (``4 * d_model``).
 D_FF = D_MODEL * 4
 #: The AMC closed set (RadioML 2016.10a): 11 modulation classes. NOTE this is a fresh downstream
-#: head chosen by rf-benchmark-hub, NOT an upstream output dim (upstream has WiFi/LTE/5G experts).
+#: head chosen by rf-benchmark-hub, NOT an upstream dim (upstream has WiFi/LTE/5G experts).
 DEFAULT_NUM_CLASSES = 11
 #: Spectrogram side length the model consumes (square, 128x128).
 SPEC_SIZE = 128
@@ -255,16 +267,15 @@ def _zeros(dim: int) -> Tensor:
 
 
 def _iq_to_lwm_tokens(iq_batch: object, torch_mod: ModuleType) -> Tensor:
-    """Adapt a collated AMC ``x["iq"]`` list into LWM-Spectro token tensors ``(B, 1025, 32)``.
+    """Adapt a collated AMC ``x["iq"]`` list into LWM-Spectro token tensors ``(B, 1025, 16)``.
 
-    Pipeline (tokenisation faithful to upstream ``utils.py``; STFT front-end is the UNVERIFIED
-    approximation -- see the module docstring). For each ``(2, 128)`` IQ window: form the complex
-    signal ``I + jQ``; STFT with ``n_fft=512`` -> resize to a 128x128 complex grid; **interleave**
-    real/imag along the width (``(128, 256)``, real at even cols, imag at odd -- matches
-    ``convert_complex_to_interleaved``); **joint** per-sample normalisation of the whole interleaved
-    tensor (``(x - mean) / std`` over the signed real/imag values -- matches ``tokenizer_train``,
-    NO magnitude/log); 4x4 ``patch_maker`` -> ``(1024, 32)``; prepend the constant-0.2 ``[CLS]``
-    token -> ``(1025, 32)``. Returns a ``float32`` batch tensor.
+    Pipeline (token LAYOUT verified against the shipped expert weights; STFT front-end is the
+    UNVERIFIED approximation -- see the module docstring). For each ``(2, 128)`` IQ window: form the
+    complex signal ``I + jQ``; STFT ``n_fft=512``; take **log-magnitude** (single channel --
+    ``embedding.proj`` = ``Linear(16, 128)`` and ``mean_db``/``std_db`` upstream names imply
+    a single dB spectrogram, NOT complex real/imag); resize to ``(128, 128)``; **per-sample**
+    normalise ``(x - mean) / std``; 4x4 ``patch_maker`` -> ``(1024, 16)``; prepend the constant-0.2
+    ``[CLS]`` token -> ``(1025, 16)``. Returns a ``float32`` batch tensor.
     """
     torch = cast("Any", torch_mod)
     if isinstance(iq_batch, dict) or not isinstance(iq_batch, Iterable):
@@ -293,80 +304,57 @@ def _iq_to_lwm_tokens(iq_batch: object, torch_mod: ModuleType) -> Tensor:
             pad_mode="constant",
             return_complex=True,
         )  # (F=512, T) complex
-        spec = _resize_to_square(spec, torch)  # (128, 128) complex
-        interleaved = _interleave_real_imag(spec, torch)  # (128, 256) real
-        interleaved = _normalise_interleaved(interleaved, torch)  # joint (x-mean)/std, no magnitude
-        tokens.append(_patch_maker(interleaved, torch))  # (1024, 32)
+        db = 20.0 * torch.log10(spec.abs() + 1e-8)  # (F, T) log-magnitude, single channel
+        img = _resize_to_square(db, torch)  # (128, 128) real
+        img = _normalise(img, torch)  # per-sample (x-mean)/std
+        tokens.append(_patch_maker(img, torch))  # (1024, 16)
 
-    batch = torch.stack(tokens, dim=0)  # (B, 1024, 32)
+    batch = torch.stack(tokens, dim=0)  # (B, 1024, 16)
     cls = torch.full((batch.size(0), 1, ELEMENT_LENGTH), CLS_VALUE, dtype=batch.dtype)
-    return torch.cat([cls, batch], dim=1)  # (B, 1025, 32)
+    return torch.cat([cls, batch], dim=1)  # (B, 1025, 16)
 
 
-def _resize_to_square(spec: Tensor, torch_mod: ModuleType) -> Tensor:
-    """Bilinearly resize an STFT ``(F, T)`` to a ``(SPEC_SIZE, SPEC_SIZE)`` complex spectrogram.
+def _resize_to_square(plane: Tensor, torch_mod: ModuleType) -> Tensor:
+    """Bilinearly resize a real spectrogram ``(F, T)`` to ``(SPEC_SIZE, SPEC_SIZE)``.
 
     A 512-FFT of a 128-sample AMC window gives ``(512, 129)``, which does not tile into a 128x128
-    grid. We resize the real and imaginary parts independently (bilinear) to exactly ``(128, 128)``.
-    This is part of the UNVERIFIED STFT front-end (the real pretraining resize is unpublished);
-    always well-formed for any STFT shape.
+    grid, so we resize (bilinear) to exactly ``(128, 128)``. Part of the UNVERIFIED STFT front-end
+    (the real pretraining resize is unpublished); always well-formed for any STFT shape.
     """
     torch = cast("Any", torch_mod)
-    fn = torch.nn.functional
-
-    def _resize(plane: Tensor) -> Tensor:
-        resized = fn.interpolate(
-            plane[None, None], size=(SPEC_SIZE, SPEC_SIZE), mode="bilinear", align_corners=False
-        )
-        return resized[0, 0]
-
-    return torch.complex(_resize(spec.real), _resize(spec.imag))
+    resized = torch.nn.functional.interpolate(
+        plane[None, None], size=(SPEC_SIZE, SPEC_SIZE), mode="bilinear", align_corners=False
+    )
+    return resized[0, 0]
 
 
-def _interleave_real_imag(spec: Tensor, torch_mod: ModuleType) -> Tensor:
-    """Interleave real/imag along width: ``(H, W)`` complex -> ``(H, 2W)`` real (repo layout).
+def _normalise(img: Tensor, torch_mod: ModuleType) -> Tensor:
+    """Per-sample normalisation ``(x - mean) / std`` over the whole ``(128, 128)`` spectrogram.
 
-    Real at even columns, imag at odd -- matches upstream ``convert_complex_to_interleaved``.
+    Matches upstream ``tokenizer_train`` per-sample norm (``mean_db``/``std_db`` over the
+    whole array). ``torch_mod`` is unused (kept for signature symmetry with the sibling helpers).
+    """
+    del torch_mod  # tensor methods below need no framework handle
+    mean = img.mean()
+    std = img.std().clamp_min(1e-6)
+    return (img - mean) / std
+
+
+def _patch_maker(img: Tensor, torch_mod: ModuleType) -> Tensor:
+    """Split a single-channel ``(128, 128)`` spectrogram into ``(1024, 16)`` 4x4 patch tokens.
+
+    Mirrors upstream ``patch_maker(patch_rows=4, patch_cols=4)``: reshape ``(128, 128) ->
+    (32, 4, 32, 4)``, ``transpose(0, 2, 1, 3)``, flatten to ``(1024, 16)`` (C-order) -> ``4*4 = 16``
+    = :data:`ELEMENT_LENGTH` per token, ``(128/4)*(128/4) = 1024`` tokens. The 16-wide token matches
+    the shipped ``embedding.proj`` = ``Linear(16, 128)``.
     """
     torch = cast("Any", torch_mod)
-    h, w = spec.shape
-    out = torch.zeros(h, 2 * w, dtype=torch.float32)
-    out[:, 0::2] = spec.real
-    out[:, 1::2] = spec.imag
-    return out
-
-
-def _normalise_interleaved(interleaved: Tensor, torch_mod: ModuleType) -> Tensor:
-    """Joint per-sample normalisation of the interleaved real/imag tensor (``tokenizer_train``).
-
-    Upstream computes ``(spec - spec.mean()) / spec.std()`` over the whole interleaved ``(128,256)``
-    array of signed real/imag values -- NO ``.abs()``, NO magnitude, NO log. This is the
-    distribution the frozen encoder trained on; normalising magnitude feeds off-distribution tokens.
-
-    ``torch_mod`` is unused (kept for signature symmetry with the sibling adapter helpers).
-    """
-    del torch_mod  # kept for signature symmetry; tensor methods below need no framework handle
-    mean = interleaved.mean()
-    std = interleaved.std().clamp_min(1e-6)
-    return (interleaved - mean) / std
-
-
-def _patch_maker(spec: Tensor, torch_mod: ModuleType) -> Tensor:
-    """Split a ``(128, 256)`` interleaved spectrogram into ``(1024, 32)`` 4x4 patch tokens.
-
-    Mirrors upstream ``patch_maker(patch_rows=4, patch_cols=4, interleaved=True)``: reshape
-    ``(128,256) -> (32, 4, 32, 8)``, ``transpose(0, 2, 1, 3)``, flatten to ``(1024, 32)`` (C-order).
-    The width is ``2*128`` because real/imag interleave, so a 4-column patch spans 8 interleaved
-    values -> ``4 * 8 = 32`` = :data:`ELEMENT_LENGTH` per token, ``(128/4)*(128/4) = 1024`` tokens.
-    Verified byte-for-byte identical to upstream.
-    """
-    torch = cast("Any", torch_mod)
-    h, w = spec.shape  # (128, 256)
-    if w != 2 * SPEC_SIZE or h != SPEC_SIZE:
-        raise ValueError(f"expected an interleaved spectrogram of shape (128, 256); got {(h, w)}")
-    n_r, n_c = h // PATCH, (w // 2) // PATCH  # 32, 32 (cols count the ORIGINAL, un-doubled grid)
-    grid = spec.contiguous().reshape(n_r, PATCH, n_c, PATCH * 2)
-    grid = grid.permute(0, 2, 1, 3).reshape(n_r * n_c, PATCH * PATCH * 2)
+    h, w = img.shape  # (128, 128)
+    if h != SPEC_SIZE or w != SPEC_SIZE:
+        raise ValueError(f"expected a spectrogram of shape (128, 128); got {(h, w)}")
+    n_r, n_c = h // PATCH, w // PATCH  # 32, 32
+    grid = img.contiguous().reshape(n_r, PATCH, n_c, PATCH)
+    grid = grid.permute(0, 2, 1, 3).reshape(n_r * n_c, PATCH * PATCH)
     return grid.contiguous().to(torch.float32)
 
 
@@ -400,19 +388,26 @@ class LwmSpectroModel(FoundationModel):
         name: str = "lwm-spectro",
         num_classes: int = DEFAULT_NUM_CLASSES,
         checkpoint: str | Path | None = None,
+        expert: str = "WiFi",
         device: str | None = None,
     ) -> None:
-        """Wrap the LWM-Spectro encoder under ``name``; keep construction torch-free and cheap."""
+        """Wrap the LWM-Spectro encoder under ``name``; keep construction torch-free and cheap.
+
+        ``expert`` selects which protocol expert's LWM encoder is the frozen backbone
+        (``WiFi`` / ``LTE`` / ``5G``); the three are fine-tuned from a shared pretraining base, so
+        any is a reasonable generic RF encoder. ``checkpoint`` overrides the resolved expert path.
+        """
         super().__init__(
             name,
             n_params=0,  # set once the backbone is loaded (see _ensure_loaded)
-            backbone="wi-lab/lwm-spectro:checkpoints/checkpoint.pth",
+            backbone=f"wi-lab/lwm-spectro:experts/{expert}_expert.pth",
             pretrained=True,
         )
         if num_classes < 1:
             raise ValueError(f"num_classes must be >= 1, got {num_classes}")
         self.num_classes = num_classes
         self._checkpoint = checkpoint
+        self._expert = expert
         self._device_str = device
         self._encoder: Any = None
         self._head: Any = None
@@ -443,9 +438,10 @@ class LwmSpectroModel(FoundationModel):
     def _load_weights(self, encoder: Tensor, torch_mod: ModuleType) -> None:
         """Load the real pretrained ``state_dict`` into ``encoder`` (``strict=False`` + guard).
 
-        Resolves the checkpoint from ``self._checkpoint`` or the cached
-        ``$RFBENCH_CACHE/lwm-spectro/checkpoints/checkpoint.pth``. When absent the encoder keeps its
-        random init and :attr:`pretrained` flips to ``False``. When present, any MISSING encoder key
+        Resolves the checkpoint from ``self._checkpoint`` or the cached expert encoder
+        ``$RFBENCH_CACHE/lwm-spectro/experts/<expert>_expert.pth`` (keys ``module.``-prefixed and
+        stripped below). When absent the encoder keeps its random init and :attr:`pretrained` flips
+        to ``False``. When present, any MISSING encoder key
         (i.e. the reconstruction does not match the weights) RAISES -- we refuse to run a
         partially-random backbone and report it as pretrained.
         """
@@ -491,7 +487,7 @@ class LwmSpectroModel(FoundationModel):
             return Path(self._checkpoint).expanduser()
         from rfbench.models.foundation._download_lwm_spectro import backbone_checkpoint_path
 
-        return backbone_checkpoint_path()
+        return backbone_checkpoint_path(expert=self._expert)
 
     def _warn_unverified_preprocessing(self) -> None:
         """Emit a one-time loud warning: IQ->STFT front-end is UNVERIFIED (provisional score)."""

@@ -49,6 +49,78 @@ that broken encoder and is **removed** — it must not stand as the hub's first 
   with a constant-0.2 CLS row; a non-matching checkpoint raises. Dep-free suite stays green;
   `ruff`/`black --line-length 100` clean.
 
+### Fixed — CLDNN chance-collapse root-caused (CLDNN-scoped fix: per-sample input normalization)
+
+- **Root cause (multi-agent workflow → per-epoch cluster diagnostic).** The earlier grad-clip "fix"
+  only masked the NaN *symptom*; CLDNN still pinned at chance (0.0909). The real cause is a
+  **CLDNN-specific input-conditioning fragility**: RadioML 2016.10a is ~unit-average-power, so raw
+  per-sample IQ is tiny (RMS ~1e-2), and CLDNN has **no input normalization and no BatchNorm** —
+  that near-zero-scale signal, fed through the conv front end AND (via the raw-waveform skip)
+  straight into the 3-layer stacked LSTM, lets the deep recurrence collapse to a constant-class
+  output **for some weight-init draws**. The diagnostic showed the un-normalized model **collapsed
+  on the board's unseeded init yet learns on seed 42** — a fragility, not a deterministic bug.
+  ResNet hit the *identical* exact-1/11 collapse earlier and was cured by exactly this normalization.
+- **Fix — one change inside `rfbench/models/baselines/cldnn.py`** (cannot touch MCLDNN/ResNet;
+  `training.py` recipe byte-for-byte unchanged): **per-sample unit-variance input normalization**
+  (`_unit_variance_normalize`, the same transform `resnet_amc` uses) at the top of
+  `CLDNNNet._conv_sequence`, before the conv **and** the raw skip, so both see ~unit-scale IQ. With
+  a real input scale the LSTM cannot ignore the (tiny) input, so it learns robustly regardless of
+  the init draw. Gated by `input_norm` (default **True**) → `MODELS.get("cldnn")()` builds the fixed
+  model with no CLI change; `input_norm=False` reproduces the fragile config for ablation.
+- **Diagnostic-driven (this is why we ran the short job first).** The per-epoch diagnostic
+  (`slurm/diagnose_cldnn.py`, job 86194, seed 42, 20 ep) compared four variants and **overturned
+  the workflow's proposed second half**: `broken` 0.5659 · **`norm` 0.5848** · `init` (forget-bias-1
+  + orthogonal LSTM re-init, no norm) **0.0909 — collapsed** · `norm_init` 0.5848. So normalization
+  is **necessary and sufficient**, and the LSTM re-init is **inert with norm and actively harmful
+  without it** (the deep LSTM ignores the tiny input) — it was therefore **dropped** from the model.
+  It logs, per epoch, val-accuracy · LR · pre-clip grad-norm · clip-bite · prediction entropy /
+  top-class fraction · conv & LSTM activation std; a `--seed` sweep confirms `norm` is init-robust
+  before the 150-epoch retrain (`slurm/retrain_cldnn_arm.sh`).
+- **Follow-up flagged (not in this fix):** `training.py` val-accuracy checkpoint selection with
+  `best_acc=-1.0` silently reports the untrained epoch-0 snapshot for a run that never beats chance —
+  a robustness gap (not the CLDNN root cause) worth hardening separately.
+- **Seed-robustness confirmed** before the long retrain (job 86196, 4 seeds × 12 ep): `norm` scores
+  0.5631 / 0.5650 / 0.5690 / 0.5665 — tight and always ≫ 0.50 — while un-normalized `broken` swings
+  0.4978–0.5400 and **collapses to 0.1275 on seed 123**, directly demonstrating the init fragility
+  the normalization removes.
+- **Board updated:** CLDNN re-trained from scratch (RadioML 2016.10a, seed 42, 150 epochs, final
+  recipe) → **accuracy_overall 0.5805** (`leaderboard/results/amc/cldnn.json`, schema-valid +
+  PR-ready; 440 907 params, 1× GB200), the first honest figure for the paper-faithful 3-LSTM+skip
+  CLDNN under the final recipe (the prior 0.5876 was a superseded 2-LSTM/no-skip arch). MCLDNN
+  (0.6171) / ResNet (0.5661) untouched. Tests (`tests/test_cldnn.py`: normalization applied on the
+  default path, raw-skip identity under `input_norm=False`) + `ruff`/`black`/`mypy` green.
+
+### Changed — BIBLIOGRAPHY.md refreshed to the current board (post-recipe-fix)
+
+- **"Our score" values updated** to the live `leaderboard/results/**`: MCLDNN 60.08 → **61.71**
+  (now above the paper's 61.01), ResNet 56.06 → **56.61**; CLDNN → **58.05** (final recipe,
+  paper-faithful arch — the collapse noted at the time of this refresh was since root-caused and
+  fixed, see the CLDNN entry above). Header convention
+  block now describes the **fixed 2026-06 recipe** (val-accuracy checkpoint, ReduceLROnPlateau,
+  early stop, grad clip 5.0) instead of the old fixed-epoch recipe.
+- **Part B audit re-scoped as historical**: banners added to B.1–B.4 stating which mismatches were
+  resolved by the 2026-06 paper-conformance pass (MCLDNN concat fusion + dropout head, CLDNN skip +
+  3rd LSTM, ResNet unit-var norm + AlphaDropout + 2-dense head) and what stays open (CLDNN
+  collapse; `wisig_cnn` still 1-D vs paper 2-D). Audit summary rewritten as a post-fix status.
+- **Fabricated-row mentions updated**: the SEI 0.9412 / iqfm 0.7734 / mislabeled XCiT rows are
+  recorded as **removed from the board** (`a689e86`) in A.3, A.5 and DOWNSTREAM_TASKS (the board
+  currently has no SEI rows).
+
+### Added — RFSS (arXiv:2604.00398) mined into the bibliography; `source_separation` candidate task
+
+- **`docs/BIBLIOGRAPHY.md` §A.6 + §C.4**: RFSS (Chen/Jin/Tan, 2026-04 — v2 of arXiv:2508.12106,
+  cite the 2026 id) — first public blind multi-source RF separation corpus (100k mixtures, 2–4
+  sources, GSM/UMTS/LTE/5G NR, 3GPP TDL + 5 hardware impairments, 103 GB HDF5, official 70/15/15
+  index split). Benchmarks table (Conv-TasNet best, −12.34 dB co-channel PI-SI-SINR 2-src);
+  co-channel is the honest metric (adjacent-channel has a ~−28 dB evaluation-floor artifact).
+  Availability: **not released as of 2026-07-03** (HF release announced in the paper only) — track blocked until it lands. Related refs added:
+  RF Challenge (arXiv:2409.08839, interference cancellation, real OTA), Conv-TasNet, DPRNN,
+  SI-SNR (Le Roux 2019), RF Transformer (arXiv:2603.09201, unscreened). Former §C.4 (FMs) → §C.5.
+- **`docs/DOWNSTREAM_TASKS.md`**: new canonical id `source_separation` (taxonomy + coverage matrix
+  + P3 section, RFSS as recommended dataset/protocol/metric); `interference_id` /
+  `protocol_tech_id` statuses fixed ABSENT → EXISTS (implemented 2026-06); RFSS `rfss_single.h5`
+  noted as a candidate 2nd `protocol_tech_id` dataset (cellular standards).
+
 ### Added — educational content on the leaderboard site (data-driven)
 
 - **Enriched task manifest** (`leaderboard/tasks.json`): each task now merges optional
@@ -145,11 +217,12 @@ that broken encoder and is **removed** — it must not stand as the hub's first 
 - Re-trained from scratch (RadioML 2016.10a, seed 42, 150 epochs) under the fixed recipe
   (val-accuracy best-checkpoint + gradient clipping + paper-exact archs): **MCLDNN 0.6008 → 0.6171**
   and **ResNet 0.5606 → 0.5661**. Both now exceed their prior board scores.
-- **KNOWN ISSUE — CLDNN collapses to chance (0.0909) under the new recipe.** Gradient clipping ruled
-  out the LSTM-explosion/NaN hypothesis (no divergence logged); the 3-LSTM CLDNN instead stays stuck
-  at chance throughout training, even though the same architecture reached 0.5072 under the earlier
-  50-epoch val-loss recipe. Under investigation (per-epoch val-accuracy/LR trajectory diagnostic
-  pending). The board retains the last reproducible CLDNN figure until the fix lands.
+- **~~KNOWN ISSUE — CLDNN collapses to chance (0.0909)~~ RESOLVED** (see the top "Fixed — CLDNN
+  chance-collapse" entry): root-caused to a CLDNN input-conditioning fragility (tiny raw IQ + no
+  input normalization into the 3-LSTM stack collapses for some init draws) and fixed with per-sample
+  unit-variance input normalization inside `cldnn.py`. CLDNN re-trained from scratch under the same
+  final recipe now scores **0.5805** (paper-faithful 3-LSTM+skip arch; the prior 0.5876 board figure
+  was a superseded 2-LSTM/no-skip architecture). MCLDNN/ResNet unchanged.
 
 ### Added — Downstream-task prioritization mined from the FM bibliography
 

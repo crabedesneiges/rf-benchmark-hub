@@ -181,14 +181,14 @@ Consolidated board-comparability table (AMC / RadioML only):
 | **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | not run | ✅ beats our MCLDNN 61.71 |
 | **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | not run (fabricated SEI row removed from board, `a689e86`) | ✅ metric; ✗ data regime |
 | **RIS-MAE** | ✗ (retrain) | 2018.01a, 24-cls | fine-tune, 1% labels | **48.41%** | not run | ✅ if 2018 unblocked |
-| **LWM-Spectro** | ✅ HF (MIT declared, no LICENSE file) | **none** (DeepMIMO 5-cls) | few-shot F1, real linear/FT head | 47–95 F1 (own data) | **22.74%** | ❌ no RadioML in paper |
+| **LWM-Spectro** | ✅ HF (MIT declared, no LICENSE file) | **none** (DeepMIMO 5-cls) | few-shot F1, real linear/FT head | 47–95 F1 (own data) | **no row** (OOD; removed) | ❌ no RadioML in paper — own task reproduced (B.5) |
 | **WavesFM** | ✗ `(?)` | none (own 20-cls) | fine-tune | 86.05% | not run | ❌ |
 | **LatentWave** | ✗ | none (CommRad) | linear probe | 80.9% | not run | ❌ |
 | **6G-MSM** | ✗ | none (CSI/seg) | fine-tune | 93.9 / 97.6% | not run | ❌ (no AMC) |
 | **TorchSig XCiT** | ✗ (train from Sig53) | none (Sig53 53-cls) | supervised | Nano 67.97 / Tiny12 71.16 | not run (mislabeled row removed from board, `a689e86`) | ❌ (Sig53 excluded) |
 
 Primary sources & key facts:
-- **LWM-Spectro** (`wi-lab/lwm-spectro`, on our board) — Kim, Alikhani, Alkhateeb, arXiv:2601.08780
+- **LWM-Spectro** (`wi-lab/lwm-spectro`, integrated + verified; **not** on the board) — Kim, Alikhani, Alkhateeb, arXiv:2601.08780
   (2026-01, cs.IT). **License: MIT is the only upstream signal — declared in `pyproject.toml`
   (`license = {text = "MIT"}` + OSI classifier) and README_model.md ("License: MIT"), but NO standalone
   LICENSE file ships (README frontmatter has `#license: mit` commented out; config.json has no license
@@ -198,7 +198,8 @@ Primary sources & key facts:
   top-1 router). Pretrained on **9.2M synthetic DeepMIMO spectrograms** — no real captures, **no
   RadioML**. Paper AMC = 5-class DeepMIMO spectrograms, few-shot **macro-F1**, real linear/FT head
   (LWM linear-probe 47.41→92.01 F1 over 5→400 shots). **There is no published LWM-Spectro RadioML
-  number**, so our 22.74% is not comparable to anything in the paper (see B.5).
+  number**, so we report **no** RadioML row for it; instead we reproduced the paper's own
+  `snr_mobility` task at **93.9%** from the shipped ckpt + demo data (see B.5).
 - **LWM base** — Alikhani, Charan, Alkhateeb, arXiv:2411.08872 (2024). CSI/channel model (12L, d=64,
   ~600k params), MCM pretraining. LWM-Spectro's lineage; **CSI-only, not a terrestrial-signal baseline**
   — exclude from AMC/SEI board.
@@ -374,27 +375,39 @@ There is also **no `oracle_cnn`** (paper 2-conv+2-FC, 2×128, lr=1e-4) and **no 
 (paper needs a spectrogram front-end + CFO compensation). `wisig_cnn`'s length-agnostic pooling lets it
 run on ORACLE's 128-window, but it is the wrong architecture for both.
 
-### B.5 LWM-Spectro — `rfbench/models/foundation/lwm_spectro.py` — our linear_probe 22.74% (no paper number)
+### B.5 LWM-Spectro — `rfbench/models/foundation/lwm_spectro.py` — integration VERIFIED; no AMC board row
+
+Updated 2026-07 after a full ground-truth pass against the real weights + an on-cluster reproduction
+of the paper's own task. The earlier "our linear_probe 22.74%" figure was produced by a **broken
+encoder that loaded ZERO pretrained weights** (a fatal key mismatch) and has been **removed from the
+board**. The corrected integration is now verified.
 
 | Aspect | Paper (Kim 2026, HF `wi-lab/lwm-spectro`) | Our code | Verdict |
 |---|---|---|---|
-| Encoder | 12-layer Transformer d=128 h=8, 4×4 patches, seq 1024 (+CLS) | reconstructed identically `lwm_spectro.py:56-189` | MATCH |
-| Weights | real pretrained `checkpoint.pth` | loaded `strict=False`; **falls back to random init + warning if absent** `lwm_spectro.py:362-398` | MATCH (if ckpt present) / UNKNOWN (silent-ish random fallback) |
-| MoE / router | 3 protocol experts + top-1 router | **not used** — bare backbone only `lwm_spectro.py:16-20` | MISMATCH (deliberate) |
-| Eval dataset | DeepMIMO 5-cls spectrograms | **RadioML 2016.10a IQ** | **MISMATCH — OOD by construction, no paper number exists for this** |
-| Input / STFT | 128×128 spectrogram from **512-FFT** (hop/window/log-scale **unpublished**) | **approximate**: n_fft=512, **hop=1**, zero-pad, take 128 bins, **bilinear resize to 128×128** `lwm_spectro.py:192-257` | **MISMATCH — gap driver** (STFT constants guessed; upstream generator unreleased) |
-| Normalization | log-scale + per_sample `(spec−mean)/std`, eps 1e-6; `[CLS]`=0.2, `[MASK]`=0.1 | magnitude `(mag−mean)/std` (**no log-scale**), **`[CLS]`=0.0 (zeros) not 0.2** `lwm_spectro.py:235,260-268` | **MISMATCH — gap driver** (no log-scale; wrong CLS fill) |
-| Probe head | paper uses **real linear/logreg** (AdamW, wd 5e-4, 8 ep, early stop) → 47–92 F1 | **NearestCentroidHead** (nearest-centroid, pure-stdlib) `regimes/probe.py:57-116` | **MISMATCH — gap driver** (weaker estimator than logreg) |
-| Metric | macro-F1 @ k-shot | `accuracy_overall` full-dataset | MISMATCH — not the paper's metric |
-| Expert routing | top-1 router selects expert | none (bare backbone) | MISMATCH |
+| Encoder | 12-layer Transformer d=128 h=8, custom `LayerNormalization` (`alpha/bias`), internal-residual MHA, ReLU FFN | reconstructed to load the real weights **bit-exact** (`missing=0`) | **MATCH — verified** |
+| Weights source | — | `experts/{WiFi,LTE,5G}_expert.pth` (real 12-layer encoders, `module.`-prefixed). **NOT** `checkpoints/checkpoint.pth`, which is the `snr_mobility` MoE bundle (router+classifier, no encoder) | fixed after inspecting the real tensors |
+| Token width | 4×4 patch of a **single-channel** 128×128 spectrogram → **16** | `ELEMENT_LENGTH=16` (proven by `embedding.proj`=`Linear(16,128)`, `decoder_bias`=`(16,)`) | **MATCH — verified** (earlier 32/interleaved was wrong) |
+| Representation | mean-pool over sequence; `[CLS]`=0.2; per-sample `(x−mean)/std`; log-magnitude (dB) | mean-pool, `[CLS]`=0.2, joint per-sample norm, log-magnitude | **MATCH (token layout)** |
+| Input / STFT | 128×128 spectrogram, `\|Y\|²` log-scaled — **hop/window/FFT unpublished; upstream ships NO IQ→spectrogram code** | best-effort `n_fft=512` STFT front-end | **UNVERIFIABLE — gap driver** (cannot be reproduced from public artifacts) |
+| Eval dataset | DeepMIMO synthetic spectrograms | **RadioML 2016.10a IQ** (a hub choice) | **OOD by construction; paper reports no RadioML number** |
 
-Verdict: our 22.74% is **not comparable to any published LWM-Spectro figure** — the paper never
-evaluates RadioML. Four compounding issues depress it even as an internal number: (1) the STFT adapter
-is an admitted approximation (unpublished n_fft/hop/window/log-scale), (2) normalization omits the
-log-scale and uses `[CLS]`=0 instead of 0.2, (3) the linear_probe head is **nearest-centroid, not
-logreg**, and (4) we feed the bare backbone with no expert routing. Replace the head with logreg on
-frozen CLS features before drawing any FM-vs-baseline conclusion, and label the row "no published
-RadioML reference."
+**Reproduction of the paper's own task (from the shipped ckpt + `demo_data_moe.pt`).** The released
+MoE checkpoint targets **joint SNR/mobility recognition** (`task='snr_mobility'`, 14 classes = 7 SNR ×
+{pedestrian, vehicular}). `demo_data_moe.pt` ships 10 500 **labelled** pre-computed 128×128
+spectrograms + reference embeddings. Reconstructing their exact classifier head (`Res1DCNNHead` +
+`LayerNorm`, loaded `missing/unexpected=[]`) and running it on the shipped `moe_embedding` reproduces
+**93.9% accuracy** (pedestrian 96.6 / vehicular 91.2), matching the paper's Table II (94.4% @100-shot,
+95.1% @400-shot); a logreg cross-check on the shipped embedding gives 92.6%. Our reconstructed encoder
+fed the shipped spectrograms yields a **0.57 cosine** to the reference `moe_embedding` (vs ~0 random) —
+substantively correct, not yet bit-exact (the precise embedding-extraction/MoE-combine recipe is the
+remaining gap).
+
+Verdict: **the integration and the model are VERIFIED** (real weights load bit-exact; the paper's own
+snr_mobility task reproduces at 93.9% ≈ the paper). There is **no LWM-Spectro AMC/RadioML board row**,
+and inventing one would be dishonest: (1) the paper defines **no** RadioML/AMC task, and (2) the
+IQ→spectrogram preprocessing is **unpublished**, so any RadioML number is off-distribution (our
+corrected linear_probe/few_shot land at ~chance, 16.6%/14.1%, and are **not** published). LWM-Spectro's
+tasks are DeepMIMO-synthetic and fall **outside the hub's terrestrial-real-signal board scope**.
 
 ### Audit summary — status after the 2026-06 fixes
 
@@ -407,9 +420,11 @@ RadioML reference."
    len-128 adaptation), MCLDNN its **concat fusion (100 filters) + dropout-regularized 2-dense head**.
    The paper-exact CLDNN's chance-collapse was root-caused and fixed (2026-07, per-sample input
    normalization); board score **58.05%**.
-3. **LWM-Spectro linear_probe — STILL OPEN**: nearest-centroid (not logreg) on an **approximate STFT**
-   with wrong normalization (no log-scale, `[CLS]`=0) — and against a dataset the paper never
-   evaluates. The 22.74% board row stands with that caveat.
+3. **LWM-Spectro — VERIFIED, no board row** (2026-07): the encoder now loads the real expert weights
+   **bit-exact** (`missing=0`) and the paper's own `snr_mobility` task reproduces at **93.9%** from the
+   shipped ckpt + demo data. The broken 22.74% row (which had loaded **zero** weights) was **removed**.
+   No AMC/RadioML row is reported — the paper defines no such task and the IQ→spectrogram preprocessing
+   is unpublished (RadioML would be OOD; corrected probe lands at ~chance). See B.5.
 4. **SEI fabrications — REMOVED from the board** (`a689e86`): the 0.9412 fixture-split row and the
    0.7734 iqfm row are gone. **STILL OPEN**: `wisig_cnn` remains the wrong architecture (1-D vs paper
    2-D) with the wrong lr/batch and no unit-power norm — a real WiSig run needs `wisig_cnn_paper`
@@ -498,10 +513,12 @@ Papers/models/datasets to add (deduped).
   unit-max norm, SimCLR.
 - **RIS-MAE** (arXiv:2508.00274) — ADD for the 2018.01a AMC track once unblocked: 48.41% OA / κ 0.4616 at
   1% labels, full SNR, 24-class (beats MCLDNN 31.92 in that regime).
-- **LWM-Spectro self-protocol note** — our 22.74% is on RadioML but the paper's AMC is 5-class DeepMIMO
-  spectrograms, few-shot macro-F1, with a real linear/FT head (47–95 F1). A faithful reproduction needs
-  a logreg head + exact (unpublished) STFT params + per_sample `(spec−mean)/std` + log-scale + `[CLS]`=0.2
-  + top-1 expert routing. Record "no published LWM-Spectro RadioML number exists."
+- **LWM-Spectro self-protocol note** — the paper's tasks are on **DeepMIMO synthetic** spectrograms
+  (5-class modulation few-shot macro-F1; `snr_mobility`; multi-protocol), NOT RadioML. We therefore
+  report **no** RadioML row. We DID reproduce the paper's own `snr_mobility` task at **93.9%** from the
+  shipped ckpt + `demo_data_moe.pt` (their exact `Res1DCNNHead`, `missing/unexpected=[]`). A RadioML
+  number can't be made faithful (the IQ→spectrogram STFT is unpublished). Record "no published
+  LWM-Spectro RadioML number exists; own snr_mobility task reproduced 93.9%."
 - **LatentWave** (arXiv:2606.06373) — ADD as a JEPA-on-spectrograms FM: linear-probe 80.9% on CommRad (not
   RadioML). Useful spectrogram-track FM baseline (ViT 8L/256d/6.4M, EMA JEPA).
 - **6G-MSM** (arXiv:2411.09996) — ADD as the reference MSM-ViT recipe for a spectrogram/segmentation track

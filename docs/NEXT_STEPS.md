@@ -23,8 +23,12 @@ Légende **Workflow ?** : `solo` = 1 agent / main-loop ; `WF` = workflow multi-a
 - **`protocol_tech_id`** : tâche + baseline `tprime` (transformer) codés ; dataset id corrigé
   (DS 3.0 `neu:h989s8519`, format `.bin` = complex128 natif). Bloqué au download (voir #10 ci-dessous).
 - **FM LWM-Spectro (WP-62)** : wrapper rendu fidèle aux vrais poids (experts `*_expert.pth`, token
-  width 16, LayerNormalization custom). Ligne RadioML 22.74% **retirée** (aucun nombre publié
-  comparable) — à re-produire proprement (voir #6).
+  width 16, LayerNormalization custom) — **poids chargés bit-exact** (`missing=0`). Ligne RadioML
+  **retirée** (22.74% = ancien encodeur cassé chargeant 0 poids). **Tâche du papier `snr_mobility`
+  reproduite à 93.9%** (leur classifieur exact sur `demo_data_moe.pt` ≈ Table II 94–95%). **Pas de
+  ligne AMC** : le papier n'a aucune tâche RadioML, préproc IQ→spectrogramme non publiée (voir
+  `docs/BIBLIOGRAPHY.md` B.5). Intégration **close** ; la thèse FM-vs-baseline passe par un FM à tâche
+  terrestre réelle (voir #6).
 - **RFSS** (arXiv:2604.00398) mined en biblio ; `source_separation` ajouté comme track candidat P3.
 
 ## En vol (sessions parallèles — ne pas toucher)
@@ -39,7 +43,7 @@ Légende **Workflow ?** : `solo` = 1 agent / main-loop ; `WF` = workflow multi-a
 | # | Étape | Workflow ? | Détail |
 |---|---|---|---|
 | 5 | **Lander la colonne SEI** | cluster | Attendre la fin du `sei_train`, merger `feat/sei-complete`, écrire les `result.json` des 3 conditions. Montre la **chute cross-receiver/cross-day** (point clé WiSig). |
-| 6 | **1re ligne FM vs baseline** | **WF** | Re-produire LWM-Spectro proprement sur AMC : head **logreg** (pas nearest-centroid) sur features CLS gelées, STFT + normalisation corrigées, `linear_probe`/`few_shot`. Produit la **thèse du hub**. Vérifier la licence avant publication. |
+| 6 | **1re ligne FM vs baseline** | **WF** | **LWM-Spectro ne peut PAS la fournir** : le papier n'a aucune tâche RadioML/terrestre et sa préproc IQ→spectrogramme est non publiée (intégration close + vérifiée, sa tâche `snr_mobility` reproduite à 93.9% — voir BIBLIOGRAPHY B.5). Utiliser un FM à **tâche RadioML réelle** : **WirelessJEPA** (74.78% linear-probe RML2016.10a, bat MCLDNN — poids à ré-entraîner) ou **IQFM** (38.1% @50/cl OOD). Head logreg sur features gelées, licence vérifiée avant publication. |
 | 7 | **Démo tier `verified`** | cluster | `rfbench verify` : re-run MCLDNN depuis son checkpoint, flip `self_reported`→`verified` dans la tolérance. Prouve le WP-53 en vrai (1 job court, indépendant). |
 
 ## P2 — Compléter les colonnes existantes

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified — LWM-Spectro integration validated on its own task; no AMC board row (WP-62)
+
+On-cluster follow-up to the LWM-Spectro faithful-wrapper fix. Definitive outcome: the integration and
+the model are **verified**, and — because the paper defines **no** RadioML/AMC task and ships **no**
+IQ→spectrogram preprocessing — LWM-Spectro gets **no AMC/RadioML board row** (inventing one would be
+dishonest). See `docs/BIBLIOGRAPHY.md` §B.5.
+
+- **Real weights load bit-exact.** The encoder is loaded from `experts/{WiFi,LTE,5G}_expert.pth` (the
+  real 12-layer LWM encoders; `checkpoints/checkpoint.pth` is the `snr_mobility` MoE bundle, not an
+  encoder). `load_state_dict` reports `missing=0` — every one of the 201 encoder tensors matches by
+  name and shape. The prior "22.74%" board row was produced by the earlier broken encoder that loaded
+  **zero** weights and was already removed.
+- **Paper's own task reproduced — 93.9%.** The released MoE ckpt targets joint SNR/mobility
+  recognition (`snr_mobility`, 14 classes). Reconstructing their exact classifier head (`Res1DCNNHead`
+  + `LayerNorm`, loaded `missing/unexpected=[]`) and running it on the shipped `demo_data_moe.pt`
+  (10 500 labelled 128×128 spectrograms + reference embeddings) reproduces **93.9%** accuracy
+  (pedestrian 96.6 / vehicular 91.2), matching the paper's Table II (94.4% @100-shot, 95.1% @400-shot);
+  a logreg cross-check on the shipped embedding gives 92.6%.
+- **Encoder correlation check.** Our reconstructed encoder fed the shipped spectrograms yields a
+  **0.57 cosine** to the reference `moe_embedding` (vs ~0 random) — substantively correct; the residual
+  gap to bit-exact is the precise embedding-extraction/MoE-combine recipe (out of scope).
+- **RadioML AMC stays off the board.** The corrected encoder on RadioML 2016.10a lands at ~chance
+  (linear_probe 16.6% / few_shot 14.1%) because the IQ→spectrogram front-end is unpublished and thus
+  off-distribution; these are **provisional / UNVERIFIED and not published**. The FM-vs-baseline board
+  thesis is redirected to an FM with a real terrestrial task (WirelessJEPA / IQFM — `docs/NEXT_STEPS.md`
+  §6). Docs (`BIBLIOGRAPHY.md` §B.5 + audit summary, `NEXT_STEPS.md`) updated to this conclusion.
+
 ### Fixed — board/manifest/doc integrity audit (post-redesign)
 
 Self-review pass after the (solo, unreviewed) site redesign — the intended multi-agent

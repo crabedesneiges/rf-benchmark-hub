@@ -73,33 +73,46 @@ class _AmcUnlabelledWindows(torch.utils.data.Dataset[Tensor]):
         return _unit_max(iq)
 
 
+def _batch_unit_max(batch: Tensor) -> Tensor:
+    """Per-sample unit-max normalisation ``iq / max(|iq|)`` over a whole ``(B, 2, L)`` batch.
+
+    Vectorised counterpart of :func:`_unit_max`: the per-sample scale is the max complex magnitude
+    over each window, so every sample is divided by its own constant with no Python-level loop.
+    """
+    magnitude = torch.sqrt(batch[:, 0, :] ** 2 + batch[:, 1, :] ** 2)  # (B, L)
+    scale = magnitude.amax(dim=1).clamp_min(_MAX_EPS)  # (B,)
+    return batch / scale[:, None, None]
+
+
 def _augment(batch: Tensor, noise_std: float, generator: torch.Generator) -> Tensor:
-    """Apply one random SSL augmentation composition to a ``(B, 2, L)`` batch.
+    """Apply one random SSL augmentation composition to a ``(B, 2, L)`` batch (fully vectorised).
 
     Composes a circular time shift, additive Gaussian noise, and a global phase rotation (all
-    per-sample, sampled from ``generator`` for reproducibility), then re-applies unit-max norm so
-    the augmented view keeps IQFM's input convention.
+    per-sample, sampled from the CPU ``generator`` for reproducibility then moved to ``batch``'s
+    device), then re-applies unit-max norm so the augmented view keeps IQFM's input convention.
+    No per-sample Python loop: the shift is a batched ``gather`` (``torch.roll`` cannot take a
+    per-sample shift), and noise / phase / unit-max are broadcast over the batch.
     """
     b, _, length = batch.shape
     device = batch.device
 
-    # Per-sample circular time shift.
-    shifts = torch.randint(0, length, (b,), generator=generator).tolist()
-    rolled = torch.stack([torch.roll(batch[i], shifts=shifts[i], dims=-1) for i in range(b)])
+    # Per-sample circular time shift via gather: out[..., t] = in[..., (t - shift) % L].
+    shifts = torch.randint(0, length, (b,), generator=generator).to(device)  # (B,)
+    positions = torch.arange(length, device=device)[None, :]  # (1, L)
+    idx = ((positions - shifts[:, None]) % length)[:, None, :].expand(b, 2, length)  # (B, 2, L)
+    rolled = torch.gather(batch, 2, idx)
 
     # Additive Gaussian noise.
-    noise = torch.randn(rolled.shape, generator=generator).to(device) * noise_std
+    noise = torch.randn(batch.shape, generator=generator).to(device) * noise_std
     noisy = rolled + noise
 
     # Global phase rotation e^{jθ}: [I';Q'] = [[cosθ,-sinθ],[sinθ,cosθ]] [I;Q].
     theta = torch.rand(b, generator=generator).to(device) * (2.0 * math.pi)
-    cos, sin = torch.cos(theta), torch.sin(theta)
-    i, q = noisy[:, 0, :], noisy[:, 1, :]
-    rotated = torch.stack(
-        [i * cos[:, None] - q * sin[:, None], i * sin[:, None] + q * cos[:, None]], dim=1
-    )
+    cos, sin = torch.cos(theta)[:, None], torch.sin(theta)[:, None]  # (B, 1)
+    i, q = noisy[:, 0, :], noisy[:, 1, :]  # (B, L)
+    rotated = torch.stack([i * cos - q * sin, i * sin + q * cos], dim=1)  # (B, 2, L)
 
-    return torch.stack([_unit_max(rotated[k]) for k in range(b)])
+    return _batch_unit_max(rotated)
 
 
 class _ProjectionHead(nn.Module):

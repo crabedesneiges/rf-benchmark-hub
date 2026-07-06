@@ -11,10 +11,12 @@ Conventions:
 - "Our score" = the value we currently report on the board (`leaderboard/results/**`).
 - All our AMC numbers are on **RadioML 2016.10a**, 11 classes, full SNR range (−20…+18 dB),
   80/10/10 stratified by (modulation × SNR), seed 42 — see `docs/EVALUATION_PROTOCOL.md`.
-- Our training recipe (all from-scratch baselines) is fixed in `rfbench/training.py:205-221`:
-  **Adam, lr=1e-3, CrossEntropy, no LR schedule, no early stopping, no best-val checkpoint,
-  no augmentation, batch 256, single fixed epoch budget.** This is the single biggest source of
-  the consistent ~1–2 pt gap below every published AMC target.
+- Our training recipe (all from-scratch baselines, `rfbench/training.py`) was **fixed in 2026-06**:
+  Adam lr=1e-3, CrossEntropy, **best-val-accuracy checkpoint, ReduceLROnPlateau (on val loss),
+  early stopping on val accuracy (patience 40), gradient clipping 5.0, NaN guard**, batch 256,
+  150 epochs, no augmentation. The Part B audit below was performed against the OLD recipe
+  (fixed epochs, no schedule, no early stop) — its recipe-row verdicts are historical; the
+  architecture-fidelity rows remain current unless noted.
 
 ---
 
@@ -27,9 +29,9 @@ figures (~90% @ +18 dB) are a different metric and are NOT used here.
 
 | Model | Reported overall (source) | Independent repro | Our score | Reproduction status |
 |---|---|---|---|---|
-| **MCLDNN** (Xu 2020) | **61.01%** (TCN-GRU T3) | 61.52% (TLDNN T2) | **60.08%** | Reproduced, −0.9 pt (recipe gap) |
-| **CLDNN** (West & O'Shea 2017) | **60.56%** (TCN-GRU T3) / ~61% (orig. text) | — | **58.76%** | Reproduced, −1.8 pt (missing skip + 3×LSTM) |
-| **ResNet** (O'Shea 2018) | **57.32%** (TLDNN T2) / 56.38% (TCN-GRU) | — | **56.06%** | Reproduced, −1.3 pt (4 vs 6 stacks, no AlphaDropout, no unit-var norm) |
+| **MCLDNN** (Xu 2020) | **61.01%** (TCN-GRU T3) | 61.52% (TLDNN T2) | **61.71%** | Reproduced, **+0.7 pt** (final recipe, 2026-06) |
+| **CLDNN** (West & O'Shea 2017) | **60.56%** (TCN-GRU T3) / ~61% (orig. text) | — | **58.76%** ⚠ | Old-recipe figure retained; **collapses to chance (0.0909) under the final recipe — under investigation** (see CHANGELOG) |
+| **ResNet** (O'Shea 2018) | **57.32%** (TLDNN T2) / 56.38% (TCN-GRU) | — | **56.61%** | Reproduced, −0.7 pt (final recipe; 3-stack len-128 adaptation) |
 | VT-CNN2 / CNN2 (O'Shea 2016) | ~56.98% (TCN-GRU T3) | — | not run | Missing |
 | LSTM2 (Rajendran 2018) | 61.02% (TLDNN T2) / 58.49% (TCN-GRU) | — | not run | Missing |
 | GRU2 | 56.92% (TCN-GRU T3) | — | not run | Missing |
@@ -39,9 +41,11 @@ figures (~90% @ +18 dB) are a different metric and are NOT used here.
 | TCN-GRU (Sensors 2024) | 61.56% (own T3) | — | not run | Missing |
 | **TLDNN** (Qu 2024) — SOTA | **62.83%** (+SS 63.35%) | — | not run | Missing (target ceiling) |
 
-Honest ceiling on 2016.10a is ~61–63% (11 classes). Our three reproductions sit ~1–2 pts below each
-target — a consistent gap that the audit (Part B) attributes primarily to our fixed-epoch, no-schedule,
-no-early-stopping training recipe.
+Honest ceiling on 2016.10a is ~61–63% (11 classes). The 2026-06 recipe fix (val-accuracy checkpoint +
+LR schedule + early stopping — Part B item 1, now addressed) closed the gap: MCLDNN now sits **above**
+its paper target (61.71 vs 61.01) and ResNet within 0.7 pt. CLDNN is the outlier: it trained fine under
+the old 50-epoch recipe (58.76%) but collapses to chance under the final 150-epoch recipe (gradient
+clipping ruled out NaN/explosion; per-epoch diagnostic pending).
 
 Primary papers:
 - **MCLDNN** — Xu, Luo, Chen, Luo, Wu, "A Spatiotemporal Multi-Channel Learning Framework for Automatic
@@ -82,15 +86,16 @@ Headline rank-1 numbers to reproduce (primary sources):
 
 | Dataset | #cls | Model (paper) | Closed-set rank-1 | Cross-condition | Our loader / score |
 |---|---|---|---|---|---|
-| WiSig ManyTx | 150 | 2-D CNN (5 conv/3 dense) | ~53% (150 tx, non-eq, 50 sig) / ~80% (10 tx) | **cross-rx 99%→<33%**; cross-day 99%→drop | `wisig_cnn` (1-D CNN) closed-set **0.9412** (placeholder, verified flag on a fabricated split) |
+| WiSig ManyTx | 150 | 2-D CNN (5 conv/3 dense) | ~53% (150 tx, non-eq, 50 sig) / ~80% (10 tx) | **cross-rx 99%→<33%**; cross-day 99%→drop | `wisig_cnn` (1-D CNN) — no board score (fabricated 0.9412 removed, `a689e86`) |
 | WiSig ManySig | ≤6 | same | >99% same-day/rx | cross-day degradation | — |
 | ORACLE | 16 | 2 conv + 2 FC, 2×128 raw IQ | **98.60%** | **cross-location 87.13%** | loader present (window=128); **no `oracle_cnn` model** |
 | LoRa RFFI (JSAC'21) | 10 (study cites 25) | spectrogram-CNN (3 conv/1 FC) | **96.40%** (95.35% CFO-only) | 83.53% w/o CFO comp | loader reads WRONG dataset (see below); **no LoRa model** |
 
-Board note: our SEI row `iqfm-cross_receiver-linear_probe.json` reports rank1 **0.7734** for
-"iqfm-base" on WiSig cross_receiver. **IQFM's paper never evaluates WiSig SEI** — this is a fabricated
-placeholder, not a reproduced number (see A.5). The WiSig-CNN closed-set 0.9412 is also on a synthetic
-fixture split (`sei-wisig-closed-8010-seed42-v1`), carrying a `verified` badge it did not earn.
+Board note (updated 2026-06): the fabricated SEI rows — `iqfm` rank1 0.7734 on WiSig cross_receiver
+(IQFM's paper never evaluates WiSig) and the WiSig-CNN closed-set 0.9412 on a synthetic fixture split
+with an unearned `verified` badge — were **removed from the board** in the pre-deploy cleanup
+(commit `a689e86`). The board currently has **no SEI rows**; the analysis below stands as the
+reproduction target for a real WiSig run.
 
 Primary papers:
 - **WiSig** — Hanna, Karunaratne, Cabric, "WiSig: A Large-Scale WiFi Signal Dataset...," *IEEE Access*
@@ -171,14 +176,14 @@ Consolidated board-comparability table (AMC / RadioML only):
 
 | Model | Weights | RadioML setting | Protocol | Reported | Our score | Board-comparable? |
 |---|---|---|---|---|---|---|
-| **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | not run | ✅ beats our MCLDNN 60.08 |
-| **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | 0.7734 (FABRICATED, SEI) | ✅ metric; ✗ data regime |
+| **WirelessJEPA** | ✗ (retrain) | 2016.10a, 11-cls, −20…+18 | linear probe, 500-shot, OOD | **74.78%** | not run | ✅ beats our MCLDNN 61.71 |
+| **IQFM** | ✗ (retrain) | 2016.10a, 11-cls, full SNR | linear probe, 50/cls, OOD | **38.1%** | not run (fabricated SEI row removed from board, `a689e86`) | ✅ metric; ✗ data regime |
 | **RIS-MAE** | ✗ (retrain) | 2018.01a, 24-cls | fine-tune, 1% labels | **48.41%** | not run | ✅ if 2018 unblocked |
 | **LWM-Spectro** | ✅ HF (CC BY-NC-SA) | **none** (DeepMIMO 5-cls) | few-shot F1, real linear/FT head | 47–95 F1 (own data) | **22.74%** | ❌ no RadioML in paper |
 | **WavesFM** | ✗ `(?)` | none (own 20-cls) | fine-tune | 86.05% | not run | ❌ |
 | **LatentWave** | ✗ | none (CommRad) | linear probe | 80.9% | not run | ❌ |
 | **6G-MSM** | ✗ | none (CSI/seg) | fine-tune | 93.9 / 97.6% | not run | ❌ (no AMC) |
-| **TorchSig XCiT** | ✗ (train from Sig53) | none (Sig53 53-cls) | supervised | Nano 67.97 / Tiny12 71.16 | 0.7116 (MISLABELED) | ❌ (Sig53 excluded) |
+| **TorchSig XCiT** | ✗ (train from Sig53) | none (Sig53 53-cls) | supervised | Nano 67.97 / Tiny12 71.16 | not run (mislabeled row removed from board, `a689e86`) | ❌ (Sig53 excluded) |
 
 Primary sources & key facts:
 - **LWM-Spectro** (`wi-lab/lwm-spectro`, on our board) — Kim, Alikhani, Alkhateeb, arXiv:2601.08780
@@ -217,6 +222,42 @@ Primary sources & key facts:
   Code pending. MAE-ViT (S/M/L), MSM mask 70–80% on OTA spectrograms. CSI HAR 93.9%, spectrogram
   segmentation 97.6%. **No AMC** — a pretraining template for a spectrogram/sensing track, not a baseline.
 
+### A.6 RF source separation (candidate task — no board track yet)
+
+Mined from **RFSS** (Chen, Jin, Tan, arXiv:2604.00398, 2026-04 — v2 of arXiv:2508.12106, cite the
+2026 version). First public labeled corpus for blind multi-source RF separation; its related work
+confirms our gap analysis: RadioML is single-signal (no mixtures, no per-source ground truth), DARPA
+SC2 targets protocol research, and the audio corpora (WSJ0-2mix, WHAM!, MUSDB18) had no RF equivalent.
+
+| Method | 2-src overall PI-SI-SINR | 2-src co-channel | Source |
+|---|---|---|---|
+| **Conv-TasNet** | **−21.18 dB** | **−12.34 dB** | RFSS T1/T2 |
+| DPRNN | −21.53 dB | −12.51 dB (3-src −10.38) | RFSS |
+| CNN-LSTM (regression) | −23.32 dB | −17.04 dB | RFSS |
+| Frobenius-NMF | −26.07 dB | −16.19 dB | RFSS |
+| FastICA | −34.91 dB | −28.04 dB | RFSS |
+
+- **RFSS dataset**: 100k multi-source samples (2–4 sources), 4 standards (GSM/UMTS/LTE/5G NR),
+  3GPP-exact waveform generation, per-source TDL-A..E channels + 5 hardware impairments (CFO, I/Q
+  imbalance, phase noise, DC offset, Rapp PA), co-channel + adjacent-channel mixing, 30.72 MHz,
+  122,880 IQ/sample (~4 ms). **103 GB HDF5** (`rfss_dataset.h5`), split 70/15/15 **by index range**
+  (0–69,999 / 70,000–84,999 / 85,000–99,999 — official split to adopt). Plus `rfss_single.h5`
+  (4,000 single-source, 1.3 GB) usable for **cellular-standard classification** (a candidate second
+  `protocol_tech_id` dataset: 4 cellular standards vs our 4 WiFi standards).
+- **Metric**: PI-SI-SINR (permutation-invariant SI-SNR, Le Roux 2019), *absolute* output (input
+  SI-SINR is effectively −∞). **Co-channel is the recommended comparison metric** — adjacent-channel
+  scores hit a ~−28 dB evaluation-floor artifact (baseband references vs frequency-shifted
+  estimates), acknowledged in §VII.
+- **Availability — NOT RELEASED (checked 2026-07-03)**: the paper announces a HuggingFace release
+  "at submission time" (dataset, generation code, checkpoints, eval scripts) but **nothing is
+  published yet**. Do NOT build a track until the release lands. Once released: synthetic but
+  distributed as a static download → NOT a generation-only blocker (same category as `interf_gnss6`).
+- **Related, absent from our biblio**: **RF Challenge** (Lancho et al., *IEEE OJ-COMS* 2025,
+  arXiv:2409.08839, ICASSP 2024) — interference **cancellation** (1 known signal + 1 unknown
+  interferer, BER metric), real OTA recordings; adjacent to `interference_id` but a different task
+  (rejection, not classification, not blind separation). **RF Transformer for signal separation**
+  (arXiv:2603.09201, 2026) — screen as a potential separation baseline `(?)` (not yet read).
+
 ---
 
 ## Part B — REPRODUCTION AUDIT
@@ -224,7 +265,11 @@ Primary sources & key facts:
 For each implemented model: OUR code vs the paper, per aspect. MATCH / MISMATCH / UNKNOWN.
 "Gap driver?" flags the discrepancies most likely to explain the score gap.
 
-### B.1 MCLDNN — `rfbench/models/baselines/mcldnn.py` — our 60.08% vs paper 61.01% (repro 61.52%)
+### B.1 MCLDNN — `rfbench/models/baselines/mcldnn.py` — our **61.71%** vs paper 61.01% (repro 61.52%)
+
+> **RESOLVED (2026-06).** The mismatches below (fusion concat 50→100, dropout-regularized 2-dense
+> head, recipe) were fixed in the paper-conformance pass; retrained score 60.08 → **61.71** (above
+> the paper target). Table kept as the historical audit record.
 
 | Aspect | Paper (Xu 2020, official repo) | Our code | Verdict |
 |---|---|---|---|
@@ -245,7 +290,12 @@ Verdict: architecture close but the head lost its two dropout layers and its sec
 the biggest levers for 60.08→61 are the **epoch/early-stopping budget** and the **LR schedule**, then
 the **dropout-regularized 2-dense head**.
 
-### B.2 CLDNN — `rfbench/models/baselines/cldnn.py` — our 58.76% vs paper 60.56%
+### B.2 CLDNN — `rfbench/models/baselines/cldnn.py` — our 58.76% (old recipe) vs paper 60.56%
+
+> **ARCH FIXED, SCORE REGRESSED (2026-06).** The raw-waveform skip and 3rd LSTM below were added in
+> the paper-conformance pass, but the fixed model **collapses to chance (0.0909) under the final
+> 150-epoch recipe** (grad clipping ruled out NaN; per-epoch diagnostic pending — see CHANGELOG).
+> The board retains the old-recipe 58.76%. Table kept as the historical audit record.
 
 | Aspect | Paper (West & O'Shea 2017) | Our code | Verdict |
 |---|---|---|---|
@@ -264,7 +314,11 @@ Verdict: this is a **lighter re-implementation** than the paper's CLDNN. The two
 features — the **raw-waveform skip concatenation** and the **3 stacked LSTMs** — are both dropped; the
 1.8-pt gap (largest of the three) is consistent with missing both, on top of the recipe gap.
 
-### B.3 ResNet-AMC — `rfbench/models/baselines/resnet_amc.py` — our 56.06% vs paper 57.32%
+### B.3 ResNet-AMC — `rfbench/models/baselines/resnet_amc.py` — our **56.61%** vs paper 57.32%
+
+> **RESOLVED (2026-06).** Unit-variance input normalization, AlphaDropout + 2-dense SELU head, and
+> the stack count (now **3** — the len-128 adaptation, not the paper's 6) were fixed; retrained
+> 56.06 → **56.61** (−0.7 pt vs the community 2016.10a number). Historical audit record below.
 
 | Aspect | Paper (O'Shea 2018) | Our code | Verdict |
 |---|---|---|---|
@@ -284,7 +338,11 @@ Verdict: three real gap drivers — **4 vs 6 residual stacks**, **no AlphaDropou
 and critically **no unit-variance input normalization** (the paper's explicit preprocessing; its absence
 gives a systematic offset). BatchNorm partly compensates but not for the input scale.
 
-### B.4 WiSig-CNN — `rfbench/models/baselines/sei_cnn.py` — our closed-set 0.9412 vs paper ~53–99%
+### B.4 WiSig-CNN — `rfbench/models/baselines/sei_cnn.py` — no board score (fabricated 0.9412 removed) vs paper ~53–99%
+
+> **BOARD CLEANED (2026-06).** The 0.9412 placeholder row (synthetic fixture split, unearned
+> `verified` badge) was removed from the board in commit `a689e86`; the architecture mismatches
+> below still stand — `wisig_cnn` remains a compact 1-D CNN, not the paper's 2-D CNN.
 
 | Aspect | Paper (Hanna 2022, `d006_ManyTx_ntx.py`) | Our code | Verdict |
 |---|---|---|---|
@@ -331,20 +389,24 @@ logreg**, and (4) we feed the bare backbone with no expert routing. Replace the 
 frozen CLS features before drawing any FM-vs-baseline conclusion, and label the row "no published
 RadioML reference."
 
-### Audit summary — the discrepancies most likely to explain score gaps
+### Audit summary — status after the 2026-06 fixes
 
-1. **Training recipe (affects ALL from-scratch baselines).** `rfbench/training.py:205-221` runs Adam
-   lr=1e-3, CrossEntropy, **fixed epochs, no LR schedule, no early stopping, no best-val checkpoint, no
-   augmentation, batch 256.** Every AMC paper trains to convergence with a plateau schedule and early
-   stopping; this alone explains most of the consistent ~1–2 pt shortfall (MCLDNN, CLDNN, ResNet).
-2. **Architecture fidelity.** CLDNN is missing the **raw-waveform skip** and **3rd LSTM** (largest gap,
-   −1.8); ResNet uses **4 not 6 stacks**, **no AlphaDropout**, **no unit-variance input norm**; MCLDNN
-   lost its **two dropout layers + second dense** head layer.
-3. **LWM-Spectro linear_probe = nearest-centroid, not logreg**, on an **approximate STFT** with
-   wrong normalization (no log-scale, `[CLS]`=0) — and against a dataset the paper never evaluates.
-4. **SEI fabrications.** `wisig_cnn` closed-set **0.9412** is on a synthetic fixture split yet badged
-   `verified`; the `iqfm` SEI row **0.7734** is fabricated (IQFM never evaluates WiSig). WiSig-CNN is
-   also the wrong architecture (1-D vs paper 2-D) with the wrong lr/batch and no unit-power norm.
+1. **Training recipe — FIXED.** `rfbench/training.py` now selects/restores the best checkpoint on
+   **val accuracy**, runs ReduceLROnPlateau + early stopping (patience 40) + gradient clipping 5.0 +
+   a NaN guard over 150 epochs. Result: MCLDNN 60.08 → **61.71** (above paper), ResNet 56.06 →
+   **56.61**.
+2. **Architecture fidelity — FIXED** (paper-conformance pass): CLDNN got its **raw-waveform skip +
+   3rd LSTM**, ResNet its **unit-variance input norm + AlphaDropout + 2-dense head** (3 stacks as the
+   len-128 adaptation), MCLDNN its **concat fusion (100 filters) + dropout-regularized 2-dense head**.
+   **Open regression**: paper-exact CLDNN collapses to chance under the final recipe (board keeps the
+   old-recipe 58.76%; diagnostic pending).
+3. **LWM-Spectro linear_probe — STILL OPEN**: nearest-centroid (not logreg) on an **approximate STFT**
+   with wrong normalization (no log-scale, `[CLS]`=0) — and against a dataset the paper never
+   evaluates. The 22.74% board row stands with that caveat.
+4. **SEI fabrications — REMOVED from the board** (`a689e86`): the 0.9412 fixture-split row and the
+   0.7734 iqfm row are gone. **STILL OPEN**: `wisig_cnn` remains the wrong architecture (1-D vs paper
+   2-D) with the wrong lr/batch and no unit-power norm — a real WiSig run needs `wisig_cnn_paper`
+   (C.2).
 
 ---
 
@@ -405,7 +467,22 @@ Papers/models/datasets to add (deduped).
 - **A third real-capture detection set** — RadDet + WBSig53 cover real + synthetic; a second real-capture
   detection set would strengthen generalization claims.
 
-### C.4 Foundation models
+### C.4 Source separation (new candidate track — from RFSS, A.6)
+- **`source_separation` task** — blind multi-source RF separation is absent from the hub taxonomy
+  entirely. RFSS (arXiv:2604.00398) supplies exactly what a board track needs: a public static
+  dataset (103 GB HDF5, official 70/15/15 index split — adopt as-is per split policy), a defined
+  metric (**co-channel PI-SI-SINR**; avoid the adjacent-channel floor artifact), and 5 reproducible
+  baselines with released checkpoints/eval code. **Blocked: NOT released as of 2026-07-03** (HF release announced, nothing published). Synthetic-but-downloadable → allowed (same category as `interf_gnss6`).
+- **Conv-TasNet / DPRNN as baselines** — audio architectures transfer to RF unmodified (−12.34 /
+  −12.51 dB co-channel 2-source); the RFSS training recipe (PIT + SI-SINR loss, Adam 1e-3, grad clip
+  1.0, batch 8, cosine annealing 30 ep, crop 7,680 samples, seed 42) is fully specified.
+- **`rfss_single.h5`** (4k single-source GSM/UMTS/LTE/NR) — candidate **second `protocol_tech_id`
+  dataset** (cellular standards, complements our WiFi-standards T-PRIME track).
+- **RF Challenge (arXiv:2409.08839)** — real-OTA interference *cancellation* (BER metric); adjacent
+  to `interference_id`/`source_separation` but a distinct task. Add to the bibliography as context;
+  screen its OTA recordings as a possible real-capture complement to RFSS's synthetic corpus.
+
+### C.5 Foundation models
 - **WirelessJEPA** (arXiv:2601.20190) — ADD as the top FM row: 74.78% linear-probe on RML2016.10a full-SNR
   11-class is the ONLY public FM number directly comparable to our board, and it beats supervised MCLDNN
   (60.08). Weights unreleased → retrain the JEPA recipe (ShuffleNetV2-x0.5, EMA teacher).
@@ -466,3 +543,11 @@ Papers/models/datasets to add (deduped).
 - RIS-MAE: Liu, Liu et al., 2025, arXiv:2508.00274.
 - LatentWave: 2026, arXiv:2606.06373.
 - 6G-MSM: Aboulfotouh, Eshaghbeigi, Abou-Zeid, 2024, arXiv:2411.09996.
+- RFSS: Chen, Jin, Tan, 2026, arXiv:2604.00398 (v2; supersedes arXiv:2508.12106 — cite the 2026
+  version). Data/code: HF release announced, **not published as of 2026-07-03**.
+- RF Challenge: Lancho, Weiss, Lee, Jayashankar, Kurien, Polyanskiy, Wornell, *IEEE OJ-COMS* 2025,
+  arXiv:2409.08839 (ICASSP 2024 challenge).
+- Conv-TasNet: Luo & Mesgarani, *IEEE/ACM TASLP* 27(8):1256–1266, 2019.
+- DPRNN: Luo, Chen, Yoshioka, *ICASSP 2020*.
+- SI-SNR / SI-SINR: Le Roux, Wisdom, Erdogan, Hershey, "SDR — half-baked or well done?," *ICASSP 2019*.
+- RF Transformer (separation): 2026, arXiv:2603.09201 `(?)` (not yet screened).

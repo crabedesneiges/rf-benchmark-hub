@@ -7,7 +7,7 @@ buckets each canonical task by FM coverage.
 
 ## Method
 
-- Source: the 9 FM papers tracked in `docs/BIBLIOGRAPHY.md` (Part A.5 / Part C.4).
+- Source: the 9 FM papers tracked in `docs/BIBLIOGRAPHY.md` (Part A.5 / Part C.5).
 - For each paper, we counted only tasks the paper **itself evaluates** downstream (frozen-encoder
   linear probe, LoRA, few-shot, or fine-tune) — not pretraining pretexts, not related-work mentions,
   not later model versions.
@@ -50,6 +50,7 @@ FM papers mined (9):
 | `snr_mobility_recognition` | Joint SNR-bin x mobility/Doppler-regime classification into a single combined (SNR, mobility) label space (classification, F1/accuracy — not a regression MAE). New id from LWM-Spectro Task 2; distinct from a pure SNR-estimation regression. |
 | `wideband_detection`     | Signal detection / localization in time-frequency (spectrogram): boxes or per-pixel semantic segmentation locating/identifying signals (e.g. noise/NR/LTE segmentation). Distinct from `spectrum_sensing`. |
 | `spectrum_sensing`       | Per-subband spectrum occupancy / presence detection under a target false-alarm rate (pd@pfa). Distinct from `wideband_detection` (occupancy vs time-frequency localization). |
+| `source_separation`      | Blind multi-source RF separation: reconstruct each component waveform from a single-channel mixture of 2+ unknown standard-compliant sources (permutation-invariant, per-source ground truth). Distinct from `spectrum_sensing`/`wideband_detection` (presence/localization, not reconstruction) and from interference *cancellation* (known desired signal). Added 2026-07 from RFSS (arXiv:2604.00398) — not part of the FM mining. |
 
 ## Coverage matrix (canonical task x 9 FM papers)
 
@@ -70,6 +71,9 @@ FM papers mined (9):
 | `snr_mobility_recognition`|     |     |     | X   |     |     |     |     |     | P2 (1)    |
 | `wideband_detection`      |     |     |     |     |     |     |     | X   |     | P2 (1)    |
 | `spectrum_sensing`        |     |     |     |     |     |     |     |     |     | P3 (0)    |
+| `source_separation`       |     |     |     |     |     |     |     |     |     | P3 (0)*   |
+
+\* `source_separation` added from RFSS (arXiv:2604.00398, not an FM paper); no FM evaluates it.
 
 Per-paper canonical-task counts: WirelessJEPA 5, IQFM 4, LatentWave 4, WavesFM 4, LWM-base 2,
 LWM-Spectro 2, 6G-MSM 2, RIS-MAE 1, TorchSig-XCiT 1.
@@ -124,8 +128,8 @@ LWM-Spectro 2, 6G-MSM 2, RIS-MAE 1, TorchSig-XCiT 1.
   primary, `sei-wisig-closed-8010-seed42-v1` (+ `cross_receiver`, `cross_day` tracks), primary
   `rank1_accuracy` (open-set -> `auroc`, `eer`). **Data mismatch to fix**: both FM SEI evals are on
   **POWDER**, not the board's WiSig/ORACLE/LoRa — a POWDER track would be needed for a
-  like-for-like FM comparison. The current `iqfm` WiSig rank1=0.7734 row is **fabricated**
-  (BIBLIOGRAPHY A.5) — IQFM never evaluates WiSig.
+  like-for-like FM comparison. The fabricated `iqfm` WiSig rank1=0.7734 row was **removed from the
+  board** (commit `a689e86`; BIBLIOGRAPHY A.3/A.5) — IQFM never evaluates WiSig.
 - **Scope-fit**: core terrestrial-RF signal task; in scope.
 
 ### `direction_finding` — angle-of-arrival estimation (2 papers)
@@ -185,14 +189,19 @@ LWM-Spectro 2, 6G-MSM 2, RIS-MAE 1, TorchSig-XCiT 1.
 ### `interference_id` — jamming / interference detection (WirelessJEPA)
 
 - **Data/metric**: GNSS Jamming 6-class (Zenodo-synthesized), 500-shot linear probe 63.1%.
-- **Status in rfbench**: ABSENT. Distinct from `spectrum_sensing` and `wideband_detection`.
+- **Status in rfbench**: **EXISTS** (implemented 2026-06: `rfbench/tasks/interference_id/`,
+  dataset `interf_gnss6`, baseline `interf_cnn` — see CHANGELOG). Distinct from `spectrum_sensing`
+  and `wideband_detection`.
 - **Recommended**: GNSS jamming 6-class IQ set, `interf-gnss6-8010-seed42-v1`, 80/10/10 seed 42,
   primary `accuracy_overall` (+ `macro_f1`). **Scope-fit**: IQ-signal classification — in scope.
 
 ### `protocol_tech_id` — protocol / standard recognition (WirelessJEPA)
 
 - **Data/metric**: OTA WiFi 802.11 ax/b/n/g (4 protocols), (2,1024) IQ, 500-shot linear probe 94.26%.
-- **Status in rfbench**: ABSENT. Distinct from `amc` (standard, not modulation).
+- **Status in rfbench**: **EXISTS** (implemented 2026-06: `rfbench/tasks/protocol_tech_id/`,
+  dataset `tprime_wifi4`, baseline `tprime` — see CHANGELOG). Distinct from `amc` (standard, not
+  modulation). **Candidate 2nd dataset**: RFSS `rfss_single.h5` (4k single-source GSM/UMTS/LTE/NR
+  — cellular standards, BIBLIOGRAPHY A.6).
 - **Recommended**: 802.11-variant IQ set, `proto-wifi4-8010-seed42-v1`, 80/10/10 seed 42, primary
   `accuracy_overall`. **Scope-fit**: IQ-signal classification — in scope.
 
@@ -241,6 +250,20 @@ LWM-Spectro 2, 6G-MSM 2, RIS-MAE 1, TorchSig-XCiT 1.
   DeepSense would fill an existing board track that currently has **zero** FM coverage. **Scope-fit**:
   in scope (terrestrial OTA occupancy sensing).
 
+### `source_separation` — blind multi-source RF separation (0 FM papers, candidate new track)
+
+- **FM coverage**: **NONE** of the 9 FM papers evaluate it (and RFSS cites no FM paper — the task is
+  outside the current FM-eval landscape, which is itself a signal: a hub track here would be ahead of
+  the FM literature rather than chasing it).
+- **Status in rfbench**: **ABSENT** — not in the taxonomy, the protocol, or the code before 2026-07.
+- **Recommended**: **RFSS** (arXiv:2604.00398, BIBLIOGRAPHY A.6) as the canonical dataset —
+  100k mixtures (2–4 sources, GSM/UMTS/LTE/5G NR, 3GPP TDL channels + 5 hardware impairments),
+  official 70/15/15 index split (`sep-rfss-701515-official-v1`), primary metric **co-channel
+  PI-SI-SINR** (higher is better; avoid the adjacent-channel evaluation-floor artifact, RFSS §VII).
+  Baselines: Conv-TasNet (−12.34 dB co-channel 2-src) and DPRNN, checkpoints announced.
+  **Blocked: dataset NOT released as of 2026-07-03** (HF release announced in the paper, nothing published yet). **Scope-fit**: raw-IQ
+  terrestrial signals — in scope; synthetic-but-downloadable (allowed, like `interf_gnss6`).
+
 ---
 
 ## Recommended next tasks to implement (P1 then P2)
@@ -252,7 +275,7 @@ tasks flagged for a separate track.
 1. **`amc` (P1, EXISTS)** — deepen, don't add: land the WirelessJEPA (74.78%) and IQFM (38.1%) FM
    rows on RadioML 2016.10a, and unblock RML2018.01a for the RIS-MAE 48.41% row.
 2. **`sei` (P1, EXISTS)** — add a **POWDER** track so the two FM SEI evaluators (WirelessJEPA, IQFM)
-   are comparable; remove the fabricated `iqfm` WiSig row.
+   are comparable (the fabricated `iqfm` WiSig row is already removed, `a689e86`).
 3. **`interference_id` (P2, in scope)** — new IQ classification task (GNSS jamming 6-class); small,
    self-contained, mirrors the `amc` task skeleton.
 4. **`protocol_tech_id` (P2, in scope)** — new IQ classification task (802.11 ax/b/n/g); same

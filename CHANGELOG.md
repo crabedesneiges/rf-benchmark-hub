@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — BIBLIOGRAPHY.md refreshed to the current board (post-recipe-fix)
+
+- **"Our score" values updated** to the live `leaderboard/results/**`: MCLDNN 60.08 → **61.71**
+  (now above the paper's 61.01), ResNet 56.06 → **56.61**; CLDNN keeps the old-recipe 58.76 with an
+  explicit ⚠ (collapses to chance under the final recipe, under investigation). Header convention
+  block now describes the **fixed 2026-06 recipe** (val-accuracy checkpoint, ReduceLROnPlateau,
+  early stop, grad clip 5.0) instead of the old fixed-epoch recipe.
+- **Part B audit re-scoped as historical**: banners added to B.1–B.4 stating which mismatches were
+  resolved by the 2026-06 paper-conformance pass (MCLDNN concat fusion + dropout head, CLDNN skip +
+  3rd LSTM, ResNet unit-var norm + AlphaDropout + 2-dense head) and what stays open (CLDNN
+  collapse; `wisig_cnn` still 1-D vs paper 2-D). Audit summary rewritten as a post-fix status.
+- **Fabricated-row mentions updated**: the SEI 0.9412 / iqfm 0.7734 / mislabeled XCiT rows are
+  recorded as **removed from the board** (`a689e86`) in A.3, A.5 and DOWNSTREAM_TASKS (the board
+  currently has no SEI rows).
+
+### Added — RFSS (arXiv:2604.00398) mined into the bibliography; `source_separation` candidate task
+
+- **`docs/BIBLIOGRAPHY.md` §A.6 + §C.4**: RFSS (Chen/Jin/Tan, 2026-04 — v2 of arXiv:2508.12106,
+  cite the 2026 id) — first public blind multi-source RF separation corpus (100k mixtures, 2–4
+  sources, GSM/UMTS/LTE/5G NR, 3GPP TDL + 5 hardware impairments, 103 GB HDF5, official 70/15/15
+  index split). Benchmarks table (Conv-TasNet best, −12.34 dB co-channel PI-SI-SINR 2-src);
+  co-channel is the honest metric (adjacent-channel has a ~−28 dB evaluation-floor artifact).
+  Availability: **not released as of 2026-07-03** (HF release announced in the paper only) — track blocked until it lands. Related refs added:
+  RF Challenge (arXiv:2409.08839, interference cancellation, real OTA), Conv-TasNet, DPRNN,
+  SI-SNR (Le Roux 2019), RF Transformer (arXiv:2603.09201, unscreened). Former §C.4 (FMs) → §C.5.
+- **`docs/DOWNSTREAM_TASKS.md`**: new canonical id `source_separation` (taxonomy + coverage matrix
+  + P3 section, RFSS as recommended dataset/protocol/metric); `interference_id` /
+  `protocol_tech_id` statuses fixed ABSENT → EXISTS (implemented 2026-06); RFSS `rfss_single.h5`
+  noted as a candidate 2nd `protocol_tech_id` dataset (cellular standards).
+
 ### Added — educational content on the leaderboard site (data-driven)
 
 - **Enriched task manifest** (`leaderboard/tasks.json`): each task now merges optional

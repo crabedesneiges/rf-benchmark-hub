@@ -1946,7 +1946,7 @@ h1, h2, h3, .task-title, .card-title, .brand-name, .group-title {
 .brand-text { display: flex; flex-direction: column; }
 .brand-name { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.01em; }
 .brand-tag { color: var(--muted); font-size: 0.8rem; }
-main { max-width: 1080px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
+main { max-width: 1320px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
 .task-title { font-size: 1.4rem; margin: 0.5rem 0 0.25rem; letter-spacing: -0.01em; }
 .task-meta {
   font-family: var(--font-mono);
@@ -2113,8 +2113,12 @@ td.num.primary .metric-val { font-weight: 700; }
 .breadcrumb a:hover { color: var(--accent); }
 
 .task-layout {
-  display: grid; grid-template-columns: 220px minmax(0, 1fr) 260px; gap: 1.5rem;
+  display: grid; grid-template-columns: 200px minmax(0, 1fr) 240px; gap: 1.5rem;
   align-items: start; margin-top: 1rem;
+}
+@media (max-width: 1100px) {
+  .task-layout { grid-template-columns: 200px minmax(0, 1fr); }
+  .task-sidebar-right { grid-column: 1 / -1; }
 }
 @media (max-width: 900px) {
   .task-layout { grid-template-columns: 1fr; }

@@ -16,6 +16,15 @@
   },
   "metrics": {
     "primary": "accuracy_overall",
+    "uncertainty": {
+      "accuracy_overall": {
+        "ci_high": 0.9997645951400552,
+        "ci_low": 0.9924864826531027,
+        "confidence": 0.95,
+        "method": "wilson_backfill",
+        "note": "backfill a posteriori, pas de resampling sur predictions brutes (Wilson score reconstruit depuis accuracy et n)"
+      }
+    },
     "values": {
       "accuracy_overall": 0.9986666666666667,
       "macro_f1": 0.998666645332992
@@ -30,7 +39,7 @@
   "regime": {
     "name": "from_scratch"
   },
-  "schema_version": "1.0.0",
+  "schema_version": "1.2.0",
   "split": {
     "canonical_split_id": "interf-gnss6-8010-seed42-v1",
     "checksum": "sha256:f90cf8e96a8b240520881f4b9c777980aa41af2114dca2ba990871f5dc928625",

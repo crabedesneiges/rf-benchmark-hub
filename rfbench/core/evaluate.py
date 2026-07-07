@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import random
 import tempfile
 from collections.abc import Iterable, Iterator
 from importlib import resources
@@ -38,10 +39,19 @@ from rfbench.core.dataset import Dataset
 from rfbench.core.metric import Metric
 from rfbench.core.model import Model, RegimeSpec
 from rfbench.core.task import Task
-from rfbench.core.types import Batch, SplitName, Track
+from rfbench.core.types import Batch, SplitName, Tensor, Track
 
 #: SemVer of the result schema this writer targets (mirrors ``schema_version.const``).
-SCHEMA_VERSION = "1.0.0"
+#: 1.2.0 adds the optional ``metrics.uncertainty`` block (percentile-bootstrap CIs).
+SCHEMA_VERSION = "1.2.0"
+
+#: Bootstrap defaults (EVALUATION_PROTOCOL.md "Statistical rigor & uncertainty"): a
+#: percentile bootstrap over the accumulated per-sample predictions.
+BOOTSTRAP_N_RESAMPLES = 1000
+BOOTSTRAP_CONFIDENCE = 0.95
+#: Below this many accumulated samples a bootstrap CI is statistically meaningless, so we
+#: skip it rather than emit a noisy interval.
+BOOTSTRAP_MIN_SAMPLES = 2
 
 
 # --------------------------------------------------------------------------------------------------
@@ -215,6 +225,181 @@ def _environment_fingerprint(seed: int) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------------------------------
+# Bootstrap confidence intervals (percentile bootstrap, pure stdlib random)
+# --------------------------------------------------------------------------------------------------
+def _concat(prev: Tensor, nxt: Tensor) -> Tensor:
+    """Concatenate two dim-0-aligned chunks, preserving container type.
+
+    Used to grow the accumulated ``pred``/``target``/``meta`` across eval chunks: torch
+    tensors are ``torch.cat``-ed (lazy import), collated ``{field: [...]}`` dicts merge
+    field-wise, and lists/tuples concatenate. ``prev is None`` means "first chunk", so
+    ``nxt`` is adopted as-is.
+    """
+    if prev is None:
+        return nxt
+    try:
+        import torch  # noqa: PLC0415
+
+        if isinstance(prev, torch.Tensor) and isinstance(nxt, torch.Tensor):
+            return torch.cat([prev, nxt], dim=0)
+    except ModuleNotFoundError:
+        pass
+    if isinstance(prev, dict) and isinstance(nxt, dict):
+        return {key: _concat(prev.get(key), nxt.get(key)) for key in {*prev, *nxt}}
+    if isinstance(prev, list):
+        return prev + list(nxt)
+    if isinstance(prev, tuple):
+        return prev + tuple(nxt)
+    # Unknown / scalar payload: fall back to a plain list so resampling still works.
+    return [prev, nxt]
+
+
+class _BootstrapAccumulator:
+    """Grows whole ``pred``/``target``/``meta`` across eval chunks for later resampling.
+
+    Kept minimal and type-agnostic: :func:`_concat` handles tensors, collated meta dicts
+    and lists identically, so the accumulator never needs to know the metric's payload
+    shape. Only instantiated when ``compute_bootstrap_ci`` is on.
+    """
+
+    def __init__(self) -> None:
+        self.pred: Tensor = None
+        self.target: Tensor = None
+        self.meta: Batch | None = None
+
+    def add(self, pred: Tensor, target: Tensor, meta: Batch) -> None:
+        self.pred = _concat(self.pred, pred)
+        self.target = _concat(self.target, target)
+        self.meta = _concat(self.meta, meta)
+
+
+def _index_select(obj: Tensor, indices: list[int]) -> Tensor:
+    """Return ``obj`` gathered along dim 0 by ``indices``, preserving its container type.
+
+    Type-preserving gather used to build bootstrap resamples of a per-sample-batched
+    ``pred``/``target``/``meta`` (see :func:`_collate`) without importing a tensor
+    framework at module top:
+
+    * a ``torch.Tensor`` -> ``Tensor.index_select`` along dim 0 (torch is imported lazily
+      and only when a tensor is actually seen);
+    * a ``dict`` (a collated ``{field: [values...]}`` meta batch) -> each value is gathered
+      recursively, so the batch keeps its field layout;
+    * any other sequence (``list``/``tuple``) -> a plain comprehension.
+
+    ``indices`` may repeat entries (sampling WITH replacement), which the list and tensor
+    paths both honour. Scalar/unindexable payloads are returned untouched.
+    """
+    # Lazy tensor path: only import torch if we are actually holding a tensor, so the
+    # dependency-free import contract of ``rfbench.core`` is preserved.
+    try:
+        import torch  # noqa: PLC0415
+
+        if isinstance(obj, torch.Tensor):
+            index = torch.as_tensor(indices, dtype=torch.long, device=obj.device)
+            return obj.index_select(0, index)
+    except ModuleNotFoundError:
+        pass
+
+    if isinstance(obj, dict):
+        return {key: _index_select(value, indices) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        gathered = [obj[i] for i in indices]
+        return type(obj)(gathered) if isinstance(obj, tuple) else gathered
+    return obj
+
+
+def _accumulated_length(pred: Tensor, target: Tensor) -> int:
+    """Best-effort per-sample count of an accumulated ``pred``/``target`` pair.
+
+    Prefers ``len(pred)``, falling back to ``len(target)``; returns 0 when neither is a
+    sized sequence/tensor (in which case bootstrap is silently skipped).
+    """
+    for candidate in (pred, target):
+        try:
+            return len(candidate)
+        except TypeError:
+            continue
+    return 0
+
+
+def _percentile(sorted_values: list[float], quantile: float) -> float:
+    """Return the ``quantile`` (in [0, 1]) of a pre-sorted list via linear interpolation.
+
+    Matches the common "linear"/type-7 percentile so the interval is stable and does not
+    depend on numpy. ``sorted_values`` must be non-empty and ascending.
+    """
+    if not sorted_values:
+        raise ValueError("cannot take a percentile of an empty sample")
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    position = quantile * (len(sorted_values) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    frac = position - lower
+    return sorted_values[lower] * (1.0 - frac) + sorted_values[upper] * frac
+
+
+def _bootstrap_uncertainty(
+    metrics: Iterable[Metric],
+    pred: Tensor,
+    target: Tensor,
+    meta: Batch | None,
+    *,
+    n_resamples: int,
+    confidence: float,
+    seed: int,
+) -> dict[str, dict[str, Any]]:
+    """Percentile-bootstrap CIs for every scalar metric, keyed by metric name.
+
+    Resamples the accumulated per-sample ``(pred, target, meta)`` with replacement
+    ``n_resamples`` times, re-running each metric's ``reset()/update()/compute()`` on the
+    resample and collecting its scalar outputs, then reports the two-sided percentile
+    interval at the given ``confidence``. Randomness is stdlib ``random.Random`` seeded per
+    resample from ``seed`` so the interval is reproducible; NO numpy/torch RNG is used.
+
+    Returns a mapping ``{metric_name: {ci_low, ci_high, method, confidence, n_resamples}}``
+    ready to drop into ``result["metrics"]["uncertainty"]``. Returns an empty mapping when
+    there are too few samples for a meaningful interval.
+    """
+    n = _accumulated_length(pred, target)
+    if n < BOOTSTRAP_MIN_SAMPLES or n_resamples < 1:
+        return {}
+
+    metric_list = list(metrics)
+    samples: dict[str, list[float]] = {}
+    for i in range(n_resamples):
+        rng = random.Random(seed + i)
+        idx = [rng.randrange(n) for _ in range(n)]
+        pred_bs = _index_select(pred, idx)
+        target_bs = _index_select(target, idx)
+        meta_bs = _index_select(meta, idx) if meta is not None else None
+        for metric in metric_list:
+            metric.reset()
+            metric.update(pred_bs, target_bs, meta_bs)
+            computed = metric.compute()
+            for key, payload in computed.items():
+                if isinstance(payload, bool) or not isinstance(payload, (int, float)):
+                    continue  # curves / non-scalars carry no CI
+                samples.setdefault(key, []).append(float(payload))
+
+    alpha = 1.0 - confidence
+    lo_q, hi_q = alpha / 2.0, 1.0 - alpha / 2.0
+    uncertainty: dict[str, dict[str, Any]] = {}
+    for key, draws in samples.items():
+        if len(draws) < BOOTSTRAP_MIN_SAMPLES:
+            continue
+        draws.sort()
+        uncertainty[key] = {
+            "ci_low": _percentile(draws, lo_q),
+            "ci_high": _percentile(draws, hi_q),
+            "method": "bootstrap_percentile",
+            "confidence": confidence,
+            "n_resamples": n_resamples,
+        }
+    return uncertainty
+
+
+# --------------------------------------------------------------------------------------------------
 # The single canonical result.json writer
 # --------------------------------------------------------------------------------------------------
 def evaluate(
@@ -229,12 +414,24 @@ def evaluate(
     batch_size: int = 256,
     device: str = "cuda",
     out_path: Path | None = None,
+    compute_bootstrap_ci: bool = True,
+    bootstrap_n_resamples: int = BOOTSTRAP_N_RESAMPLES,
+    bootstrap_confidence: float = BOOTSTRAP_CONFIDENCE,
+    bootstrap_seed: int | None = None,
 ) -> dict[str, Any]:
     """Run the eval loop and emit a schema-valid ``result.json`` dict.
 
     Aggregates ``task.metrics()`` over ``split`` (optionally restricted to ``track``),
     assembles the result dict, validates it against ``schemas/result.schema.json`` with
     ``jsonschema`` (Draft 2020-12), writes ``out_path`` if given, and returns the dict.
+
+    When ``compute_bootstrap_ci`` is true (default), a percentile bootstrap over the
+    accumulated per-sample predictions adds a ``metrics.uncertainty`` block (schema 1.2.0):
+    one two-sided interval per scalar metric at ``bootstrap_confidence`` from
+    ``bootstrap_n_resamples`` resamples (EVALUATION_PROTOCOL.md "Statistical rigor &
+    uncertainty"). Set ``compute_bootstrap_ci=False`` (or lower ``bootstrap_n_resamples``)
+    when the resampling cost is prohibitive; ``bootstrap_seed`` defaults to ``seed`` so the
+    interval is reproducible.
 
     Raises ``jsonschema.ValidationError`` on schema failure so an invalid result never
     leaves the harness. See the module docstring for the full list of contract
@@ -252,12 +449,17 @@ def evaluate(
 
     data = resolved.load(split, track)
     n_samples = 0
+    # Accumulate the whole pred/target/meta ONLY when a bootstrap CI is requested, so the
+    # default cost stays a streaming pass and memory is untouched when CIs are disabled.
+    acc = _BootstrapAccumulator() if compute_bootstrap_ci else None
     for chunk in _iter_batches(data, batch_size):
         batch = _collate(chunk)
         target = task.build_targets(batch)
         pred = model.forward(batch)
         for metric in metrics:
             metric.update(pred, target, batch)
+        if acc is not None:
+            acc.add(pred, target, batch)
         n_samples += len(chunk)
 
     # --- Aggregate: scalars -> values, lists -> curves ------------------------------------------
@@ -273,6 +475,23 @@ def evaluate(
             f"primary metric key '{primary.primary_key}' is absent from the computed "
             f"metrics.values (got: {', '.join(sorted(values)) or '<none>'})"
         )
+
+    # --- Bootstrap CIs over the accumulated predictions (schema 1.2.0) --------------------------
+    # Runs AFTER aggregation because the resamples reset()/update()/compute() the metrics; the
+    # point estimates in ``values`` are already captured, so trashing metric state is harmless.
+    uncertainty: dict[str, dict[str, Any]] = {}
+    if acc is not None:
+        uncertainty = _bootstrap_uncertainty(
+            metrics,
+            acc.pred,
+            acc.target,
+            acc.meta,
+            n_resamples=bootstrap_n_resamples,
+            confidence=bootstrap_confidence,
+            seed=bootstrap_seed if bootstrap_seed is not None else seed,
+        )
+        # Only keep CIs for metrics we actually reported as scalar point estimates.
+        uncertainty = {k: v for k, v in uncertainty.items() if k in values}
 
     # --- Assemble the result document (regime declared VERBATIM, never inferred) ----------------
     regime_block: dict[str, Any] = {"name": regime.name.value}
@@ -291,6 +510,8 @@ def evaluate(
     metrics_block: dict[str, Any] = {"primary": primary.primary_key, "values": values}
     if curves:
         metrics_block["curves"] = curves
+    if uncertainty:
+        metrics_block["uncertainty"] = uncertainty
 
     result: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

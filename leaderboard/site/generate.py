@@ -674,6 +674,53 @@ def _scalar_values(row: dict[str, Any]) -> dict[str, float]:
     return {str(k): float(v) for k, v in values.items()}
 
 
+def _primary_ci(row: dict[str, Any]) -> tuple[float, float] | None:
+    """Return the ``(ci_low, ci_high)`` confidence interval on the PRIMARY metric, or ``None``.
+
+    Reads ``metrics.uncertainty[<primary>]`` (schema 1.2.0); absent on pre-1.2.0 rows and on
+    literature rows that never got a bootstrap/backfill, in which case there is simply no
+    interval to draw or compare.
+    """
+    uncertainty = row["metrics"].get("uncertainty")
+    if not isinstance(uncertainty, dict):
+        return None
+    entry = uncertainty.get(_primary_key(row))
+    if not isinstance(entry, dict):
+        return None
+    lo, hi = entry.get("ci_low"), entry.get("ci_high")
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)):
+        return None
+    lo_f, hi_f = float(lo), float(hi)
+    return (lo_f, hi_f) if lo_f <= hi_f else (hi_f, lo_f)
+
+
+def _cis_overlap(a: tuple[float, float] | None, b: tuple[float, float] | None) -> bool:
+    """Whether two closed intervals overlap. Missing either interval -> no overlap claim.
+
+    Two intervals ``[a_lo, a_hi]`` and ``[b_lo, b_hi]`` overlap iff ``a_lo <= b_hi`` and
+    ``b_lo <= a_hi``. When either row lacks a CI we cannot assert a statistical tie, so we
+    conservatively return ``False`` (the strict ranking stands, unannotated).
+    """
+    if a is None or b is None:
+        return False
+    return a[0] <= b[1] and b[0] <= a[1]
+
+
+def _overlap_with_above(ordered: list[dict[str, Any]]) -> list[bool]:
+    """Per-row flag: does this row's PRIMARY CI overlap the row directly above it?
+
+    ``ordered`` is the already-ranked group (see :func:`_sort_rows`). The first row is never
+    flagged (nothing above it). A flagged row is statistically indistinguishable from its
+    predecessor on the primary metric -- the rank gap is within confidence-interval noise.
+    The ordering is NOT changed: overlap only annotates, never reranks (ranking on noise
+    would be dishonest), so the deterministic primary/trust/name order is preserved.
+    """
+    flags: list[bool] = [False] * len(ordered)
+    for i in range(1, len(ordered)):
+        flags[i] = _cis_overlap(_primary_ci(ordered[i]), _primary_ci(ordered[i - 1]))
+    return flags
+
+
 def _curves(row: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Return this row's curve map (``metrics.curves``) as name -> list of points.
 
@@ -777,6 +824,14 @@ def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     All v1 primary metrics are 'higher is better', so descending primary gives the board
     ranking; verified rows break ties ahead of self-reported ones, and the model name is a
     final deterministic tiebreak.
+
+    Confidence intervals (schema 1.2.0 ``metrics.uncertainty``) DELIBERATELY do not enter
+    this key. Reranking two rows because their CIs overlap would let statistical noise
+    reshuffle the board (and would not even be a total order -- overlap is not transitive),
+    so the strict primary/trust/name order stands. Overlap is surfaced instead as a
+    non-reordering annotation on the rendered row (see :func:`_overlap_with_above` and
+    :func:`_render_group_table`): the reader sees "within CI of the row above" without the
+    rank silently changing on noise.
     """
     return sorted(
         rows,
@@ -1008,18 +1063,45 @@ def _render_badge(status: str) -> str:
     return f'<span class="badge {css_class}">{_esc(text)}</span>'
 
 
+def _render_ci_note(row: dict[str, Any], overlaps_above: bool) -> str:
+    """Render the sub-value CI annotation for the primary cell (empty when no CI).
+
+    Shows the primary metric's ``[ci_low, ci_high]`` interval (schema 1.2.0) under the
+    point estimate. When the interval overlaps the row directly above, an ``≈`` marker is
+    added with a tooltip: the two rows are statistically indistinguishable on the primary
+    metric, so the rank gap between them is within confidence-interval noise. The ordering
+    itself is unchanged (see :func:`_sort_rows`).
+    """
+    ci = _primary_ci(row)
+    if ci is None:
+        return ""
+    lo, hi = ci
+    ci_text = f"[{_fmt_metric(lo)}, {_fmt_metric(hi)}]"
+    if overlaps_above:
+        marker = (
+            '<span class="ci-tie" title="Within the confidence interval of the row above'
+            ' &mdash; statistically indistinguishable on the primary metric.">&asymp;</span>'
+        )
+        return f'<span class="metric-ci overlap">{marker}{_esc(ci_text)}</span>'
+    return f'<span class="metric-ci">{_esc(ci_text)}</span>'
+
+
 def _render_row(
     rank: int,
     row: dict[str, Any],
     scalar_keys: list[str],
     primary_key: str,
     primary_max: float,
+    *,
+    overlaps_above: bool = False,
 ) -> str:
     """Render one ``<tr>``: rank, model (+family chip, +params), each scalar, status.
 
     A cell is rendered for EVERY discovered scalar metric so no metric is left out; a metric
     absent from this particular row shows an en-dash. The primary column carries the score
-    bar and is visually emphasised.
+    bar and is visually emphasised, plus its confidence interval (schema 1.2.0) when known;
+    ``overlaps_above`` flags a CI overlap with the preceding row (annotation only, never a
+    reorder -- see :func:`_sort_rows`).
     """
     model = row["model"]
     name = _esc(model["name"])
@@ -1038,8 +1120,11 @@ def _render_row(
         formatted = _fmt_metric(values[key])
         if key == primary_key:
             bar = _render_bar(values[key], primary_max)
+            ci_note = _render_ci_note(row, overlaps_above)
+            cell_class = "num primary overlap" if overlaps_above else "num primary"
             metric_cells.append(
-                f'<td class="num primary"><span class="metric-val">{formatted}</span>{bar}</td>'
+                f'<td class="{cell_class}"><span class="metric-val">{formatted}</span>'
+                f"{ci_note}{bar}</td>"
             )
         else:
             metric_cells.append(f'<td class="num">{formatted}</td>')
@@ -1073,6 +1158,7 @@ def _render_group_table(
     """
     ordered = _sort_rows(rows)
     primary_max = max((_primary_value(r) for r in ordered), default=1.0)
+    overlap_flags = _overlap_with_above(ordered)
 
     head_metric_cells = "".join(
         (
@@ -1090,7 +1176,14 @@ def _render_group_table(
         "</tr></thead>"
     )
     body_rows = "\n".join(
-        _render_row(i, row, scalar_keys, primary_key, primary_max)
+        _render_row(
+            i,
+            row,
+            scalar_keys,
+            primary_key,
+            primary_max,
+            overlaps_above=overlap_flags[i - 1],
+        )
         for i, row in enumerate(ordered, start=1)
     )
     return (
@@ -2030,6 +2123,12 @@ th.rank, td.rank { width: 2rem; text-align: right; color: var(--muted); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 th.primary, td.primary { color: var(--fg); }
 td.num.primary .metric-val { font-weight: 700; }
+.metric-ci {
+  display: block; font-size: 0.66rem; font-weight: 500; color: var(--muted);
+  font-variant-numeric: tabular-nums; margin-top: 0.1rem;
+}
+.metric-ci.overlap { color: var(--accent); }
+.ci-tie { margin-right: 0.2rem; font-weight: 700; cursor: help; }
 .col-note {
   display: block; font-size: 0.66rem; font-weight: 500; color: var(--accent);
   text-transform: uppercase; letter-spacing: 0.04em;

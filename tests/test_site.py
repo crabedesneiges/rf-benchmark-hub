@@ -435,6 +435,90 @@ def test_rows_sorted_by_primary_descending_within_group(tmp_path: Path) -> None:
     assert primaries[0] > primaries[-1]
 
 
+# --------------------------------------------------------------------------------------------------
+# Confidence intervals + CI-overlap tie annotation (schema 1.2.0 metrics.uncertainty)
+# --------------------------------------------------------------------------------------------------
+def _with_ci(row: dict[str, Any], ci_low: float, ci_high: float) -> dict[str, Any]:
+    """Attach a primary-metric confidence interval to an in-memory AMC/SEI row."""
+    primary = row["metrics"]["primary"]
+    row["schema_version"] = "1.2.0"
+    row["metrics"].setdefault("uncertainty", {})[primary] = {
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "method": "bootstrap_percentile",
+        "confidence": 0.95,
+        "n_resamples": 1000,
+    }
+    return row
+
+
+def test_primary_ci_and_overlap_helpers() -> None:
+    """``_primary_ci`` reads the interval; ``_cis_overlap`` is symmetric and correct."""
+    row = _with_ci(_amc_row("r", "m", "linear_probe", 0.60, "self_reported"), 0.58, 0.62)
+    assert generate._primary_ci(row) == (0.58, 0.62)
+    # No uncertainty block -> None (pre-1.2.0 / literature rows).
+    bare = _amc_row("r2", "m2", "linear_probe", 0.60, "self_reported")
+    assert generate._primary_ci(bare) is None
+
+    assert generate._cis_overlap((0.58, 0.62), (0.60, 0.65)) is True
+    assert generate._cis_overlap((0.58, 0.62), (0.63, 0.70)) is False
+    # A missing interval can never claim an overlap.
+    assert generate._cis_overlap((0.58, 0.62), None) is False
+
+
+def test_overlap_flag_does_not_reorder_rows() -> None:
+    """CI overlap annotates but NEVER changes the strict primary/trust/name ordering."""
+    # Two rows whose CIs overlap; the higher point estimate must still rank first.
+    hi = _with_ci(_amc_row("hi", "alpha", "linear_probe", 0.605, "self_reported"), 0.59, 0.62)
+    lo = _with_ci(_amc_row("lo", "beta", "linear_probe", 0.600, "self_reported"), 0.585, 0.615)
+    ordered = generate._sort_rows([lo, hi])
+    assert [r["model"]["name"] for r in ordered] == ["alpha", "beta"]  # order by point estimate
+
+    flags = generate._overlap_with_above(ordered)
+    assert flags == [False, True]  # first never flagged; second overlaps the first
+
+
+def test_non_overlapping_cis_are_not_flagged() -> None:
+    """Well-separated intervals produce no overlap annotation."""
+    top = _with_ci(_amc_row("t", "alpha", "linear_probe", 0.70, "self_reported"), 0.68, 0.72)
+    bot = _with_ci(_amc_row("b", "beta", "linear_probe", 0.55, "self_reported"), 0.53, 0.57)
+    ordered = generate._sort_rows([top, bot])
+    assert generate._overlap_with_above(ordered) == [False, False]
+
+
+def test_overlap_renders_tie_marker_and_ci_note(tmp_path: Path) -> None:
+    """Overlapping CIs surface an ≈ tie marker + CI text in the rendered primary cell."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "hi.json",
+        _with_ci(_amc_row("hi", "alpha", "linear_probe", 0.605, "self_reported"), 0.59, 0.62),
+    )
+    _write(
+        results / "amc" / "lo.json",
+        _with_ci(_amc_row("lo", "beta", "linear_probe", 0.600, "self_reported"), 0.585, 0.615),
+    )
+    generate.build_site(results, out)
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+
+    # The CI text appears for both rows; the ≈ tie marker appears for the overlapping one.
+    assert 'class="metric-ci' in amc_html
+    assert "&asymp;" in amc_html  # rendered ONLY in a row, never in the CSS block
+    assert 'class="ci-tie"' in amc_html
+    assert amc_html.count("&asymp;") == 1  # exactly the single overlapping row
+
+
+def test_no_ci_note_without_uncertainty(tmp_path: Path) -> None:
+    """Rows without an uncertainty block render no CI text and no tie marker."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)  # the default fixtures carry no uncertainty
+    generate.build_site(results, out)
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert "&asymp;" not in amc_html  # no rendered tie markers
+    assert 'class="metric-ci"' not in amc_html  # no per-row CI text spans
+
+
 def test_verified_and_self_reported_badges_distinct(tmp_path: Path) -> None:
     """Both verification states surface as distinguishable badges."""
     results = tmp_path / "results"

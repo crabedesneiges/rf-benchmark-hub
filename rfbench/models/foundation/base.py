@@ -30,15 +30,18 @@ imported here. A real backbone loads lazily behind the ``rfbench[torch]`` extra 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Sequence
 from types import ModuleType
 from typing import SupportsFloat, cast
 
-from rfbench.core.model import Model, RegimeSpec
+from rfbench.core.model import Model, Regime, RegimeSpec
 from rfbench.core.types import Batch, Tensor
 from rfbench.regimes import make_adapter
 from rfbench.regimes.base import FittedState, RegimeAdapter, TrainSplit
 from rfbench.regimes.probe import Head
+
+_LOG = logging.getLogger(__name__)
 
 #: A backbone hook: maps a collated batch to per-sample outputs (embeddings or logits).
 #: Kept structural (``Batch -> Tensor``) so a wrapper can inject a plain Python function,
@@ -189,6 +192,34 @@ class _AdaptedModel(Model):
         return self._base.n_params
 
 
+def _default_probe_head() -> Head:
+    """Resolve the head a real (non-test) ``run_regime`` call fits when none is injected.
+
+    The normative board head is :class:`~rfbench.regimes.heads.LogisticRegressionHead`
+    (``sklearn``); it is the RUNTIME default here rather than
+    :class:`LinearProbeAdapter`'s own constructor default so that
+    ``rfbench.regimes.probe`` -- and ``rfbench.regimes`` at large -- stay importable
+    without ``sklearn`` (see that module's "no torch/numpy/sklearn import" contract). When
+    ``sklearn`` is not installed (e.g. the dependency-free CI/test venv) this falls back to
+    the pure-stdlib :class:`~rfbench.regimes.probe.NearestCentroidHead`, logging that the
+    fallback is in effect so a silently-degraded board run is never mistaken for a
+    logistic-regression one.
+    """
+    try:
+        from rfbench.regimes.heads import LogisticRegressionHead  # noqa: PLC0415 - lazy by design
+
+        return LogisticRegressionHead()
+    except ModuleNotFoundError:
+        from rfbench.regimes.probe import NearestCentroidHead
+
+        _LOG.warning(
+            "sklearn not importable: falling back to the pure-stdlib NearestCentroidHead "
+            "placeholder for this probing regime run (install `rfbench[tasks]` for the "
+            "normative LogisticRegressionHead)."
+        )
+        return NearestCentroidHead()
+
+
 def run_regime(
     model: FoundationModel,
     regime: RegimeSpec,
@@ -209,9 +240,17 @@ def run_regime(
 
     runs the *same* wrapped FM through ``evaluate()`` in any of the four regimes and emits a
     schema-valid ``result.json`` with the regime declared verbatim. ``head`` is honoured only
-    by the probing regimes (ignored by the pass-throughs), mirroring ``make_adapter``.
+    by the probing regimes (ignored by the pass-throughs), mirroring ``make_adapter``. When
+    ``head`` is left ``None`` for a probing regime, this call site -- not
+    :class:`~rfbench.regimes.probe.LinearProbeAdapter`'s own constructor default -- resolves
+    the real board head (:func:`_default_probe_head`: ``sklearn`` logistic regression when
+    importable, else the stdlib centroid placeholder with a logged fallback). The
+    pass-through regimes never need a head, so it is left unresolved (``None``) for them --
+    same as before -- avoiding an unnecessary ``sklearn`` import on those paths.
     """
-    adapter = make_adapter(regime, head=head)
+    is_probing = regime.name in (Regime.LINEAR_PROBE, Regime.FEW_SHOT)
+    resolved_head = head if head is not None or not is_probing else _default_probe_head()
+    adapter = make_adapter(regime, head=resolved_head)
     state = adapter.fit(model, train_split)
     return _AdaptedModel(model, adapter, state)
 

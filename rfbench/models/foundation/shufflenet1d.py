@@ -119,14 +119,16 @@ def build_shufflenet1d(
 
             branch2_inp = inp if stride > 1 else branch_features
             self.branch2 = nn.Sequential(
-                nn.Conv1d(branch2_inp, branch_features, kernel_size=1, stride=1, padding=0,
-                          bias=False),
+                nn.Conv1d(
+                    branch2_inp, branch_features, kernel_size=1, stride=1, padding=0, bias=False
+                ),
                 nn.BatchNorm1d(branch_features),
                 nn.ReLU(inplace=True),
                 self._depthwise(branch_features, branch_features, stride),
                 nn.BatchNorm1d(branch_features),
-                nn.Conv1d(branch_features, branch_features, kernel_size=1, stride=1, padding=0,
-                          bias=False),
+                nn.Conv1d(
+                    branch_features, branch_features, kernel_size=1, stride=1, padding=0, bias=False
+                ),
                 nn.BatchNorm1d(branch_features),
                 nn.ReLU(inplace=True),
             )

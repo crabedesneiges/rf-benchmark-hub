@@ -201,8 +201,9 @@ class IqfmBase(FoundationModel):
                 if key in raw:
                     state = raw[key]
                     break
-        cleaned = {k.replace("_orig_mod.", "").replace("module.", "", 1): v for k, v in
-                   state.items()}
+        cleaned = {
+            k.replace("_orig_mod.", "").replace("module.", "", 1): v for k, v in state.items()
+        }
         missing, unexpected = backbone.load_state_dict(cleaned, strict=False)
         if missing:
             raise RuntimeError(

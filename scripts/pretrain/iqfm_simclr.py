@@ -152,11 +152,15 @@ def train(args: argparse.Namespace) -> Path:
 
     dataset = _AmcUnlabelledWindows(args.dataset)
     loader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=True,
         num_workers=args.num_workers,
     )
-    _LOG.info("pre-training on %d unlabelled %s windows (seed=%d)", len(dataset), args.dataset,
-              args.seed)
+    _LOG.info(
+        "pre-training on %d unlabelled %s windows (seed=%d)", len(dataset), args.dataset, args.seed
+    )
 
     backbone = build_shufflenet1d().to(device)
     head = _ProjectionHead(EMBED_DIM_X0_5).to(device)

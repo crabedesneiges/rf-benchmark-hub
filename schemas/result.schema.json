@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/rf-benchmark-hub/rf-benchmark-hub/main/schemas/result.schema.json",
+  "$id": "https://raw.githubusercontent.com/crabedesneiges/rf-benchmark-hub/main/schemas/result.schema.json",
   "title": "RF-Benchmark-Hub leaderboard result",
   "description": "One evaluation run = one result.json = one leaderboard row: a single (task, model, regime, dataset, split, track) evaluation. Emitted ONLY by `rfbench eval` and validated against this schema before it may enter leaderboard/results/<task>/*.json. The regime is ALWAYS declared, never inferred (D5). Per-task metric keys stay normative in docs/EVALUATION_PROTOCOL.md: `metrics.values` is an open scalar map with a `primary` pointer, so adding a task/metric bumps only the task `version`, never this frozen schema. Closed objects use additionalProperties=false to catch typos; only genuinely open maps (metrics.values, metrics.curves, eval.conditions, per_class) stay open.",
   "type": "object",
@@ -18,9 +18,9 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "description": "SemVer of THIS result schema. Frozen at Sprint-0; consumers pin the major. Lets the leaderboard reader migrate old rows. '1.1.0' (additive, non-breaking) added the 'from_paper'/'from_paper_uncertain' verification tiers; existing '1.0.0' rows and writers stay valid.",
+      "description": "SemVer of THIS result schema. Frozen at Sprint-0; consumers pin the major. Lets the leaderboard reader migrate old rows. '1.1.0' (additive, non-breaking) added the 'from_paper'/'from_paper_uncertain' verification tiers; '1.2.0' (additive, non-breaking) added the optional 'metrics.uncertainty', 'pretraining', 'transfer' and 'efficiency' blocks. Every bump so far is additive, so existing '1.0.0'/'1.1.0' rows and writers stay valid without modification.",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
-      "enum": ["1.0.0", "1.1.0"]
+      "enum": ["1.0.0", "1.1.0", "1.2.0"]
     },
     "result_id": {
       "type": "string",
@@ -85,6 +85,45 @@
           "type": "string",
           "format": "uri",
           "description": "Optional link to a model card, paper, or repo."
+        }
+      }
+    },
+    "pretraining": {
+      "type": "object",
+      "description": "Optional pretraining provenance for a foundation model (schema 1.2.0+), for contamination disclosure: which datasets the backbone saw before this evaluation and whether they overlap the eval split. Absent on all current rows -- purely additive. When present, at least one property must be given (minProperties).",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "pretrain_datasets": {
+          "type": "array",
+          "description": "Names of datasets used during pretraining of the backbone.",
+          "items": {"type": "string"}
+        },
+        "overlap_with_eval": {
+          "type": "string",
+          "description": "Whether the pretraining data overlaps this evaluation's split. 'none': disjoint by construction. 'confirmed': known overlap. 'unknown': not audited.",
+          "enum": ["none", "unknown", "confirmed"]
+        },
+        "disclosure_note": {
+          "type": "string",
+          "description": "Optional free-form note on the contamination assessment."
+        }
+      }
+    },
+    "transfer": {
+      "type": "object",
+      "description": "Optional cross-dataset transfer declaration (schema 1.2.0+): the model was trained/fine-tuned on `source_dataset` and evaluated on THIS row's `dataset`. Distinct from `pretraining`, which concerns foundation-model pretraining rather than the supervised training that immediately precedes this evaluation. Absent on all current rows -- purely additive.",
+      "required": ["source_dataset"],
+      "additionalProperties": false,
+      "properties": {
+        "source_dataset": {
+          "type": "string",
+          "description": "Dataset the model was trained/fine-tuned on before this evaluation.",
+          "minLength": 1
+        },
+        "source_domain": {
+          "type": "string",
+          "description": "Optional free-form domain of the source data, e.g. 'synthetic', 'ota-indoor'."
         }
       }
     },
@@ -218,6 +257,56 @@
           "type": "object",
           "description": "Optional per-class scalar scores keyed by class label.",
           "additionalProperties": {"type": "number"}
+        },
+        "uncertainty": {
+          "type": "object",
+          "description": "Optional confidence intervals for scalar metrics (schema 1.2.0+). Keyed by metric name, which SHOULD be a key of `metrics.values` (the point estimate the interval brackets). Populated by evaluate() or by a separate backfill script (bootstrap-CI PR to come), so it is absent on all current rows -- purely additive, never required.",
+          "additionalProperties": {
+            "type": "object",
+            "description": "Confidence interval + provenance for one metric.",
+            "required": ["ci_low", "ci_high", "method"],
+            "additionalProperties": false,
+            "properties": {
+              "ci_low": {
+                "type": "number",
+                "description": "Lower bound of the confidence interval on this metric."
+              },
+              "ci_high": {
+                "type": "number",
+                "description": "Upper bound of the confidence interval on this metric."
+              },
+              "method": {
+                "type": "string",
+                "description": "How the interval was obtained. 'bootstrap_percentile': percentile bootstrap over resampled predictions. 'wilson_backfill': approximate Wilson interval reconstructed from n only (for backfilling legacy rows). 'multi_seed_std': std across seeds/episodes turned into an interval.",
+                "enum": ["bootstrap_percentile", "wilson_backfill", "multi_seed_std"]
+              },
+              "confidence": {
+                "type": "number",
+                "description": "Nominal coverage of the interval (implicitly 0.95 when omitted).",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "n_resamples": {
+                "type": "integer",
+                "description": "Number of bootstrap resamples (only meaningful when method=='bootstrap_percentile').",
+                "minimum": 1
+              },
+              "n_episodes": {
+                "type": "integer",
+                "description": "Number of few-shot episodes aggregated (only meaningful when method=='multi_seed_std' for episodic few-shot).",
+                "minimum": 1
+              },
+              "n_seeds": {
+                "type": "integer",
+                "description": "Number of seeds aggregated (only meaningful when method=='multi_seed_std' for classic multi-seed runs).",
+                "minimum": 1
+              },
+              "note": {
+                "type": "string",
+                "description": "Optional free-form caveat, e.g. that this is an approximate backfill reconstructed from n only."
+              }
+            }
+          }
         }
       }
     },
@@ -267,6 +356,39 @@
           "type": "string",
           "description": "git SHA of the code that produced this result.",
           "pattern": "^[0-9a-f]{7,40}$"
+        }
+      }
+    },
+    "efficiency": {
+      "type": "object",
+      "description": "Optional efficiency/cost metrics for this model (schema 1.2.0+): latency, throughput, FLOPs, memory and training cost. Reported for context, never used for ranking. Absent on all current rows -- purely additive. When present, at least one property must be given (minProperties).",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "inference_latency_ms": {
+          "type": "number",
+          "description": "Wall-clock latency of a single forward pass, in milliseconds.",
+          "minimum": 0
+        },
+        "throughput_samples_per_sec": {
+          "type": "number",
+          "description": "Sustained inference throughput in samples per second.",
+          "minimum": 0
+        },
+        "n_flops": {
+          "type": "number",
+          "description": "FLOPs of one forward pass.",
+          "minimum": 0
+        },
+        "memory_mb": {
+          "type": "number",
+          "description": "Peak memory footprint in megabytes.",
+          "minimum": 0
+        },
+        "training_gpu_hours": {
+          "type": "number",
+          "description": "Total GPU-hours spent training/fine-tuning the evaluated model.",
+          "minimum": 0
         }
       }
     },

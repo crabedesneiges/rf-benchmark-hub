@@ -247,10 +247,10 @@ _GUIDE: dict[str, Any] = {
         "someone ran rfbench themselves and submitted the number, unverified by a maintainer. "
         "from paper and from paper (unconfirmed split) are a different kind of row entirely: "
         "nobody ran anything through this repo -- the number is copied from the model's own "
-        "publication (docs/BIBLIOGRAPHY.md) purely as a literature reference point. \"from "
+        'publication (docs/BIBLIOGRAPHY.md) purely as a literature reference point. "from '
         "paper\" is used only when the paper's own dataset AND the board's exact canonical "
-        "split/protocol match (e.g. AMC on RadioML 2016.10a full-SNR); \"from paper (unconfirmed "
-        "split)\" is used when only the dataset family matches and the exact split, "
+        'split/protocol match (e.g. AMC on RadioML 2016.10a full-SNR); "from paper (unconfirmed '
+        'split)" is used when only the dataset family matches and the exact split, '
         "preprocessing, or sample overlap with our canonical split could not be confirmed. "
         "Confidence on the board comes from the verified track first, self-reported second; the "
         "two paper tiers are context, not a ranking claim against harness-run rows."

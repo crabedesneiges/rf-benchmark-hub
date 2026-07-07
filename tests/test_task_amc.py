@@ -348,7 +348,10 @@ def test_dataset_resolves_committed_split_checksum() -> None:
     root = Path(__file__).resolve().parent.parent
     manifest = json.loads(
         (
-            root / "leaderboard" / "splits" / "radioml_2016_10a"
+            root
+            / "leaderboard"
+            / "splits"
+            / "radioml_2016_10a"
             / f"{ds.canonical_split_id}.manifest.json"
         ).read_text(encoding="utf-8")
     )

@@ -221,13 +221,18 @@ class WirelessJepa(FoundationModel):
         raw = torch.load(ckpt_path, map_location=self._device)
         state: dict[str, Any] = raw
         if isinstance(raw, dict):
-            for key in ("target_encoder_state_dict", "backbone_state_dict", "model_state_dict",
-                        "state_dict"):
+            for key in (
+                "target_encoder_state_dict",
+                "backbone_state_dict",
+                "model_state_dict",
+                "state_dict",
+            ):
                 if key in raw:
                     state = raw[key]
                     break
-        cleaned = {k.replace("_orig_mod.", "").replace("module.", "", 1): v for k, v in
-                   state.items()}
+        cleaned = {
+            k.replace("_orig_mod.", "").replace("module.", "", 1): v for k, v in state.items()
+        }
         missing, unexpected = backbone.load_state_dict(cleaned, strict=False)
         if missing:
             raise RuntimeError(
@@ -237,7 +242,8 @@ class WirelessJepa(FoundationModel):
                 "partially-random encoder as if it were pretrained."
             )
         _LOG.info(
-            "WirelessJEPA weights loaded from %s (missing=0, unexpected=%d).", ckpt_path,
+            "WirelessJEPA weights loaded from %s (missing=0, unexpected=%d).",
+            ckpt_path,
             len(unexpected),
         )
 

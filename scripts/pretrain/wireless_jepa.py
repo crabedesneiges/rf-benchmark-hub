@@ -107,9 +107,7 @@ class _Predictor(nn.Module):
 
     def __init__(self, dim: int, hidden: int = 512) -> None:
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim)
-        )
+        self.net = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
 
     def forward(self, x: Tensor) -> Tensor:
         return self.net(x)
@@ -165,12 +163,20 @@ def train(args: argparse.Namespace) -> Path:
 
     dataset = _AmcUnlabelledWindows(args.dataset)
     loader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=True,
         num_workers=args.num_workers,
     )
     total_steps = args.epochs * max(len(loader), 1)
-    _LOG.info("JEPA pre-training on %d unlabelled %s windows (seed=%d, %d steps)", len(dataset),
-              args.dataset, args.seed, total_steps)
+    _LOG.info(
+        "JEPA pre-training on %d unlabelled %s windows (seed=%d, %d steps)",
+        len(dataset),
+        args.dataset,
+        args.seed,
+        total_steps,
+    )
 
     context_encoder = build_shufflenet1d().to(device)
     target_encoder = copy.deepcopy(context_encoder).to(device)
@@ -204,15 +210,24 @@ def train(args: argparse.Namespace) -> Path:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            _ema_update(target_encoder, context_encoder,
-                        _momentum_at(step, total_steps, args.ema_base, args.ema_end))
+            _ema_update(
+                target_encoder,
+                context_encoder,
+                _momentum_at(step, total_steps, args.ema_base, args.ema_end),
+            )
             running += float(loss.item())
             run_inv += float(invariance.item())
             run_var += float(variance.item())
             step += 1
         n = max(len(loader), 1)
-        _LOG.info("epoch %3d/%d  loss=%.5f  inv=%.5f  var_hinge=%.5f", epoch + 1, args.epochs,
-                  running / n, run_inv / n, run_var / n)
+        _LOG.info(
+            "epoch %3d/%d  loss=%.5f  inv=%.5f  var_hinge=%.5f",
+            epoch + 1,
+            args.epochs,
+            running / n,
+            run_inv / n,
+            run_var / n,
+        )
 
     out = Path(args.out) if args.out else backbone_checkpoint_path()
     out.parent.mkdir(parents=True, exist_ok=True)

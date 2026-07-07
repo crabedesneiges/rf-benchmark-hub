@@ -33,7 +33,7 @@ dev = ["ruff>=0.5", "black>=24.4", "pytest>=8.0", "mypy>=1.10", "pre-commit>=3.7
 rfbench = "rfbench.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/rf-benchmark-hub/rf-benchmark-hub"
+Homepage = "https://github.com/crabedesneiges/rf-benchmark-hub"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rfbench"]        # package at repo ROOT, NOT src/

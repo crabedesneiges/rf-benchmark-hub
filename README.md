@@ -86,7 +86,7 @@ ranked against a baseline in `full_finetune`.
 ## Leaderboard
 
 `leaderboard/results/**.json` are the **source of truth** for every score; the static site
-([GitHub Pages](https://rf-benchmark-hub.github.io/rf-benchmark-hub/)) is generated from them.
+([GitHub Pages](https://crabedesneiges.github.io/rf-benchmark-hub/)) is generated from them.
 The board shows **two tracks**:
 
 - **self_reported** — anyone ran the eval locally and emitted a valid `result.json` (Tier 1).

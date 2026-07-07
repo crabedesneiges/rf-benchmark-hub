@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Phase 0 quality hardening: schema 1.2.0, protocol lock-in, bootstrap CI, repro ops
+
+Six-block Phase 0 of the 2026-07 quality audit follow-up. Priority is repo quality, not public
+launch (domain/governance/maintainers/paper work stays out of scope for now); no FM pretrain was
+relaunched — schema and protocol are locked in spec-only.
+
+- **Schema 1.2.0** (`schemas/result.schema.json`, `schemas/submission.schema.json`, additive,
+  non-breaking): new optional fields `metrics.uncertainty` (per-metric CI, `method` ∈
+  `{bootstrap_percentile, wilson_backfill, multi_seed_std}`), `pretraining`
+  (`pretrain_datasets`/`overlap_with_eval`/`disclosure_note`), `transfer` (`source_dataset`,
+  `source_domain`), `efficiency` (latency/throughput/FLOPs/memory/GPU-hours). Fixed both schemas'
+  `$id` to the real org (`crabedesneiges/rf-benchmark-hub`, was `rf-benchmark-hub/rf-benchmark-hub`).
+- **Protocol lock-in** (`docs/EVALUATION_PROTOCOL.md`): new normative "Statistical rigor &
+  uncertainty" section — bootstrap percentile CI default (n=1000, confidence=0.95), Wilson backfill
+  restricted to proportion metrics on non-`from_paper*` rows, few-shot k∈{1,10,100} with N≥10
+  episodes (seeds 42..51), scikit-learn logistic regression as the normative probe head
+  (nearest-centroid is a dependency-free fallback only, never for board numbers), COCO-style
+  IoU-averaged mAP for `wideband_detection` (existing `task.py` still single-IoU @ 0.5 — not yet
+  updated to match, tracked as follow-up), calibrated-on-val pd@pfa=0.1 for `spectrum_sensing` (no
+  implementation yet), per-task tolerance table, contamination-disclosure rules.
+- **Bootstrap CI + backfill** (`rfbench/core/evaluate.py`, `scripts/backfill_uncertainty.py`):
+  `evaluate()` now accumulates per-chunk predictions and computes a stdlib-only percentile bootstrap
+  CI (`compute_bootstrap_ci=True` by default, 1000 resamples, ~9.5s @ 22k samples) into
+  `metrics.uncertainty`; `SCHEMA_VERSION` bumped to `1.2.0`. New `backfill_uncertainty.py` computes
+  Wilson-interval CIs for 5 existing self_reported/verified board rows lacking raw predictions
+  (`amc/{cldnn,mcldnn,resnet_amc,iqfm-base-linear_probe}`, `interference_id/interf_cnn}`) —
+  `from_paper*` rows are structurally excluded (no `eval` block). Leaderboard site (`_sort_rows`)
+  keeps its existing strict ordering (primary DESC → verified-first → name) unchanged — CI overlap
+  is not transitive, so it is surfaced as a non-reordering `≈`-overlap annotation instead of
+  re-ranking on statistical noise.
+- **Regimes** (`rfbench/regimes/heads.py`, `few_shot.py`): new `LogisticRegressionHead` (lazy
+  sklearn import, matches the new normative probe spec) wired into linear-probe/few-shot
+  instantiation in `rfbench/models/foundation/base.py::run_regime` only (never for
+  from_scratch/full_finetune), falling back to `NearestCentroidHead` with a warning if sklearn is
+  absent. New `run_episodic()` helper for N≥10-episode few-shot runs (not yet wired into the CLI).
+- **Repro ops** (`rfbench/training.py`, `slurm/*.sh`, `uv.lock`): checkpoints are now actually
+  persisted to disk (`train_baseline(..., checkpoint_out=...)`, atomic write, `--out-checkpoint`
+  CLI flag) — previously best-checkpoint restore only logged and never called `torch.save`, making
+  bootstrap/re-scoring of `from_scratch` rows impossible without a full retrain. Added
+  `cudnn.deterministic=True`/`cudnn.benchmark=False`. Generated `uv.lock` (was missing). Audited all
+  14 `slurm/*.sh`: confirmed the audit report's suggested `--constraint=arm` is **wrong for this
+  cluster** (single partition `defq*`, feature `location=local`, no `arm` feature exists) — documented
+  instead of applied.
+- **Licenses & URLs** (`docs/LICENSES.md`, `pyproject.toml`, `README.md`): new 10-dataset license
+  matrix sourced from existing repo docs (RadDet's Kaggle-vs-GitHub CC BY-NC vs CC BY-NC-SA
+  divergence flagged rather than smoothed over; ORACLE/LoRa RFFI/DeepSense marked unconfirmed).
+  Fixed stray `rf-benchmark-hub/rf-benchmark-hub` GitHub URLs to `crabedesneiges/rf-benchmark-hub`.
+
+Open follow-ups tracked for later milestones: `verification.tolerance` shape still differs between
+`result.schema.json` (scalar) and `submission.schema.json` (structured object) — left as-is, not
+reconciled; `wideband_detection` mAP implementation vs. new normative spec; `spectrum_sensing` has
+no code yet; J1 (GPU multi-seed ×3 + real bootstrap on fresh runs + iqfm-base re-score under logreg
+probe) is next.
+
 ### Changed — FM in-repo reproduction PAUSED; `iqfm-base` / `wireless-jepa` documented as homemade
 
 Decision (2026-07): pause the in-repo *reproduction* of IQFM and WirelessJEPA. Both papers publish

@@ -20,10 +20,16 @@ released):
   (mask ratio ``--mask-ratio``); **no augmentation** — masking is the only perturbation.
 * **target view** = the full unit-max window, encoded by the **EMA target encoder** under
   ``no_grad``; its pooled latent is LayerNorm-normalised (I-JEPA-style target normalisation).
-* a small **predictor** MLP maps the context encoder's pooled latent to the target latent; the loss
-  is smooth-L1 between prediction and the (stop-grad) normalised target.
+* a small **predictor** MLP maps the context encoder's pooled latent to the target latent; the
+  invariance loss is smooth-L1 between prediction and the (stop-grad) normalised target.
 * after each step the **target encoder** is EMA-updated from the context encoder with a cosine
   momentum schedule 0.996 → 1.0.
+* **anti-collapse (VICReg, Bardes et al. ICLR 2022).** A pooled-latent predict-the-full-view JEPA
+  trivially collapses: the invariance loss alone drove the encoder to a constant (loss → 0 by
+  epoch 5, linear-probe at chance 9.09%) on the first run. We add VICReg **variance** (hinge on
+  each embedding dim's batch-std toward ≥ 1) + **covariance** (decorrelation) terms on the online
+  encoder embedding (``--var-coeff`` / ``--cov-coeff``), which explicitly lower-bounds embedding
+  variance and prevents the collapse while keeping the masked-latent + EMA JEPA structure.
 
 Run (cluster ARM GPU node, never the Intel frontend):
     uv run python scripts/pretrain/wireless_jepa.py --epochs 100 --batch-size 512 --seed 42
@@ -109,6 +115,30 @@ class _Predictor(nn.Module):
         return self.net(x)
 
 
+def _variance_loss(z: Tensor, eps: float = 1e-4) -> Tensor:
+    """VICReg variance term: hinge pushing each embedding dim's batch-std toward >= 1.
+
+    The anti-collapse guarantee: a constant (collapsed) encoder has zero variance, so this term is
+    maximal (1.0) and drives the encoder back to spreading samples out. Without it a pooled-latent
+    JEPA trivially collapses (loss -> 0, probe at chance). See Bardes et al., VICReg (ICLR 2022).
+    """
+    std = torch.sqrt(z.var(dim=0) + eps)  # (D,) per-dim std across the batch
+    return torch.mean(torch.relu(1.0 - std))
+
+
+def _covariance_loss(z: Tensor) -> Tensor:
+    """VICReg covariance term: decorrelate embedding dims (off-diagonal covariance -> 0).
+
+    Complements :func:`_variance_loss` by preventing the encoder from packing all information into
+    a few correlated dims (informational collapse). See Bardes et al., VICReg (ICLR 2022).
+    """
+    b, d = z.shape
+    z = z - z.mean(dim=0)
+    cov = (z.T @ z) / max(b - 1, 1)  # (D, D)
+    off_diag = cov - torch.diag(torch.diag(cov))
+    return (off_diag**2).sum() / d
+
+
 @torch.no_grad()
 def _ema_update(target: nn.Module, context: nn.Module, momentum: float) -> None:
     """EMA-update ``target`` parameters (and buffers) toward ``context`` with ``momentum``."""
@@ -156,16 +186,20 @@ def train(args: argparse.Namespace) -> Path:
     target_encoder.eval()
     step = 0
     for epoch in range(args.epochs):
-        running = 0.0
+        running = run_inv = run_var = 0.0
         for batch in loader:
             batch = batch.to(device)
             context_view = _mask_context(batch, args.mask_ratio, generator)
 
-            z_context = predictor(context_encoder(context_view))
+            e_context = context_encoder(context_view)  # online embedding (regularised)
+            z_context = predictor(e_context)
             with torch.no_grad():
                 z_target = target_encoder(batch)  # full (unmasked) view
                 z_target = torch.nn.functional.layer_norm(z_target, (z_target.shape[-1],))
-            loss = torch.nn.functional.smooth_l1_loss(z_context, z_target)
+            invariance = torch.nn.functional.smooth_l1_loss(z_context, z_target)
+            variance = _variance_loss(e_context)
+            covariance = _covariance_loss(e_context)
+            loss = invariance + args.var_coeff * variance + args.cov_coeff * covariance
 
             optimizer.zero_grad()
             loss.backward()
@@ -173,21 +207,25 @@ def train(args: argparse.Namespace) -> Path:
             _ema_update(target_encoder, context_encoder,
                         _momentum_at(step, total_steps, args.ema_base, args.ema_end))
             running += float(loss.item())
+            run_inv += float(invariance.item())
+            run_var += float(variance.item())
             step += 1
-        _LOG.info("epoch %3d/%d  jepa_smoothl1=%.5f", epoch + 1, args.epochs,
-                  running / max(len(loader), 1))
+        n = max(len(loader), 1)
+        _LOG.info("epoch %3d/%d  loss=%.5f  inv=%.5f  var_hinge=%.5f", epoch + 1, args.epochs,
+                  running / n, run_inv / n, run_var / n)
 
     out = Path(args.out) if args.out else backbone_checkpoint_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "target_encoder_state_dict": target_encoder.state_dict(),  # the probed representation
-        "recipe": "jepa_masked_latent_ema",
+        "recipe": "jepa_masked_latent_ema_vicreg",
         "provenance": "WirelessJEPA recipe (arXiv:2601.20190); weights unpublished, retrained",
         "pretrain_dataset": f"{args.dataset} train split (delabelised, in-distribution)",
         "seed": args.seed,
         "epochs": args.epochs,
         "mask_ratio": args.mask_ratio,
         "ema": [args.ema_base, args.ema_end],
+        "vicreg": [args.var_coeff, args.cov_coeff],
     }
     torch.save(payload, out)
     _LOG.info("saved EMA target encoder -> %s", out)
@@ -205,6 +243,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--mask-ratio", type=float, default=0.5, help="contiguous time fraction masked")
     p.add_argument("--ema-base", type=float, default=0.996, help="EMA momentum at step 0")
     p.add_argument("--ema-end", type=float, default=1.0, help="EMA momentum at the final step")
+    p.add_argument("--var-coeff", type=float, default=1.0, help="VICReg variance (anti-collapse)")
+    p.add_argument("--cov-coeff", type=float, default=0.04, help="VICReg covariance decorrelation")
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="cuda")

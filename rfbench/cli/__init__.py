@@ -835,8 +835,9 @@ def _cmd_train(args: argparse.Namespace) -> int:
 
     Loads the registered task + model (importing the model's torch module lazily), runs the
     real training loop in :func:`rfbench.training.train_baseline` for the declared regime
-    (``from_scratch`` / ``full_finetune``), and writes the result under ``--out``. torch and
-    the training module are imported inside this handler so ``import rfbench`` /
+    (``from_scratch`` / ``full_finetune``), and writes the result under ``--out``. When
+    ``--out-checkpoint`` is set, the best-val model ``state_dict`` is also persisted to disk.
+    torch and the training module are imported inside this handler so ``import rfbench`` /
     ``rfbench --help`` stay dependency-free.
     """
     if args.regime not in ("from_scratch", "full_finetune"):
@@ -905,6 +906,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
             seed=args.seed,
             device=None if args.device == "auto" else args.device,
             out_path=out_path,
+            checkpoint_out=Path(args.out_checkpoint) if args.out_checkpoint else None,
         )
     except (ValueError, RuntimeError, TypeError) as exc:
         print(f"error: [train] {exc}", file=sys.stderr)
@@ -913,6 +915,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
     primary = result["metrics"]["primary"]
     score = result["metrics"]["values"].get(primary)
     print(f"[train] wrote result.json -> {out_path} ({primary}={score}).")
+    if args.out_checkpoint:
+        print(f"[train] wrote checkpoint -> {args.out_checkpoint}.")
     return EXIT_OK
 
 
@@ -1427,6 +1431,13 @@ def _build_train_parser(
         "--out",
         metavar="PATH",
         help="Output path (default: leaderboard/results/<task>/<model>.json).",
+    )
+    tr.add_argument(
+        "--out-checkpoint",
+        dest="out_checkpoint",
+        metavar="PATH",
+        help="Persist the best-val model checkpoint (torch.save) to this path (default: unset, "
+        "no checkpoint written to disk).",
     )
     tr.set_defaults(func=_cmd_train)
 

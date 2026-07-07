@@ -601,6 +601,49 @@ def test_train_baseline_early_stops_before_max_epochs(caplog: pytest.LogCaptureF
     ), "a converged fit with patience=1 must early-stop and log it"
 
 
+def test_train_baseline_writes_checkpoint_to_disk(tmp_path: Path) -> None:
+    """``checkpoint_out`` persists the restored best-val state_dict to disk via torch.save.
+
+    Asserts the file exists after fitting and that ``torch.load`` reloads a state_dict whose
+    tensors match the in-memory best-val weights the model was restored to (a reader gets back
+    exactly what was evaluated on TEST).
+    """
+    pytest.importorskip("torch")
+
+    import torch
+
+    from rfbench.core.model import Regime, RegimeSpec
+    from rfbench.tasks.amc.task import AmcTask
+    from rfbench.training import resolve_module, train_baseline
+
+    length = 16
+    dataset = _build_tiny_amc_dataset(length=length)
+    model = _build_tiny_model(length=length)
+    task = AmcTask(datasets=[dataset])
+    checkpoint_path = tmp_path / "checkpoints" / "tiny-baseline.pt"
+
+    _trained, _result = train_baseline(
+        task,
+        model,
+        dataset,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        epochs=2,
+        batch_size=4,
+        lr=1e-2,
+        seed=7,
+        device="cpu",
+        checkpoint_out=checkpoint_path,
+    )
+
+    assert checkpoint_path.is_file()
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
+    assert checkpoint["seed"] == 7
+    assert isinstance(checkpoint["epoch"], int)
+    assert set(checkpoint["state_dict"]) == set(resolve_module(model).state_dict())
+    for key, tensor in resolve_module(model).state_dict().items():
+        assert torch.equal(checkpoint["state_dict"][key].cpu(), tensor.cpu())
+
+
 def test_train_baseline_rejects_bad_patience() -> None:
     """Non-positive ``patience`` fails loudly (mirrors the epochs/batch_size guards)."""
     pytest.importorskip("torch")

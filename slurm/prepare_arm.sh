@@ -12,6 +12,8 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=00:40:00
+# cluster mono-partition (defq*, GB200/ARM uniquement) -- pas de contrainte d'architecture requise
+# (confirmé via `sinfo -o "%P %f %c %G"`, seule feature reportée: location=local)
 
 set -uo pipefail
 WORK=/lustre/work/pdl16831/udl79f933

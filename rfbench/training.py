@@ -129,6 +129,8 @@ def _seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     try:
         import numpy as np  # noqa: PLC0415
 
@@ -273,6 +275,30 @@ def _snapshot_state(module: nn.Module) -> dict[str, Any]:
     return {k: v.detach().cpu().clone() for k, v in module.state_dict().items()}
 
 
+def _atomic_save_checkpoint(checkpoint: dict[str, Any], out_path: Path) -> None:
+    """Write ``checkpoint`` to ``out_path`` atomically via ``torch.save``.
+
+    Serialises to a temp file in the destination directory, then ``os.replace`` swaps it into
+    place so a reader never observes a partial file -- the same pattern as
+    :func:`rfbench.core.evaluate._atomic_write_json`, adapted from ``json.dump`` to ``torch.save``.
+    """
+    import os  # noqa: PLC0415 - lazy by design
+    import tempfile  # noqa: PLC0415 - lazy by design
+
+    import torch  # noqa: PLC0415 - lazy by design
+
+    out_path = Path(out_path)  # accept str paths from any caller
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=out_path.parent, prefix=out_path.name, suffix=".tmp")
+    os.close(fd)
+    try:
+        torch.save(checkpoint, tmp_name)
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
 def _load_val_source(dataset: Dataset, val_split: SplitName) -> MapDataset | None:
     """Return the ``val_split`` map-dataset, or ``None`` when it is unavailable/empty.
 
@@ -312,6 +338,7 @@ def train_baseline(
     lr_patience: int = DEFAULT_LR_PATIENCE,
     min_lr: float = DEFAULT_MIN_LR,
     grad_clip: float | None = DEFAULT_GRAD_CLIP,
+    checkpoint_out: Path | None = None,
 ) -> tuple[Model, dict[str, Any]]:
     """Fit ``model`` on ``dataset``'s TRAIN split with val-monitoring, then ``evaluate`` on TEST.
 
@@ -338,6 +365,13 @@ def train_baseline(
     After fitting, restores the best state and calls :func:`rfbench.core.evaluate.evaluate` on
     ``task``'s default (``test``) split with the same declared ``regime`` so the single canonical
     writer emits (and, if ``out_path`` is set, writes) a schema-valid ``result.json``.
+
+    When ``checkpoint_out`` is set, the restored best-val checkpoint is ALSO persisted to disk
+    (``{"state_dict": ..., "epoch": ..., "seed": ...}``, plus ``val_accuracy`` / ``train_loss``
+    when available) via ``torch.save``, written ATOMICALLY (temp file in the same directory then
+    ``os.replace``, mirroring :func:`rfbench.core.evaluate._atomic_write_json`) so a reader never
+    observes a partial file. Without it, no checkpoint reaches disk (only the in-memory state is
+    used for the final evaluation) -- this is the only way to get a reloadable ``.pt`` today.
 
     ``epochs`` is now an *upper bound* (max epochs); early stopping usually stops sooner. The
     optional recipe params (``patience``, ``min_delta``, ``lr_factor``, ``lr_patience``,
@@ -507,6 +541,19 @@ def train_baseline(
             best_epoch + 1,
             best_loss,
         )
+
+    if checkpoint_out is not None:
+        checkpoint: dict[str, Any] = {
+            "state_dict": best_state,
+            "epoch": best_epoch,
+            "seed": seed,
+        }
+        if val_loader is not None:
+            checkpoint["val_accuracy"] = best_acc
+        else:
+            checkpoint["train_loss"] = best_loss
+        _atomic_save_checkpoint(checkpoint, checkpoint_out)
+        logger.info("saved best-val checkpoint -> %s", checkpoint_out)
 
     result = evaluate(
         model,

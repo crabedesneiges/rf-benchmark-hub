@@ -199,8 +199,15 @@ def _snapshot(module: nn.Module) -> dict[str, Any]:
     return {k: v.detach().cpu().clone() for k, v in module.state_dict().items()}
 
 
-def _val_loss(module: nn.Module, loader: DataLoaderT, weight: TensorT, l2_lambda: float) -> float:
-    """Mean per-batch validation loss (class-weighted CE + the same L2 term used in training)."""
+def _val_loss(module: nn.Module, loader: DataLoaderT, l2_lambda: float) -> float:
+    """Mean per-batch validation loss: **UNWEIGHTED** CE + the L2 term (Keras ``val_loss``).
+
+    Matches what Keras' ``ModelCheckpoint``/``EarlyStopping`` monitor: ``class_weight`` is applied
+    to the TRAINING loss only (sample weighting in ``fit``), NOT to the validation loss, while the
+    L2 regularisation loss IS included in both. Monitoring a *weighted* val loss for checkpoint
+    selection is a fidelity bug (it selects a different checkpoint than the reference) -- so the CE
+    here is unweighted.
+    """
     import torch  # noqa: PLC0415
 
     module.eval()
@@ -209,7 +216,9 @@ def _val_loss(module: nn.Module, loader: DataLoaderT, weight: TensorT, l2_lambda
     penalty = _l2_term(module, l2_lambda)
     with torch.no_grad():
         for x, y in loader:
-            loss = _weighted_ce(module(x), y, weight)
+            loss = torch.nn.functional.cross_entropy(
+                module(x), y
+            )  # unweighted, like Keras val_loss
             running += float(loss.item()) + penalty
             n_batches += 1
     return running / n_batches if n_batches else float("nan")
@@ -330,9 +339,7 @@ def train_sei_baseline(
             break
 
         monitored = (
-            _val_loss(module, val_loader, weight, l2_lambda)
-            if val_loader is not None
-            else train_loss
+            _val_loss(module, val_loader, l2_lambda) if val_loader is not None else train_loss
         )
         improved = monitored == monitored and monitored < best_loss  # NaN-safe strict improvement
         if improved:

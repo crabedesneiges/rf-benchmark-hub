@@ -935,6 +935,13 @@ def _cmd_sei_train(args: argparse.Namespace) -> int:
     conditions are scored as SEPARATE rows. torch + the SEI training module are imported inside
     this handler so ``import rfbench`` / ``rfbench --help`` stay dependency-free.
     """
+    import logging
+
+    # Surface the per-epoch training trajectory (train/val loss, best-checkpoint, early stop) on
+    # stdout so a cluster .out log shows convergence -- otherwise the loop's logger.info lines are
+    # swallowed at the default WARNING level.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
     try:
         from rfbench.core.registry import MODELS, TASKS
         from rfbench.training_sei import count_classes, train_sei_baseline

@@ -199,3 +199,62 @@ def test_dropout_is_inactive_at_eval() -> None:
         first = net(x)
         second = net(x)
     assert torch.allclose(first, second)
+
+
+def test_input_norm_default_on() -> None:
+    """The chance-collapse fix is default-on across every construction path.
+
+    Both the bare net and the registry-path wrapper (``MODELS.get("mcldnn")()`` passes no
+    arguments) must build the FIXED model -- the J1 multi-seed campaign showed the un-normalized
+    net collapses to chance (1/11) on some seeds (42/43 collapsed, 44 learned; jobs 87697-87699).
+    """
+    assert MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW).input_norm is True
+    assert MCLDNN(device="cpu").net.input_norm is True
+
+
+def test_input_norm_equals_manual_normalization_with_shared_weights() -> None:
+    """input_norm=True is EXACTLY a per-sample unit-variance normalization at the input.
+
+    Two nets sharing the same weights, one with the fix and one without, must agree when the
+    un-fixed net is fed the manually-normalized window -- proving the gate only standardises the
+    input once before the three branches and changes nothing else (MCLDNN has no raw skip whose
+    tail could be inspected, unlike the CLDNN test).
+    """
+    from rfbench.models.baselines.mcldnn import _unit_variance_normalize
+
+    net_fixed = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    net_raw = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW, input_norm=False)
+    net_raw.load_state_dict(net_fixed.state_dict())
+    net_fixed.eval()
+    net_raw.eval()
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        assert torch.allclose(net_fixed(x), net_raw(_unit_variance_normalize(x)), atol=1e-6)
+
+
+def test_input_norm_makes_forward_scale_invariant() -> None:
+    """With the fix on, the absolute capture scale is removed (RML's ~1e-2 RMS no longer matters).
+
+    Scaling the whole window by a large constant must not change the logits (same functional
+    check as ResNet's ``test_input_normalization_makes_forward_scale_invariant``): the per-sample
+    statistics absorb the scale while the I/Q relative geometry is preserved.
+    """
+    net = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW)
+    net.eval()
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        assert torch.allclose(net(x), net(x * 100.0), atol=1e-4)
+
+
+def test_input_norm_toggle_off_reproduces_fragile_path() -> None:
+    """input_norm=False keeps the raw window (the ablation path stays reachable).
+
+    Guards the fragile raw-IQ configuration used for broken-vs-fixed comparisons: with the gate
+    off, scaling the input MUST change the output (no hidden normalization anywhere else).
+    """
+    net = MCLDNNNet(DEFAULT_NUM_CLASSES, window=DEFAULT_WINDOW, input_norm=False)
+    assert net.input_norm is False
+    net.eval()
+    x = torch.randn(_BATCH, 2, DEFAULT_WINDOW)
+    with torch.no_grad():
+        assert not torch.allclose(net(x), net(x * 100.0), atol=1e-4)

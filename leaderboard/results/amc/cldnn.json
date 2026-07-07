@@ -23,15 +23,15 @@
       "accuracy_vs_snr": [
         {
           "x": -20.0,
-          "y": 0.09636363636363636
+          "y": 0.09727272727272727
         },
         {
           "x": -18.0,
-          "y": 0.09818181818181818
+          "y": 0.10272727272727272
         },
         {
           "x": -16.0,
-          "y": 0.09454545454545454
+          "y": 0.09818181818181818
         },
         {
           "x": -14.0,
@@ -39,90 +39,96 @@
         },
         {
           "x": -12.0,
-          "y": 0.14636363636363636
+          "y": 0.15
         },
         {
           "x": -10.0,
-          "y": 0.19636363636363635
+          "y": 0.24454545454545454
         },
         {
           "x": -8.0,
-          "y": 0.3409090909090909
+          "y": 0.3527272727272727
         },
         {
           "x": -6.0,
-          "y": 0.5018181818181818
+          "y": 0.48363636363636364
         },
         {
           "x": -4.0,
-          "y": 0.6190909090909091
+          "y": 0.6118181818181818
         },
         {
           "x": -2.0,
-          "y": 0.7427272727272727
+          "y": 0.7127272727272728
         },
         {
           "x": 0.0,
-          "y": 0.8036363636363636
+          "y": 0.7990909090909091
         },
         {
           "x": 2.0,
-          "y": 0.8636363636363636
+          "y": 0.8418181818181818
         },
         {
           "x": 4.0,
-          "y": 0.8681818181818182
+          "y": 0.8481818181818181
         },
         {
           "x": 6.0,
-          "y": 0.8736363636363637
+          "y": 0.8572727272727273
         },
         {
           "x": 8.0,
-          "y": 0.8863636363636364
+          "y": 0.8654545454545455
         },
         {
           "x": 10.0,
-          "y": 0.8645454545454545
+          "y": 0.8554545454545455
         },
         {
           "x": 12.0,
-          "y": 0.8881818181818182
+          "y": 0.8736363636363637
         },
         {
           "x": 14.0,
-          "y": 0.8636363636363636
+          "y": 0.85
         },
         {
           "x": 16.0,
-          "y": 0.8681818181818182
+          "y": 0.8427272727272728
         },
         {
           "x": 18.0,
-          "y": 0.8672727272727273
+          "y": 0.8590909090909091
         }
       ]
     },
     "primary": "accuracy_overall",
     "uncertainty": {
       "accuracy_overall": {
-        "ci_high": 0.587006236639334,
-        "ci_low": 0.5739656557744843,
-        "confidence": 0.95,
-        "method": "wilson_backfill",
-        "note": "backfill a posteriori, pas de resampling sur predictions brutes (Wilson score reconstruit depuis accuracy et n)"
+        "ci_high": 0.5858369997884151,
+        "ci_low": 0.5743751214237062,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
+      },
+      "macro_f1": {
+        "ci_high": 0.6039986145612749,
+        "ci_low": 0.5893178711135655,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
       }
     },
     "values": {
-      "accuracy_overall": 0.5805,
-      "macro_f1": 0.5956900564950094
+      "accuracy_overall": 0.5801060606060606,
+      "macro_f1": 0.5966582428374202
     }
   },
   "model": {
     "family": "baseline",
     "n_params": 440907,
-    "name": "cldnn",
-    "url": "https://arxiv.org/abs/1703.09197"
+    "name": "cldnn"
   },
   "regime": {
     "name": "from_scratch"

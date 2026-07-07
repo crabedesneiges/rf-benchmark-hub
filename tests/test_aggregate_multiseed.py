@@ -472,3 +472,41 @@ def test_parse_seeds_invalid() -> None:
 
     with pytest.raises(argparse.ArgumentTypeError):
         agg._parse_seeds("42,abc")
+
+
+def test_proportion_ci_clamped_to_unit_interval(staging_dir: Path, out_dir: Path) -> None:
+    """A near-perfect proportion metric cannot report ci_high above 1 (or ci_low below 0).
+
+    Mirrors the interf_cnn case that motivated the clamp: mean 0.9996 with stdev ~0.0008 gives a
+    raw mean + stdev of 1.0003, which is meaningless for an accuracy. The clamp keeps the interval
+    inside the metric's domain without ever widening it; non-proportion metrics pass through.
+    """
+    accuracies = [1.0, 0.9987, 1.0]
+    f1s = [1.0, 0.9985, 1.0]
+    seeds = [42, 43, 44]
+
+    for seed, acc, f1 in zip(seeds, accuracies, f1s, strict=True):
+        _write_staging(
+            staging_dir,
+            "interference_id",
+            "interf_cnn",
+            seed,
+            _make_staging_doc(
+                seed=seed,
+                accuracy=acc,
+                macro_f1=f1,
+                task_name="interference_id",
+                model_name="interf_cnn",
+            ),
+        )
+
+    out = out_dir / "interference_id" / "interf_cnn.json"
+    result = agg.aggregate(staging_dir, "interference_id", "interf_cnn", seeds, out)
+
+    raw_high = mean(accuracies) + stdev(accuracies)
+    assert raw_high > 1.0  # the fixture genuinely exercises the clamp
+    unc = result["metrics"]["uncertainty"]["accuracy_overall"]
+    assert unc["ci_high"] == 1.0
+    assert 0.0 <= unc["ci_low"] <= 1.0
+    # ci_low is untouched by the clamp (it is inside [0, 1] already)
+    assert unc["ci_low"] == pytest.approx(mean(accuracies) - stdev(accuracies), abs=1e-9)

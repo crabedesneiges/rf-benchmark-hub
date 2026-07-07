@@ -58,6 +58,25 @@ _MULTISEED_NOTE_TEMPLATE = (
     "Les curves/per_class proviennent du seed de référence ({ref_seed})."
 )
 
+#: Metric keys whose values are genuine proportions in [0, 1]; their descriptive interval
+#: bounds are clamped to [0, 1] so a near-perfect score with a small spread cannot produce a
+#: ci_high above 1 (mirrors ``slurm/eval_fm_episodic.py``'s convention).
+_PROPORTION_METRICS = frozenset(
+    {"accuracy_overall", "macro_f1", "rank1_accuracy", "auroc", "eer", "mAP", "mAR", "IoU"}
+)
+
+
+def _clamp_unit(value: float, key: str) -> float:
+    """Clamp ``value`` to [0, 1] iff ``key`` is a bounded-proportion metric, else pass through.
+
+    Clamping never widens the descriptive interval, it only keeps it inside the metric's
+    domain (e.g. interf_cnn's mean 0.9996 + stdev 0.0008 would otherwise report ci_high
+    1.0003, meaningless for an accuracy).
+    """
+    if key not in _PROPORTION_METRICS:
+        return value
+    return max(0.0, min(1.0, value))
+
 
 def _repo_root() -> Path:
     """Locate the repo root relative to this file (walks up looking for schemas/)."""
@@ -252,8 +271,8 @@ def _aggregate(
         else:
             sd = 0.0
         uncertainty[metric] = {
-            "ci_low": m - sd,
-            "ci_high": m + sd,
+            "ci_low": _clamp_unit(m - sd, metric),
+            "ci_high": _clamp_unit(m + sd, metric),
             "method": "multi_seed_std",
             "n_seeds": len(seeds),
             "note": note,

@@ -12,6 +12,21 @@ the resulting sequence to a two-layer LSTM whose last state is classified by two
 into the 11 RML2016.10a modulation classes. The design is small (~a few hundred k params),
 which is why it seeds the AMC board rather than a heavy backbone.
 
+From-scratch conditioning (chance-collapse fix, ``input_norm``, default on). The paper does not
+specify input scaling, and -- exactly like CLDNN before its ``52543c8`` fix -- the naive choice
+makes this architecture *fragile* on RML2016.10a: the IQ is ~unit-power, so raw per-sample values
+are tiny (~1e-2 RMS), and MCLDNN has neither BatchNorm nor any input scaling before its conv
+branches and two-layer LSTM. The J1 multi-seed campaign exposed the latent fragility the original
+single-seed run had silently dodged: under the Phase-0 deterministic-cuDNN recipe, seeds 42 and 43
+collapsed to a constant-class (chance, 1/11 = 0.0909) output while seed 44 learned normally (jobs
+87697-87699) -- the same some-init-draws collapse root-caused for CLDNN. The cure is the same
+**per-sample unit-variance input normalization** (:func:`_unit_variance_normalize`, the transform
+that fixed both ResNet's and CLDNN's identical 1/11 collapse), applied ONCE to the ``(2, L)``
+window before the three branches split, so the combined-I/Q, separate-I and separate-Q views all
+see the same healthily-scaled signal and the I/Q *relative* geometry (which carries modulation
+information) is preserved. Gated by ``input_norm`` (default ``True``); ``input_norm=False``
+reproduces the fragile raw-IQ configuration for ablation.
+
 Contract bridge (read ``rfbench/core/model.py``). ``forward`` / ``embed`` receive the
 COLLATED batch dict that :func:`rfbench.core.evaluate.evaluate` builds -- ``x["iq"]`` is a
 *list* of per-sample IQ payloads, one per sample. :class:`~rfbench.tasks.amc.dataset.AmcDataset`
@@ -55,6 +70,31 @@ DEFAULT_LSTM_HIDDEN = 128
 DEFAULT_HEAD_DROPOUT = 0.5
 
 
+def _unit_variance_normalize(x: Tensor, *, eps: float = 1e-8) -> Tensor:
+    """Standardise each ``(2, L)`` IQ window to zero mean and unit variance (per-sample).
+
+    RML2016.10a is distributed with each example normalised to ~unit average POWER, so the raw
+    per-sample IQ is tiny (RMS on the order of 1e-2), and MCLDNN has neither BatchNorm nor any
+    input scaling. That near-zero-scale signal starts the two-layer LSTM in a dead-gate regime
+    from which -- for some weight-init draws -- the network settles into a constant-class (chance,
+    1/11) output it never leaves (observed on seeds 42/43 of the J1 multi-seed campaign, healthy
+    on seed 44). Standardising each window to unit variance -- the SAME transform
+    ``resnet_amc._unit_variance_normalize`` and ``cldnn._unit_variance_normalize`` apply, which
+    cured the identical 1/11 collapse in both -- restores a healthy activation scale. The
+    statistics are taken over BOTH channels and the whole time axis of each sample independently
+    (dims ``(1, 2)``), so the absolute capture scale (which carries no modulation information) is
+    removed while the I/Q relative geometry that does is preserved -- load-bearing here, since the
+    separate-I and separate-Q branches must keep their relative amplitudes.
+
+    Duplicated here (rather than imported from a sibling baseline) so this module stays standalone
+    and never depends on a sibling baseline's import side effects -- the same rationale as
+    :func:`_iq_to_tensor`.
+    """
+    mean = x.mean(dim=(1, 2), keepdim=True)
+    std = x.std(dim=(1, 2), keepdim=True, unbiased=False)
+    return cast("Tensor", (x - mean) / (std + eps))
+
+
 class MCLDNNNet(nn.Module):
     """The MCLDNN spatiotemporal multi-channel network (Xu et al. 2020).
 
@@ -79,8 +119,15 @@ class MCLDNNNet(nn.Module):
         fuse_filters: int = DEFAULT_FUSE_FILTERS,
         lstm_hidden: int = DEFAULT_LSTM_HIDDEN,
         head_dropout: float = DEFAULT_HEAD_DROPOUT,
+        input_norm: bool = True,
     ) -> None:
-        """Build the three-branch conv stack, the fusion conv, the LSTM and the dense head."""
+        """Build the three-branch conv stack, the fusion conv, the LSTM and the dense head.
+
+        ``input_norm`` (default ``True``, the chance-collapse fix mirrored from CLDNN's
+        ``52543c8``) per-sample unit-variance normalises the IQ window ONCE before the three
+        branches split (see :func:`_unit_variance_normalize`); set it ``False`` to reproduce the
+        earlier fragile (raw-IQ) behaviour for ablation.
+        """
         super().__init__()
         if num_classes < 1:
             raise ValueError(f"num_classes must be >= 1, got {num_classes}")
@@ -92,6 +139,7 @@ class MCLDNNNet(nn.Module):
         self.fuse_filters = fuse_filters
         self.lstm_hidden = lstm_hidden
         self.head_dropout = head_dropout
+        self.input_norm = input_norm
 
         # padding="same" (stride 1) keeps the TIME axis length identical across all branches even
         # for the EVEN kernel width 8 -- a symmetric integer pad shrinks an even-kernel conv by 1,
@@ -158,7 +206,16 @@ class MCLDNNNet(nn.Module):
         while widening the feature axis to ``fuse_filters`` (``G``). The fusion conv's VALID time
         padding shrinks the length ``L -> L-4`` (128 -> 124), so the fused ``(B, G, 1, L-4)`` map is
         squeezed and transposed into the ``(B, L-4, G)`` layout ``nn.LSTM(batch_first=True)`` wants.
+
+        When ``input_norm`` is set the window is first per-sample unit-variance normalised, so all
+        THREE branches (combined I/Q, separate I, separate Q) see the same healthily-scaled signal
+        rather than the raw ~1e-2-RMS IQ that stalls the LSTM at chance for some init draws
+        (:func:`_unit_variance_normalize`). Normalising once, before the split, keeps the I and Q
+        rows on their common per-window scale -- their relative amplitude carries modulation
+        information the separate branches must not lose.
         """
+        if self.input_norm:
+            x = _unit_variance_normalize(x)
         # Combined I/Q branch -> (B, F, 2, L): padding="same" keeps both the 2-row and time axes.
         iq_img = x.unsqueeze(1)  # (B, 1, 2, L)
         feat_iq = self.conv_iq(iq_img)  # (B, F, 2, L)
@@ -240,8 +297,15 @@ class MCLDNN(Model):
         num_classes: int = DEFAULT_NUM_CLASSES,
         window: int = DEFAULT_WINDOW,
         device: str | None = None,
+        input_norm: bool = True,
     ) -> None:
-        """Build the network and move it to ``device`` (auto: CUDA when available, else CPU)."""
+        """Build the network and move it to ``device`` (auto: CUDA when available, else CPU).
+
+        ``input_norm`` (default ``True``) is the chance-collapse fix mirrored from CLDNN, passed
+        through to :class:`MCLDNNNet`; the no-arg registry path ``MODELS.get("mcldnn")()``
+        therefore builds the fixed model. Pass ``False`` to reproduce the earlier fragile
+        (raw-IQ) configuration for ablation.
+        """
         if not name:
             raise ValueError("MCLDNN needs a non-empty name")
         self.name = name
@@ -251,7 +315,7 @@ class MCLDNN(Model):
         else:
             resolved = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(resolved)
-        self.net = MCLDNNNet(num_classes, window=window).to(self.device)
+        self.net = MCLDNNNet(num_classes, window=window, input_norm=input_norm).to(self.device)
 
     def forward(self, x: Batch) -> Tensor:
         """Return ``(B, num_classes)`` class logits for the collated AMC batch ``x``."""

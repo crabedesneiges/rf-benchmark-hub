@@ -80,3 +80,63 @@ Any change here that alters a metric or split is a **breaking change** → bump 
   `canonical_split_id`; changing either is a breaking change → bump the task `version`.
 - Full protocol conditions are recorded in `result.json.eval.conditions`.
 - The primary metric ranks the board; regimes are never mixed in one column.
+
+## Statistical rigor & uncertainty (normative)
+
+### Confidence intervals
+- **Default**: percentile bootstrap over the accumulated per-sample predictions
+  (`n_resamples=1000`, `confidence=0.95`), whenever raw predictions are available — i.e. any run
+  produced going forward via `evaluate()`.
+- **Backfill for already-committed rows** whose raw predictions no longer exist: a **Wilson
+  (binomial) interval** on `(accuracy, n_samples)` is acceptable, but **only** for metrics that are
+  true accuracy proportions — `accuracy_overall`, `rank1_accuracy`. It is **not** valid for `mAP` /
+  `pd@pfa=0.1`, which are not simple binomial proportions. A backfilled row MUST carry
+  `method: "wilson_backfill"` plus a `note` stating explicitly that it is an approximation derived
+  from `n` alone, not a resampling of the original predictions.
+
+### Few-shot: episodes, not single draws
+- `k ∈ {1, 10, 100}`. Each `k` is measured over **N≥10 episodes** (distinct support-set draws), with
+  episode seeds derived sequentially from the base seed 42 (e.g. seeds `42..51` for 10 episodes).
+- The reported number is the **mean across episodes** with its interval, tagged
+  `method: "multi_seed_std"`, `n_episodes: N`. A single support draw is **no longer** an acceptable
+  few-shot board measurement.
+
+### Normative probe for linear_probe / few_shot
+- The default head is **multinomial logistic regression** (scikit-learn, L2 penalty), deterministic
+  given a deterministic input embedding. Nearest-centroid remains a stdlib fallback for
+  tests/implementations only — **never** used to produce a real board number.
+
+### Wideband detection: mAP definition
+- **`mAP`** (primary) = COCO-style mAP, averaged over IoU thresholds `0.5:0.05:0.95`.
+- **`mAP@0.5`** (IoU=0.5 only) is reported as a secondary/curve value, kept for comparability with
+  older literature that only reports single-IoU AP.
+
+### Spectrum sensing: threshold calibration
+- The decision threshold for `pd@pfa=0.1` MUST be calibrated on the **val** split (pick the
+  threshold achieving `pfa=0.1` on val), then that **same, frozen** threshold is applied as-is to
+  the **test** split to measure `pd`. Calibrating the threshold directly on test is contamination
+  and is rejected in review.
+
+### Per-task tolerance for a Tier-2 ("verified") re-run
+
+| Task | Metric | Tolerance |
+|---|---|---|
+| `amc` | `accuracy_overall` | ±0.005 absolute |
+| `sei` | `rank1_accuracy` | ±0.01 absolute |
+| `wideband_detection` | `mAP` | ±0.02 absolute |
+| `spectrum_sensing` | `pd@pfa=0.1` | ±0.02 absolute |
+| `interference_id` | `accuracy_overall` | ±0.005 absolute |
+| `protocol_tech_id` | `accuracy_overall` | ±0.005 absolute |
+
+### Test/contamination integrity
+- **Split checksums are the sole source of truth.** A split whose underlying samples change
+  without bumping `canonical_split_id` + `checksum` is rejected in review.
+- A foundation model's **pretraining corpus must be disclosed** (`pretraining` field, schema
+  1.2.0, added in a sibling PR) and checked for overlap with the eval splits before a row can
+  exceed `self_reported`.
+- **No hyperparameter or threshold tuning on the test split, ever** — `val` only.
+
+### Regression metric (`snr_estimation`, upcoming)
+- **Primary**: RMSE (dB). **Secondary**: MAE. RMSE is chosen as primary because it is the standard
+  for this class of benchmark and is more sensitive to outliers — relevant for catching estimation
+  failures at low SNR.

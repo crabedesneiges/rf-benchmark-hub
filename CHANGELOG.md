@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — FM in-repo reproduction PAUSED; `iqfm-base` / `wireless-jepa` documented as homemade
+
+Decision (2026-07): pause the in-repo *reproduction* of IQFM and WirelessJEPA. Both papers publish
+**no weights** and pre-train on **proprietary OTA testbeds we do not have** (IQFM: OTA MIMO;
+WirelessJEPA: multi-antenna MIMO testbed, 7 waveforms / 225 AoA / USRP X300), so an in-repo retrain
+can only ever be a **homemade, in-distribution** model — not the paper's — which makes chasing the
+papers' OOD numbers moot. The wrappers + shared `shufflenet1d.py` backbone are **kept** for future
+use; further retraining is on hold.
+
+- **Web-verified the WirelessJEPA architecture** (arXiv:2601.20190v1) and found the prior in-repo
+  description was wrong: it is **multi-antenna** (2D antenna-time grid `2×256×256`, 4 antennas), a
+  ShuffleNetV2-x0.5 **2-D** encoder, **spatio-temporal** mask geometries, a **depthwise-separable
+  conv predictor**, and an **L2 loss over masked-region latents**; RML2016.10a is only a downstream
+  **OOD eval** (74.78% @ 500-shot LP). Our `wireless-jepa` wrapper is a **single-antenna 1-D**
+  JEPA-style model (pooled-latent target + homemade VICReg anti-collapse) — inspired by, not a
+  reproduction of, the paper. Docstring updated to say so prominently; **no `wireless-jepa` board
+  row committed** (the first cluster run collapsed to chance 9.09% — pooled-latent JEPA collapse —
+  and the run is now paused, so the collapsed artifact was removed, not committed).
+- **`iqfm-base`**: the committed board row (`leaderboard/results/amc/iqfm-base-linear_probe.json`,
+  48.87% linear-probe, self_reported, PR-ready) is kept as an honest **homemade, in-distribution**
+  number and is clearly separate from the paper's OOD **38.1%** (`from_paper` row). Docstring notes
+  the pause. No further retraining.
+- **Paper numbers stay in the bibliography, not as fabricated board rows.** Verified exact figures
+  for the record (both papers, 500-shot linear-probe OOD unless noted): WirelessJEPA — RML2016.10a
+  74.78% (kNN 68.01), POWDER fingerprinting 90.45% (kNN 87.82), GNSS jamming 63.15% (kNN 48.85),
+  WiFi protocol 94.26% (kNN 84.89), 5G NR interference 76.27% (kNN 64.52), in-dist testbed mod
+  99.98% / AoA 99.87% @ 100-shot; IQFM — RML2016.10a 38.1% @ 50-shot LP (also 50.0% @ 500-shot
+  LoRA), POWDER fingerprinting 96.05% @ 500-shot LoRA, DeepBeam beam-prediction 94.1% @ 500-shot
+  LoRA, testbed AoA 65.45% @ 1-shot. Only figures whose dataset matches a **committed split** get a
+  board row (`amc` ×2, `interference_id` GNSS); the rest (POWDER, WiFi, DeepBeam, 5G-NR) have no
+  committed dataset/split and remain bibliography-only — same no-dataset reason the retrain is
+  paused.
+
 ### Added — literature-reference verification tiers (`from_paper` / `from_paper_uncertain`)
 
 `result.schema.json` bumped **1.0.0 → 1.1.0** (additive, non-breaking; old rows and writers keep

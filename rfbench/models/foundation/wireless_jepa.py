@@ -1,5 +1,31 @@
 """WirelessJEPA: a raw-IQ JEPA foundation model on the board (registered ``"wireless-jepa"``).
 
+STATUS (2026-07): reproduction **PAUSED**; this wrapper is a **HOMEMADE** JEPA-style model, NOT a
+faithful reproduction of WirelessJEPA, and **no board row is committed** for it. Reasons, verified
+against the paper (arXiv:2601.20190v1, Chu/Mashaal/Abou-Zeid):
+
+* The paper releases **no code and no weights**, and pre-trains on the authors' **proprietary
+  multi-antenna MIMO testbed** (7 waveforms, 225 AoA classes, USRP X300) — a dataset we do NOT have
+  and which is not distributed. Without it, a faithful reproduction is impossible (the same reason
+  we paused IQFM's in-repo retrain).
+* The real WirelessJEPA is **multi-antenna**: a 2D antenna-time grid ``x ∈ ℝ^(2×256×256)`` (4
+  antennas, upsampled), a ShuffleNetV2-x0.5 **2-D** encoder, **spatio-temporal** mask geometries,
+  a **depthwise-separable conv predictor**, and an **L2 loss over the masked-region latents**.
+  RML2016.10a is only a downstream **OOD eval** (74.78% @ 500-shot linear probe), not the
+  pre-training data.
+* What THIS module implements is a **single-antenna 1-D** JEPA-style model (reusing IQFM's 1-D
+  ShuffleNetV2-x0.5 backbone) with a pooled-latent target + a homemade VICReg anti-collapse term
+  (`scripts/pretrain/wireless_jepa.py`), pre-trained in-distribution on RadioML-train. It is
+  **inspired by** WirelessJEPA's recipe but diverges on input representation, predictor, target,
+  and pre-training data. Any number it produces is **ours/homemade**, never comparable to the
+  paper's 74.78%. The paper's figure lives ONLY as a hand-curated `from_paper` row
+  (`leaderboard/results/amc/wirelessjepa_paper.json`), cited but not reproduced.
+
+The wrapper/backbone are kept for possible future use; the description below documents the JEPA
+recipe as originally built (before the pause).
+
+---
+
 `WirelessJEPA <https://arxiv.org/abs/2601.20190>`_ (arXiv:2601.20190, 2026) is a raw-IQ RF
 foundation model built on the **same ShuffleNetV2-x0.5 backbone as IQFM** ("matched to IQFM"),
 but pre-trained with **JEPA** — masked-latent prediction with an **EMA teacher** (momentum

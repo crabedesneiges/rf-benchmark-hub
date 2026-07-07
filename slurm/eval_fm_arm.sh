@@ -93,7 +93,9 @@ print("[eval-fm] evaluating on test split (full SNR range)...")
 res = evaluate(adapted, task, "test", adapted.regime, dataset=ds.name, out_path=out)
 vals = res["metrics"]["values"]
 print(f"RESULT-FM acc_overall={vals.get('accuracy_overall')} macro_f1={vals.get('macro_f1')} -> {out}")
-print("[eval-fm] REMINDER: score is PROVISIONAL — IQ->STFT preprocessing is UNVERIFIED.")
+if model_name == "lwm-spectro":
+    # Only lwm-spectro reconstructs an UNVERIFIED IQ->STFT front-end; iqfm/wireless-jepa are raw-IQ.
+    print("[eval-fm] REMINDER: score is PROVISIONAL — IQ->STFT preprocessing is UNVERIFIED.")
 PY
 rc=$?
 echo "=================================================="

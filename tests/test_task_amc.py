@@ -332,3 +332,31 @@ def test_as_class_index_handles_numpy_arrays() -> None:
     assert _as_class_index(np.array(3)) == 3  # 0-D array -> already a class id
     assert _as_class_index([0.5, 0.1, 0.9]) == 2  # python list path unchanged
     assert _as_class_index(7) == 7  # scalar class id unchanged
+
+
+def test_dataset_resolves_committed_split_checksum() -> None:
+    """AmcDataset self-resolves the REAL split_checksum from the committed manifest.
+
+    The frozen-embedding FM eval path (``eval_fm_arm.sh``) builds ``AmcDataset(name)`` and never
+    calls ``prepare()`` (the split is already committed), so the dataset must read the committed
+    manifest's ``split_checksum`` itself -- otherwise ``evaluate`` emits the all-zero placeholder
+    and ``submit --check`` rejects the row. Falls back to the placeholder when no manifest exists.
+    """
+    from rfbench.tasks.amc.dataset import _PLACEHOLDER_CHECKSUM
+
+    ds = AmcDataset("radioml_2016_10a")  # a committed manifest exists for this split
+    root = Path(__file__).resolve().parent.parent
+    manifest = json.loads(
+        (
+            root / "leaderboard" / "splits" / "radioml_2016_10a"
+            / f"{ds.canonical_split_id}.manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert ds.checksum == manifest["split_checksum"]  # real, not the placeholder
+    assert ds.checksum != _PLACEHOLDER_CHECKSUM
+
+    # No committed manifest (2018) -> honest placeholder fallback, never a fabricated checksum.
+    assert AmcDataset("radioml_2018_01a").checksum == _PLACEHOLDER_CHECKSUM
+
+    # An explicit checksum= still wins over the manifest (the synthetic/test path).
+    assert AmcDataset("radioml_2016_10a", checksum="sha256:beef").checksum == "sha256:beef"

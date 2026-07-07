@@ -85,7 +85,15 @@ class AmcDataset(Dataset):
             )
         self.name = name
         self.canonical_split_id = CANONICAL_SPLIT_IDS[name]
-        self.checksum = checksum if checksum is not None else _PLACEHOLDER_CHECKSUM
+        if checksum is not None:
+            self.checksum = checksum
+        else:
+            # Disk-backed path: resolve the REAL split checksum from the committed manifest so
+            # ``evaluate`` emits a PR-ready row (the frozen-embedding FM eval path never calls
+            # ``prepare()``, which is what otherwise fills it in). Falls back to the placeholder
+            # when no manifest is committed (e.g. the synthetic dep-free path).
+            resolved = _resolve_committed_checksum(name, self.canonical_split_id)
+            self.checksum = resolved if resolved is not None else _PLACEHOLDER_CHECKSUM
         self._samples = None if samples is None else list(samples)
 
     def download(self, cache: Path | None = None) -> None:
@@ -176,6 +184,29 @@ def _find_split_index(name: str, split_id: str) -> Path | None:
         candidate = parent / "leaderboard" / "splits" / name / f"{split_id}.idx.json"
         if candidate.is_file():
             return candidate
+    return None
+
+
+def _resolve_committed_checksum(name: str, split_id: str) -> str | None:
+    """Return the committed split's ``split_checksum`` from its manifest, or ``None`` if absent.
+
+    Lets a disk-backed :class:`AmcDataset` report the real split checksum (so ``evaluate`` writes a
+    PR-ready ``result.json``) without re-running ``prepare``. Returns ``None`` when no manifest is
+    committed for ``split_id`` (e.g. the synthetic dep-free path), so the caller falls back to the
+    placeholder. Never raises: a missing/malformed manifest degrades to ``None``.
+    """
+    import json
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "leaderboard" / "splits" / name / f"{split_id}.manifest.json"
+        if candidate.is_file():
+            try:
+                doc = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            checksum = doc.get("split_checksum")
+            return checksum if isinstance(checksum, str) and checksum else None
     return None
 
 

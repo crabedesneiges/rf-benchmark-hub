@@ -720,6 +720,18 @@ def _regime_label(row_or_name: dict[str, Any] | str) -> str:
     return label
 
 
+def _k_shot(row: dict[str, Any]) -> int | None:
+    """Return the declared ``k_shot`` for a ``few_shot`` row, else ``None``.
+
+    Two ``few_shot`` results with different ``k`` are NOT comparable (k=50 vs k=500 probe
+    very different amounts of labelled data), so they must never share a group/table.
+    """
+    if _regime_name(row) != "few_shot":
+        return None
+    k = row["regime"].get("k_shot")
+    return int(k) if k is not None else None
+
+
 def _track_name(row: dict[str, Any]) -> str:
     """Return the row's evaluation track, defaulting to ``all``.
 
@@ -1437,10 +1449,13 @@ def render_task_page(
 ) -> str:
     """Render the full HTML page for one task.
 
-    Rows are partitioned into ``(regime, track)`` groups; each group renders one table
-    (a column per discovered scalar metric) and one plot per discovered curve metric. A
-    group is a single (regime, track), so no table or plot ever mixes regimes nor tracks.
-    Groups are ordered by regime (locked D5 order) then track (``all`` first).
+    Rows are partitioned into ``(regime, k_shot, track)`` groups; each group renders one
+    table (a column per discovered scalar metric) and one plot per discovered curve metric.
+    A group is a single (regime, k_shot, track) -- for ``few_shot`` rows the shot count is
+    part of the key too, since k=50 and k=500 are not a comparable regime (D5 extension) --
+    so no table or plot ever mixes regimes, shot counts, nor tracks.
+    Groups are ordered by regime (locked D5 order), then k_shot ascending, then track
+    (``all`` first).
     """
     if not rows:
         raise ValueError(f"render_task_page called with no rows for task '{task_name}'")
@@ -1453,16 +1468,21 @@ def render_task_page(
     dataset_card = _render_dataset_card(entry.dataset) if entry is not None else ""
     metrics_block = _render_metrics_block(entry) if entry is not None else ""
 
-    # (regime, track) -> rows, preserving input order within each leaf group.
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    # (regime, k_shot, track) -> rows, preserving input order within each leaf group.
+    groups: dict[tuple[str, int | None, str], list[dict[str, Any]]] = {}
     for row in rows:
-        groups.setdefault((_regime_name(row), _track_name(row)), []).append(row)
+        groups.setdefault((_regime_name(row), _k_shot(row), _track_name(row)), []).append(row)
 
-    ordered_keys = sorted(groups, key=lambda rt: (_regime_sort_key(rt[0]), _track_sort_key(rt[1])))
+    def _group_sort_key(rkt: tuple[str, int | None, str]) -> tuple[Any, int, Any]:
+        regime, k_shot, track = rkt
+        shot_rank = k_shot if k_shot is not None else -1
+        return (_regime_sort_key(regime), shot_rank, _track_sort_key(track))
+
+    ordered_keys = sorted(groups, key=_group_sort_key)
     sections = [
         _render_group(regime, track, group_rows, _primary_key(group_rows[0]))
-        for (regime, track) in ordered_keys
-        for group_rows in (groups[(regime, track)],)
+        for (regime, _k, track) in ordered_keys
+        for group_rows in (groups[(regime, _k, track)],)
     ]
 
     nav_ids = nav_task_ids if nav_task_ids is not None else [task_name]

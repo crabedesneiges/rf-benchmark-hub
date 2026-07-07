@@ -238,17 +238,22 @@ Primary sources & key facts:
   Only the `amc` row above is board-comparable; every other IQFM task figure is on a private OTA
   testbed or a dataset (POWDER) the board does not use, so none of them get a `from_paper*` board
   row — they stay a bibliography reference only.
-- **WirelessJEPA** — arXiv:2601.20190 (2026). No weights. ShuffleNetV2-x0.5 (matched to IQFM), JEPA
-  masked latent prediction, EMA teacher 0.996→1.0, no augmentation. Same OTA testbed as IQFM.
-  **Status (2026-07): board wrapper `wireless-jepa` IMPLEMENTED**
-  (`rfbench/models/foundation/wireless_jepa.py`), reusing IQFM's shared 1-D ShuffleNetV2-x0.5
-  backbone `shufflenet1d.py` (the "matched to IQFM" contract — same `build_shufflenet1d`, 335,096
-  params). Weights unpublished → we (re-)pre-train the JEPA recipe IN-REPO (masked-latent + EMA
-  teacher 0.996→1.0, no augmentation) on RadioML-train delabelised
-  (`scripts/pretrain/wireless_jepa.py`, `slurm/pretrain_wireless_jepa_arm.sh`), which is
-  **in-distribution, NOT the paper's OOD OTA setting** — any resulting score is ours and must never
-  be presented as 74.78%. No `result.json` committed for the in-repo retrain until a real cluster
-  run lands.
+- **WirelessJEPA** — Chu, Mashaal, Abou-Zeid, arXiv:2601.20190v1 (2026). No weights, no code.
+  **Multi-antenna** foundation model (verified against the paper text): inputs are a **2D
+  antenna-time grid** `x ∈ ℝ^(2×256×256)` (C=2 I/Q, H=4 antennas upsampled by nearest-neighbour,
+  W=256 time), a ShuffleNetV2-x0.5 **2-D** encoder, **structured spatio-temporal masking**
+  (antenna / time 256×32 / multi-block 64×32 — the last performs best), a **depthwise-separable
+  conv predictor** (3 layers, BN+ReLU), an **L2 loss over the masked-region latents**, and an EMA
+  teacher (τ 0.996→1.0), **no augmentation**. Pre-trained on the authors' **proprietary
+  multi-antenna MIMO testbed** (7 waveforms, 225 AoA classes, USRP X300 @ 1/10 MSps) — NOT
+  distributed. RML2016.10a is only a downstream **OOD eval**, not the pre-training data.
+  **Status (2026-07): reproduction PAUSED.** The `wireless-jepa` wrapper
+  (`rfbench/models/foundation/wireless_jepa.py`) is a **HOMEMADE, single-antenna 1-D** JEPA-style
+  model (reuses IQFM's 1-D `shufflenet1d.py`, pooled-latent target + a homemade VICReg
+  anti-collapse term) — **inspired by, not a reproduction of** the paper's multi-antenna 2D model,
+  and trained in-distribution on RadioML-train. No `wireless-jepa` board row is committed (the first
+  cluster run collapsed to chance; the retrain is paused because we lack the multi-antenna testbed
+  dataset). The paper's 74.78% lives ONLY as a `from_paper` row and is never presented as ours.
   **Every task the paper itself evaluates, exact reported figures** (arXiv:2601.20190; see
   `docs/DOWNSTREAM_TASKS.md` for the canonical-task mapping method):
 
@@ -256,10 +261,11 @@ Primary sources & key facts:
   |---|---|---|---|---|
   | `amc` | OOD RadioML 2016.10a, 11 mods, full SNR −20…+18 dB | linear probe, 500 samples/class | **74.78%** | ✅ `leaderboard/results/amc/wirelessjepa_paper.json`, `from_paper` — the single most board-comparable public FM number, and it **beats our supervised MCLDNN (61.71%)** |
   | `amc` (in-domain, not board-comparable) | OTA testbed (own data) | linear probe, 1 / 100 samples/class | not tabulated here `(?)` | ❌ own private testbed |
-  | `interference_id` | GNSS Jamming 6-class (Zenodo-synthesized) | linear probe, 500 samples/class | **63.1%** | ⚠️ `leaderboard/results/interference_id/wirelessjepa_paper.json`, `from_paper_uncertain` — same **task description** (raw-IQ, 6-class GNSS jamming) and class count as our `interf_gnss6` (Swinney & Woods 2021, Zenodo 4629685), but we could **not** confirm the paper's Zenodo source is the same release, nor any split/index overlap |
-  | `protocol_tech_id` | OTA WiFi 802.11 ax/b/n/g (4 protocols), (2,1024) IQ | linear probe, 500 samples/class | **94.26%** | ❌ **no board row yet** — `rfbench/tasks/protocol_tech_id/` and the `tprime` baseline exist, but no canonical split has been generated/committed under `leaderboard/splits/` for this task, so there is no real `checksum` to cite honestly (same discipline as the SEI fabrication fix, `a689e86`). Add a row once a `tprime-wifi4` split lands |
-  | `sei` (POWDER, not board's WiSig) | POWDER RF fingerprinting, 4 devices | linear probe, 500 samples/class | **90.5%** (paper cites IQFM's own POWDER number at 83.4% for comparison) | ❌ POWDER ≠ our WiSig/ORACLE/LoRa-RFFI dataset (see §A.3) |
-  | `direction_finding` (out of current scope) | AoA, OTA testbed, antenna masking | linear probe, 1 / 100 samples/class | **40.39%** @ 1-shot | ❌ no public AoA dataset in scope yet |
+  | `interference_id` | GNSS Jamming 6-class (Zenodo-synthesized) | linear probe, 500 samples/class | **63.15%** (k-NN 48.85%) | ⚠️ `leaderboard/results/interference_id/wirelessjepa_paper.json`, `from_paper_uncertain` — same **task description** (raw-IQ, 6-class GNSS jamming) and class count as our `interf_gnss6` (Swinney & Woods 2021, Zenodo 4629685), but we could **not** confirm the paper's Zenodo source is the same release, nor any split/index overlap |
+  | `protocol_tech_id` | OTA WiFi 802.11 ax/b/n/g (4 protocols), (2,1024) IQ | linear probe, 500 samples/class | **94.26%** (k-NN 84.89%) | ❌ **no board row yet** — `rfbench/tasks/protocol_tech_id/` and the `tprime` baseline exist, but no canonical split has been generated/committed under `leaderboard/splits/` for this task, so there is no real `checksum` to cite honestly (same discipline as the SEI fabrication fix, `a689e86`). Add a row once a `tprime-wifi4` split lands |
+  | `sei` (POWDER, not board's WiSig) | POWDER RF fingerprinting | linear probe, 500 samples/class | **90.45%** (k-NN 87.82%) | ❌ POWDER ≠ our WiSig/ORACLE/LoRa-RFFI dataset (see §A.3) |
+  | `interference_id` (5G NR, different dataset) | 5G NR interference | linear probe, 500 samples/class | **76.27%** (k-NN 64.52%) | ❌ different dataset from our GNSS `interf_gnss6`; no committed 5G-NR interference split |
+  | `direction_finding` (out of current scope) | AoA, OTA testbed, antenna masking | linear probe, 1 / 100 samples/class | **40.39%** @ 1-shot, **99.87%** @ 100-shot (in-domain) | ❌ private OTA testbed, no public AoA dataset in scope yet |
 
   Two rows are board-comparable (`amc` confidently, `interference_id` only on dataset description,
   not confirmed split) and land as `result.json` rows tagged `from_paper` / `from_paper_uncertain`
@@ -310,6 +316,38 @@ SC2 targets protocol research, and the audio corpora (WSJ0-2mix, WHAM!, MUSDB18)
   interferer, BER metric), real OTA recordings; adjacent to `interference_id` but a different task
   (rejection, not classification, not blind separation). **RF Transformer for signal separation**
   (arXiv:2603.09201, 2026) — screen as a potential separation baseline `(?)` (not yet read).
+
+### A.7 Baseline (non-FM) figures by downstream task — every canonical task, implemented or not
+
+Consolidation only (no new external research): the **specialized, non-FM baseline** number already
+on record in this document or in `docs/DOWNSTREAM_TASKS.md`, for **every** canonical task in the
+taxonomy — including the six CSI/mmWave tasks the hub has not implemented at all. Where no
+specialized baseline figure has been mined yet, the row says so explicitly rather than guessing.
+"Board?" = does `rfbench` currently implement this task (a `leaderboard/results/<task>/*.json` row
+is possible at all).
+
+| Canonical task | Board? | Best specialized (non-FM) baseline | Dataset | Source |
+|---|---|---|---|---|
+| `amc` | ✅ implemented | **TLDNN 62.83%** (SOTA, +SS 63.35%); board's own MCLDNN 61.71% / CLDNN 58.05% / ResNet 56.61% | RadioML 2016.10a, 11-cls, full SNR | §A.1 |
+| `sei` | ✅ implemented | WiSig CNN ~53–99% (tx-count dependent); ORACLE CNN 98.60% (87.13% cross-location); LoRa RFFI spectrogram-CNN 96.40% (83.53% w/o CFO comp) | WiSig / ORACLE / LoRa RFFI | §A.3 |
+| `wideband_detection` | ✅ implemented | RadDet: RT-DETR-L 95.31 mAP50 / 80.96 mAP50:95; WBSig53 (blocked): DETR-B4-Nano 86.98 mAP | RadDet (real) / WBSig53 (blocked) | §A.4 |
+| `spectrum_sensing` | ✅ track defined, no model yet | DeepSense lightweight CNN — Precision 98% / Recall 97% (exact `pd@pfa=0.1` not recovered from a primary source) | DeepSense (OTA 802.11 a/g + LTE-M) | §A.4 |
+| `interference_id` | ✅ implemented | No external specialized-baseline paper found for GNSS-jamming 6-class; board's own `interf_cnn` scores **99.87%** (`self_reported`, in-repo only, not a literature citation) | `interf_gnss6` (Swinney & Woods 2021, Zenodo 4629685) | `leaderboard/results/interference_id/interf_cnn.json` |
+| `protocol_tech_id` | ✅ implemented (no split committed yet) | No specialized (T-PRIME or other) baseline figure recorded in this bibliography — only the WirelessJEPA FM figure (94.26%, §A.5) is on file | 802.11 ax/b/n/g OTA (WirelessJEPA's own set) | §A.5 |
+| `snr_mobility_recognition` | ❌ absent (new canonical id) | No independent baseline — the only figure on file is LWM-Spectro's own reproduced task score (93.9%, §B.5), not a baseline-vs-FM comparison | DeepMIMO Phoenix spectrograms | §B.5 |
+| `beam_prediction` | ❌ absent, CSI/mmWave (out of scope) | **LatentWave's own supervised comparison: 88.9%** mean per-class acc vs its FM 63.1% (DeepMIMO beam prediction) | DeepMIMO | `docs/DOWNSTREAM_TASKS.md` P1/beam_prediction |
+| `direction_finding` | ❌ absent, private OTA testbeds only | No specialized baseline figure found — both FM evals (IQFM 65.45/92.4%, WirelessJEPA 40.39%) are on private testbeds with no baseline comparison stated | private OTA MIMO testbeds | `docs/DOWNSTREAM_TASKS.md` P1/direction_finding |
+| `los_nlos` | ❌ absent, CSI (out of scope) | **LatentWave's own supervised comparison: 95.9%** mean per-class acc vs its FM 93.4% (DeepMIMO) | DeepMIMO | `docs/DOWNSTREAM_TASKS.md` P1/los_nlos |
+| `positioning` | ❌ absent, CSI (out of scope) | **LatentWave's own supervised comparison: 0.71 m** mean positioning error vs its FM 2.32–2.54 m (regression, lower is better) | 5G NR CSI, outdoor DeepMIMO | `docs/DOWNSTREAM_TASKS.md` P1/positioning |
+| `har` | ❌ absent, CSI (out of scope) | No independent baseline comparison stated — WavesFM (95.67%) and 6G-MSM (93.9%) report only their own FM numbers | WiFi CSI HAR (6-class) | `docs/DOWNSTREAM_TASKS.md` P1/har |
+| `channel_estimation` | ❌ absent, CSI (out of scope), regression metric needed | No independent baseline comparison stated — WavesFM reports only its own FM number (MSE 0.329) | simulated MIMO-OFDM uplink | `docs/DOWNSTREAM_TASKS.md` P2/channel_estimation |
+| `source_separation` | ❌ candidate track, dataset unreleased | **Conv-TasNet −12.34 dB / DPRNN −12.51 dB** co-channel 2-src (also CNN-LSTM −17.04, Frobenius-NMF −16.19, FastICA −28.04) | RFSS (unreleased as of 2026-07-03) | §A.6 |
+
+Six rows (`direction_finding`, `har`, `channel_estimation`, `protocol_tech_id`, `snr_mobility_recognition`,
+and half of `beam_prediction`/`los_nlos`/`positioning` where only the FM's own number exists) have
+**no independent non-FM baseline on file** — that's an honest gap in the mined literature, not an
+oversight; closing it would need new targeted research per task (out of scope for this pass, see
+`docs/DOWNSTREAM_TASKS.md` for the FM-only numbers already on record for each).
 
 ---
 

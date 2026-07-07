@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/rf-benchmark-hub/rf-benchmark-hub/main/schemas/submission.schema.json",
+  "$id": "https://raw.githubusercontent.com/crabedesneiges/rf-benchmark-hub/main/schemas/submission.schema.json",
   "title": "RF-Benchmark-Hub reproducibility manifest",
   "description": "Reproducibility manifest accompanying a result.json in a Tier-2 (official) leaderboard PR. Declares everything the maintainer needs to re-run the evaluation and flip verification.status to 'verified'. Without these fields a result can only stay 'self_reported' (SUBMISSION.md). Minimal required set = code_commit + command + (weights_url OR docker_image) + hardware + expected_metrics + tolerance.",
   "type": "object",

@@ -230,15 +230,21 @@ def match_score(prediction: object) -> float:
         return float(prediction)
     if isinstance(prediction, (int, float)):
         return float(prediction)
-    item = getattr(prediction, "item", None)
-    if callable(item):  # 0-d tensor / numpy scalar -> its Python scalar
-        return float(item())
+    # Iterate FIRST: a per-class score row (list / 1-D tensor) yields the class scores. Only a
+    # non-iterable prediction (a 0-d tensor / numpy scalar) falls through to ``.item()`` -- calling
+    # ``.item()`` eagerly would raise on a multi-element 1-D tensor ("a Tensor with N elements
+    # cannot be converted to Scalar"), which is exactly a per-class row.
     try:
         row = [float(x) for x in prediction]  # type: ignore[union-attr]
     except TypeError:
+        item = getattr(prediction, "item", None)
+        if callable(item):  # 0-d tensor / numpy scalar -> its Python scalar
+            return float(item())
         return float(prediction)  # type: ignore[arg-type]
     if not row:
         raise ValueError("cannot score an empty prediction row")
+    if len(row) == 1:
+        return row[0]  # a length-1 "row" is a scalar match score, not a class distribution
     peak = max(row)
     denom = sum(math.exp(value - peak) for value in row)
     return 1.0 / denom  # == max(softmax(row)); denom >= 1 so the score is in (0, 1]

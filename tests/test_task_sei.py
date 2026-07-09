@@ -216,6 +216,35 @@ def test_match_score_is_max_softmax_probability() -> None:
     assert match_score(0.73) == pytest.approx(0.73)
 
 
+def test_match_score_reduces_tensor_like_row_without_calling_item() -> None:
+    """A 1-D tensor-like row must be reduced by iterating, NOT via ``.item()``.
+
+    Regression: a torch 1-D tensor exposes ``.item()`` but it RAISES on a multi-element
+    tensor ("a Tensor with N elements cannot be converted to Scalar"). ``match_score`` must
+    iterate the row first and only fall back to ``.item()`` for a genuine 0-d scalar.
+    """
+
+    class _FakeTensor:
+        """Mimics a torch tensor: iterable, with an ``.item()`` that raises unless 0-d/1-elem."""
+
+        def __init__(self, values: list[float]) -> None:
+            self._values = list(values)
+
+        def __iter__(self) -> Iterator[float]:
+            return iter(self._values)
+
+        def item(self) -> float:
+            if len(self._values) != 1:
+                raise ValueError(
+                    f"a Tensor with {len(self._values)} elements cannot be converted to Scalar"
+                )
+            return self._values[0]
+
+    scored = match_score(_FakeTensor([8.0, 0.0, 0.0]))  # must NOT raise
+    assert 0.0 < scored <= 1.0
+    assert scored == pytest.approx(match_score([8.0, 0.0, 0.0]))  # same as the plain-list MSP
+
+
 def test_open_set_metric_reduces_per_class_rows() -> None:
     """Fed raw forward rows, the metric reduces each to MSP: peaked=genuine, flat=impostor."""
     metric = OpenSetMetric()

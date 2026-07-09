@@ -136,7 +136,15 @@ Any change here that alters a metric or split is a **breaking change** → bump 
   exceed `self_reported`.
 - **No hyperparameter or threshold tuning on the test split, ever** — `val` only.
 
-### Regression metric (`snr_estimation`, upcoming)
-- **Primary**: RMSE (dB). **Secondary**: MAE. RMSE is chosen as primary because it is the standard
-  for this class of benchmark and is more sensitive to outliers — relevant for catching estimation
-  failures at low SNR.
+### Regression metric (`snr_estimation`)
+- **Primary**: `rmse_db` (RMSE in dB). **Secondary**: `mae_db` (MAE in dB). RMSE is chosen as
+  primary because it is the standard for this class of benchmark and is more sensitive to outliers
+  — relevant for catching estimation failures at low SNR. **Both are lower-is-better** (0 dB is a
+  perfect estimate); the leaderboard ranks `snr_estimation` ascending and inverts the score bar.
+- **Track**: a single canonical track **`all_snr`** — scored over the full RadioML 2016.10a SNR
+  range (−20…+18 dB) with **no cherry-picking**, never blending tracks in one board column (the
+  same "full SNR range" invariant as AMC).
+- **Canonical split**: `snr-radioml2016-strat-snr-8010-seed42-v1` — byte-identical indices to the
+  AMC split `amc-radioml2016-strat-snr-8010-seed42-v1` (derived from it, own id), so the SNR and
+  AMC boards are scored on the exact same held-out signals. The supervision target is the
+  per-window `snr_db` field (the same field AMC carries as metadata).

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — J2 baselines DSP AMC + J4 tâche régression `snr_estimation` (reprise 2026-07-09)
+
+Reprise d'un WIP de session interrompue (jalons J2 + J4), câblé, vérifié (ruff/black/pytest verts)
+et committé sur `claude/ecstatic-torvalds-a6ced8`.
+
+- **J2 — baselines classiques AMC.** `hoc_lr` (cumulants d'ordre supérieur + `LogisticRegression`
+  seed-42, même estimateur que la head logreg normative) comme référence DSP, et deux planchers
+  triviaux `majority_class` / `chance` (stdlib pur). Enregistrés dans `MODELS` ; hors table CLI
+  `_MODEL_MODULES` by-design (le job SLURM `slurm/train_hoc_amc.sh`, CPU/defq, les instancie
+  explicitement). **Lignes de board produites** sur RadioML 2016.10a (plage SNR complète,
+  from_scratch, seed 42) : `hoc_lr` 0.2629, `majority_class` 0.0909 (=1/11), `chance` 0.0895 —
+  déterministes single-seed (IC bootstrap par seed conservé). Étage le board sous les baselines
+  deep (resnet/cldnn/mcldnn 0.57–0.62).
+- **J4 — tâche de régression `snr_estimation`** (raw-IQ → SNR dB) sur RadioML 2016.10a :
+  `Task`/`Dataset`/métriques `rmse_db` (primary) + `mae_db` (**lower-is-better**), split
+  `snr-radioml2016-strat-snr-8010-seed42-v1` (indices byte-identiques au split AMC, dérivés, id
+  propre), config Hydra. **Extension additive des contrats figés** (précédent
+  `interference_id`/`protocol_tech_id`) : `snr_estimation` ajouté à l'enum `task.name`
+  (`result.schema.json`) et au `Literal TaskName` — additif, `task.version=v1`, `schema_version`
+  inchangé. **CLI** câblée (`TASK_NAMES`/`_TASK_MODULES`/`_TASK_DEFAULTS`), `rfbench eval
+  snr_estimation` sélectionnable ; le split SNR est dérivé du split AMC (pas de cible `data prepare`
+  dédiée, documenté). **Site** : rendu lower-is-better (tri ascendant + barre inversée) + badge de
+  contamination (`pretraining.overlap_with_eval`). Protocole normatif acté
+  (`docs/EVALUATION_PROTOCOL.md` : track canonique `all_snr`, plage SNR complète, pas de
+  cherry-picking). Tests : workaround `task.name='amc'` retiré + test end-to-end de rendu de page.
+
+### Added — J3 (partiel) : sécurisation des 9 `result.json` SEI
+
+Sur la branche `feat/sei-complete` : commit des 9 lignes de board SEI post-fix Keras-fidelity
+(`wisig_cnn_paper`/`complex_cnn`/`resnet1d_sei` × closed_set/cross_receiver/cross_day, validées 9/9),
+jusque-là untracked. Le merge de la branche vers l'intégration et la piste open-set restent à
+trancher.
+
 ### Added — Phase 0 quality hardening: schema 1.2.0, protocol lock-in, bootstrap CI, repro ops
 
 Six-block Phase 0 of the 2026-07 quality audit follow-up. Priority is repo quality, not public

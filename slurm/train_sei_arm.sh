@@ -32,7 +32,9 @@
 
 set -uo pipefail
 WORK=/lustre/work/pdl16831/udl79f933
-REPO="$WORK/projets/rf-benchmark-hub-sei"      # the feat/sei-complete worktree
+# REPO defaults to the feat/sei-complete worktree; override with RFBENCH_REPO to run this recipe
+# from another worktree (e.g. the ecstatic integration branch, which carries the open_set track).
+REPO="${RFBENCH_REPO:-$WORK/projets/rf-benchmark-hub-sei}"
 VENV="$WORK/envs/rfbench-arm-gpu"              # .[dev,data,tasks,torch] — torch + CUDA present
 UV="$WORK/envs/uv-arm/uv"
 MODEL="${1:-wisig_cnn_paper}"

@@ -270,6 +270,27 @@ def test_open_set_metric_reduces_per_class_rows() -> None:
     assert computed["eer"] == pytest.approx(0.0)
 
 
+def test_prepare_predictions_reduces_rows_once_for_bootstrap() -> None:
+    """``prepare_predictions`` maps per-class rows to scalar MSP scores that ``update`` accepts.
+
+    This is the hook that lets the bootstrap reduce each probe ONCE instead of recomputing the
+    softmax on every resample (the O(resamples x n x classes) stall on the 144k open-set test).
+    Feeding the pre-reduced scalars must yield the SAME AUROC/EER as feeding the raw rows.
+    """
+    rows = [[8.0, 0.0, 0.0], [7.0, 0.5, 0.5], [0.1, 0.0, -0.1], [0.0, 0.1, 0.0]]
+    labels = [1, 1, 0, 0]
+
+    scores = OpenSetMetric().prepare_predictions(rows)
+    assert scores == [match_score(r) for r in rows]  # one MSP scalar per row
+    assert all(isinstance(s, float) for s in scores)
+
+    from_rows = OpenSetMetric()
+    from_rows.update(rows, labels)
+    from_scalars = OpenSetMetric()
+    from_scalars.update(scores, labels)  # pre-reduced path (what the bootstrap resamples)
+    assert from_rows.compute() == from_scalars.compute()
+
+
 def test_open_set_samples_flags_genuine_and_impostor() -> None:
     """``open_set_samples`` tags in-gallery probes genuine (1) and held-out tx impostor (0)."""
     # records: (tx, rx, day); train defines the gallery = {tx 1, 2}. tx 3 is a held-out impostor.

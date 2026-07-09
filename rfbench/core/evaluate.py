@@ -366,14 +366,26 @@ def _bootstrap_uncertainty(
         return {}
 
     metric_list = list(metrics)
+    # Pre-reduce each metric's predictions ONCE via the optional ``prepare_predictions`` hook.
+    # Bootstrap re-runs ``update`` ``n_resamples`` times, so if a metric derives its per-sample
+    # scalar from an expensive representation (e.g. the open-set per-class rows -> max-softmax
+    # score) leaving ``pred`` raw would recompute that reduction n*resamples times and stall the
+    # eval (the SEI open-set 144k-probe row reduction is ~O(n*classes) per resample). Reducing up
+    # front makes each resample a cheap gather + scalar update. Metrics without the hook keep the
+    # raw accumulated ``pred`` unchanged, so their CIs are byte-identical to before.
+    prepared_pred: list[Tensor] = []
+    for metric in metric_list:
+        prepare = getattr(metric, "prepare_predictions", None)
+        prepared_pred.append(prepare(pred) if callable(prepare) else pred)
+
     samples: dict[str, list[float]] = {}
     for i in range(n_resamples):
         rng = random.Random(seed + i)
         idx = [rng.randrange(n) for _ in range(n)]
-        pred_bs = _index_select(pred, idx)
         target_bs = _index_select(target, idx)
         meta_bs = _index_select(meta, idx) if meta is not None else None
-        for metric in metric_list:
+        for metric, metric_pred in zip(metric_list, prepared_pred, strict=True):
+            pred_bs = _index_select(metric_pred, idx)
             metric.reset()
             metric.update(pred_bs, target_bs, meta_bs)
             computed = metric.compute()

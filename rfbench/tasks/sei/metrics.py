@@ -155,6 +155,18 @@ class OpenSetMetric(Metric):
         self._pos = []
         self._neg = []
 
+    def prepare_predictions(self, pred: Tensor) -> list[float]:
+        """Reduce a whole batch of per-class rows to scalar MSP scores, ONCE, for bootstrapping.
+
+        Optional hook honoured by :func:`rfbench.core.evaluate._bootstrap_uncertainty`: the
+        percentile bootstrap re-runs ``update`` ~1000x, so if ``pred`` stayed a list of
+        120-class rows every resample would recompute the softmax over every probe
+        (O(resamples x n x classes) -> the open-set eval stalls for ~45 min on 144k probes).
+        Reducing to scalars here makes each resample a cheap ``float`` pass. Pure/deterministic,
+        so the CI is unchanged; scalars pass through untouched (idempotent).
+        """
+        return [match_score(row) for row in pred]
+
     def update(
         self,
         pred: Tensor,
@@ -164,11 +176,12 @@ class OpenSetMetric(Metric):
         """Accumulate a batch of match scores (``pred``) with binary labels (``target``).
 
         ``pred[i]`` is the model's per-class score row (as returned by ``forward``), reduced
-        to a scalar **maximum-softmax-probability** (MSP) confidence via
-        :func:`match_score` -- the standard open-set score (higher = more likely genuine).
-        A ``pred[i]`` that is already a scalar match score is used verbatim (so synthetic
-        score fixtures keep working). ``target[i]`` is ``1`` for a genuine/in-gallery probe
-        or ``0`` for an impostor/novel one. Labels outside ``{0, 1}`` raise :class:`ValueError`.
+        to a scalar **maximum-softmax-probability** (MSP) confidence via :func:`match_score`
+        -- the standard open-set score (higher = more likely genuine). A ``pred[i]`` that is
+        already a scalar match score is used verbatim (so synthetic score fixtures and the
+        pre-reduced :meth:`prepare_predictions` output keep working). ``target[i]`` is ``1``
+        for a genuine/in-gallery probe or ``0`` for an impostor/novel one. Labels outside
+        ``{0, 1}`` raise :class:`ValueError`.
         """
         for prediction, label in zip(pred, target, strict=True):
             value = match_score(prediction)

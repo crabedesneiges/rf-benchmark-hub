@@ -77,6 +77,7 @@ TASK_NAMES: tuple[str, ...] = (
     "spectrum_sensing",
     "interference_id",
     "protocol_tech_id",
+    "snr_estimation",
 )
 REGIME_NAMES: tuple[str, ...] = ("from_scratch", "full_finetune", "linear_probe", "few_shot")
 SPLIT_NAMES: tuple[str, ...] = ("test", "val")
@@ -112,6 +113,11 @@ _DATASET_FAMILY: dict[str, str] = {
 #: Datasets a given data task can prepare (task name -> concrete datasets).
 #: Detection targets RadDet (the real published ICASSP-2025 artifact); wbsig53 stays a
 #: reachable name but only yields a blocker (generation-only, no static release).
+#: NOTE: ``snr_estimation`` is intentionally absent here. Its canonical split is *derived*
+#: byte-identically from the AMC ``radioml_2016_10a`` split (see
+#: rfbench.data.prepare.snr_estimation.derive_from_amc_split), so it is not a standalone
+#: ``rfbench data prepare`` target: prepare ``radioml_2016_10a`` (family ``amc``) and the SNR
+#: split falls out with the same indices/checksum.
 _TASK_DATASETS: dict[str, tuple[str, ...]] = {
     "amc": ("radioml_2016_10a", "radioml_2018_01a", "sig53"),
     "sei": ("wisig", "oracle", "lora"),
@@ -160,6 +166,14 @@ _TASK_DEFAULTS: dict[str, dict[str, str]] = {
         "primary": "accuracy_overall",
         "canonical_split_id": "proto-tprime-wifi4-8010-seed42-v1",
         "track": "closed_set",
+    },
+    "snr_estimation": {
+        # Regression (raw-IQ -> SNR dB): primary is rmse_db (lower-is-better). The split is
+        # derived from the AMC radioml_2016_10a partition (byte-identical indices, own id).
+        "dataset": "radioml_2016_10a",
+        "primary": "rmse_db",
+        "canonical_split_id": "snr-radioml2016-strat-snr-8010-seed42-v1",
+        "track": "all_snr",
     },
 }
 
@@ -796,6 +810,7 @@ _TASK_MODULES: dict[str, str] = {
     "wideband_detection": "rfbench.tasks.wideband_detection",
     "interference_id": "rfbench.tasks.interference_id",
     "protocol_tech_id": "rfbench.tasks.protocol_tech_id",
+    "snr_estimation": "rfbench.tasks.snr_estimation",
 }
 
 

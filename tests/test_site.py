@@ -1302,3 +1302,191 @@ def test_render_guide_is_self_contained() -> None:
     # It shares the site-wide top nav (Tasks | Guide | Submit).
     assert 'href="index.html">Tasks</a>' in html_text
     assert 'href="guide.html">Guide</a>' in html_text
+
+
+# --------------------------------------------------------------------------------------------------
+# J4 -- contamination badge (pretraining.overlap_with_eval) + lower-is-better regression rendering
+# --------------------------------------------------------------------------------------------------
+def _with_pretraining(
+    row: dict[str, Any], overlap: str, *, note: str | None = None
+) -> dict[str, Any]:
+    """Attach a schema-1.2.0 ``pretraining`` block with the given overlap to an in-memory row."""
+    row["schema_version"] = "1.2.0"
+    row["model"]["family"] = "foundation"
+    block: dict[str, Any] = {
+        "pretrain_datasets": ["radioml_2016_10a"],
+        "overlap_with_eval": overlap,
+    }
+    if note is not None:
+        block["disclosure_note"] = note
+    row["pretraining"] = block
+    return row
+
+
+def _snr_row(
+    result_id: str,
+    model_name: str,
+    rmse: float,
+    mae: float,
+    status: str = "self_reported",
+) -> dict[str, Any]:
+    """Build a genuine ``snr_estimation`` row with the lower-is-better regression metrics.
+
+    ``snr_estimation`` is now a valid ``task.name`` schema enum value, so ``load_results``
+    accepts the fixture end-to-end and the row renders on its own board page. The direction
+    logic keys off the METRIC name (``rmse_db``), so this exercises the lower-is-better sort/bar
+    path on the real task.
+    """
+    return {
+        "schema_version": "1.2.0",
+        "result_id": result_id,
+        "task": {"name": "snr_estimation", "version": "v1"},
+        "model": {"name": model_name, "family": "baseline", "n_params": 100000},
+        "regime": {"name": "from_scratch"},
+        "dataset": {"name": "radioml_2016_10a"},
+        "split": {
+            "canonical_split_id": "snr-radioml2016-strat-snr-8010-seed42-v1",
+            "name": "test",
+            "seed": 42,
+            "checksum": "sha256:" + "0" * 64,
+        },
+        "metrics": {"primary": "rmse_db", "values": {"rmse_db": rmse, "mae_db": mae}},
+        "verification": {"status": status},
+    }
+
+
+def test_lower_is_better_metric_direction_helpers() -> None:
+    """``rmse_db``/``mae_db`` are lower-is-better; classification metrics are not."""
+    assert generate._is_lower_better("rmse_db") is True
+    assert generate._is_lower_better("mae_db") is True
+    assert generate._is_lower_better("accuracy_overall") is False
+    assert generate._is_lower_better("rank1_accuracy") is False
+
+
+def test_rmse_rows_ranked_ascending_smallest_error_first() -> None:
+    """For a lower-is-better primary, the SMALLEST error ranks first (ascending)."""
+    hi_err = _snr_row("hi", "worse", rmse=6.0, mae=5.0)
+    lo_err = _snr_row("lo", "better", rmse=2.0, mae=1.5)
+    ordered = generate._sort_rows([hi_err, lo_err])
+    assert [r["model"]["name"] for r in ordered] == ["better", "worse"]
+    # The higher-is-better path is unchanged: accuracy still ranks descending.
+    acc_hi = _amc_row("a", "top", "from_scratch", 0.70, "self_reported")
+    acc_lo = _amc_row("b", "bot", "from_scratch", 0.55, "self_reported")
+    acc_ordered = generate._sort_rows([acc_lo, acc_hi])
+    assert [r["model"]["name"] for r in acc_ordered] == ["top", "bot"]
+
+
+def test_lower_is_better_bar_fills_inversely() -> None:
+    """The score bar of the best (smallest-error) row fills MORE than the worst row's."""
+    # vmax = 6.0 (the larger error). lower-is-better -> best fill = 1 - 2/6 = 0.667, worst = 0.0.
+    best_bar = generate._render_bar(2.0, 6.0, lower_is_better=True)
+    worst_bar = generate._render_bar(6.0, 6.0, lower_is_better=True)
+    assert "width:66.7%" in best_bar
+    assert "width:0.0%" in worst_bar
+    # Higher-is-better keeps the direct fill (regression guard on the default path).
+    assert "width:100.0%" in generate._render_bar(6.0, 6.0)
+
+
+def test_contamination_badge_rendered_per_overlap_value(tmp_path: Path) -> None:
+    """Each overlap value renders its own contamination badge class + label on the page."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "clean.json",
+        _with_pretraining(
+            _amc_row("clean", "fm-clean", "linear_probe", 0.62, "self_reported"), "none"
+        ),
+    )
+    _write(
+        results / "amc" / "unk.json",
+        _with_pretraining(
+            _amc_row("unk", "fm-unk", "linear_probe", 0.60, "self_reported"), "unknown"
+        ),
+    )
+    _write(
+        results / "amc" / "bad.json",
+        _with_pretraining(
+            _amc_row("bad", "fm-bad", "linear_probe", 0.58, "self_reported"),
+            "confirmed",
+            note="pretrained on RadioML incl. the eval split",
+        ),
+    )
+    generate.build_site(results, out)
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+
+    assert 'class="badge badge-overlap-none"' in amc_html and ">clean<" in amc_html
+    assert 'class="badge badge-overlap-unknown"' in amc_html and ">overlap unknown<" in amc_html
+    assert "badge badge-overlap-confirmed" in amc_html and ">contaminated<" in amc_html
+    # The disclosure_note becomes the badge tooltip.
+    assert 'title="pretrained on RadioML incl. the eval split"' in amc_html
+
+
+def test_no_contamination_badge_without_pretraining(tmp_path: Path) -> None:
+    """Rows without a pretraining block render NO contamination badge (byte-identical to before)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)  # baseline rows, no pretraining
+    generate.build_site(results, out)
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    # No RENDERED badge span (the CSS variables/classes always exist in the theme block; a
+    # rendered badge is a ``<span class="badge badge-overlap-...``).
+    assert 'class="badge badge-overlap-none"' not in amc_html
+    assert 'class="badge badge-overlap-unknown"' not in amc_html
+    assert 'class="badge badge-overlap-confirmed"' not in amc_html
+
+
+def test_overlap_badge_helpers_direct() -> None:
+    """``_overlap_status``/``_render_overlap_badge`` read the block and default safely."""
+    row = _with_pretraining(_amc_row("r", "m", "linear_probe", 0.6, "self_reported"), "confirmed")
+    assert generate._overlap_status(row) == "confirmed"
+    assert "badge-overlap-confirmed" in generate._render_overlap_badge(row)
+    # A bare row (no pretraining) yields no badge.
+    bare = _amc_row("r2", "m2", "linear_probe", 0.6, "self_reported")
+    assert generate._overlap_status(bare) is None
+    assert generate._render_overlap_badge(bare) == ""
+
+
+def test_guide_documents_contamination_and_regression_metrics() -> None:
+    """The Guide explains the contamination badge and lists the regression metrics."""
+    html_text = generate.render_guide()
+    assert "Contamination badge" in html_text
+    # All three badge states are shown as rendered legend chips.
+    assert 'class="badge badge-overlap-none"' in html_text
+    assert 'class="badge badge-overlap-unknown"' in html_text
+    assert 'class="badge badge-overlap-confirmed"' in html_text
+    # The regression metrics appear in the glossary with a lower-is-better (down) arrow.
+    assert "rmse_db" in html_text
+    assert "mae_db" in html_text
+
+
+def test_snr_estimation_is_a_known_ordered_task() -> None:
+    """The generator knows snr_estimation's title and fixes its board order (site support)."""
+    assert generate.TASK_TITLES["snr_estimation"] == "SNR estimation"
+    assert "snr_estimation" in generate.TASK_ORDER
+    # It sorts after the P1/P2 classification tasks but is a KNOWN (non-alphabetical) task.
+    key = generate._task_sort_key("snr_estimation")
+    assert key[0] < len(generate.TASK_ORDER)
+
+
+def test_snr_estimation_page_renders_end_to_end(tmp_path: Path) -> None:
+    """A real snr_estimation result.json passes load_results and renders its own board page,
+    with the smallest-error row ranked first (ascending, lower-is-better)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "snr_estimation" / "worse.json",
+        _snr_row("hi", "big-error", rmse=6.0, mae=5.0),
+    )
+    _write(
+        results / "snr_estimation" / "better.json",
+        _snr_row("lo", "small-error", rmse=2.0, mae=1.5),
+    )
+    generate.build_site(results, out)
+
+    page = out / "snr_estimation.html"
+    assert page.is_file()  # the row survived load_results validation (enum now accepts the task)
+    html = page.read_text(encoding="utf-8")
+    assert "SNR estimation" in html
+    assert "big-error" in html and "small-error" in html
+    # Ascending: the smaller-error model appears before the larger-error one in the table.
+    assert html.index("small-error") < html.index("big-error")

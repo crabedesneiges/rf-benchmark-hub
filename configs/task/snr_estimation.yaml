@@ -1,0 +1,44 @@
+# @package task
+# The SNR-estimation (raw-IQ -> SNR in dB regression) task.
+# Normative protocol: docs/EVALUATION_PROTOCOL.md "Statistical rigor & uncertainty" ->
+# "Regression metric (snr_estimation)". Any metric/split change here bumps `version` and is a
+# breaking change. Task class: rfbench.tasks.snr_estimation.task.SnrEstimationTask (registered
+# as `snr_estimation`); `rfbench eval` drives
+# rfbench.core.evaluate.evaluate(model, task, split, regime).
+name: snr_estimation
+version: v1
+
+# Dataset variants this task can be scored on. The first is the default when `dataset` is unset
+# on the CLI. The SNR split shares the AMC (modulation x snr) 80/10/10 seed-42 partition BY
+# CONSTRUCTION (byte-identical indices, same checksum) so the two boards are comparable on the
+# exact same held-out signals; it carries its OWN canonical id so a result.json's split id is
+# unambiguous about which task's protocol the score attests. Indices + checksum are versioned
+# under leaderboard/splits/<dataset>/; raw data is never committed (D3).
+datasets:
+  - name: radioml_2016_10a # target = per-window SNR (dB); mirrors amc-radioml2016-strat-snr-8010-seed42-v1
+    canonical_split_id: snr-radioml2016-strat-snr-8010-seed42-v1
+
+# Default partition scored on the board ({val, test} only; train is fit-only).
+default_split: test
+# Single track over the full SNR range: SNR estimation is scored over -20..+18 dB with no
+# cherry-picking and never blends tracks in one leaderboard column.
+tracks:
+  - all_snr
+
+# Metrics per EVALUATION_PROTOCOL.md. `rmse_db` is PRIMARY (root-mean-square error in dB, more
+# sensitive to outliers -- relevant for catching estimation failures at low SNR); `mae_db` is
+# the mean absolute error in dB. BOTH are lower-is-better (0 dB is perfect), unlike every
+# classification metric on the board. No curve (a per-SNR error curve is a later addition).
+metrics:
+  primary: rmse_db
+  scalars:
+    - rmse_db
+    - mae_db
+  curves: []
+
+# Full-protocol SNR range recorded in result.json.eval.conditions so the row attests it was
+# scored over the whole range (no cherry-picking of high-SNR points), mirroring the AMC rule.
+conditions:
+  snr_db_min: -20
+  snr_db_max: 18
+  full_snr_range: true

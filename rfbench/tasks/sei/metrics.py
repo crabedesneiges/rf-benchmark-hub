@@ -21,6 +21,7 @@ and :meth:`compute` returns JSON-serialisable floats. The metrics implement the 
 
 from __future__ import annotations
 
+import bisect
 import math
 from typing import Any
 
@@ -301,14 +302,19 @@ def eer(positives: list[float], negatives: list[float]) -> float:
     if n_pos == 0 or n_neg == 0:
         return 0.0
 
+    pos_sorted = sorted(positives)
+    neg_sorted = sorted(negatives)
     thresholds = sorted({*positives, *negatives}, reverse=True)
     # Seed the operating point above the highest score (accept nothing: FAR=0, FRR=1); the
     # sweep then lowers the threshold until FAR overtakes FRR and interpolates the crossing.
+    # FAR/FRR are read via binary search on the sorted score arrays (O(log n) per threshold), so
+    # the whole sweep is O(n log n) -- essential for bootstrap CIs over large open-set test sets
+    # (a per-threshold linear scan is O(n^2) and hangs on 100k+ probes).
     prev_far = 0.0
     prev_frr = 1.0
     for threshold in thresholds:
-        far = sum(1 for score in negatives if score >= threshold) / n_neg
-        frr = sum(1 for score in positives if score < threshold) / n_pos
+        far = (n_neg - bisect.bisect_left(neg_sorted, threshold)) / n_neg  # P(neg >= t)
+        frr = bisect.bisect_left(pos_sorted, threshold) / n_pos  # P(pos < t)
         if far >= frr:
             # Between the previous point (far < frr) and this one (far >= frr), interpolate
             # the FAR at the FAR==FRR crossing for a smooth, threshold-grid-independent EER.

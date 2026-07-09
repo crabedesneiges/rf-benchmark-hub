@@ -144,6 +144,19 @@ def test_rank1_accuracy_streams_across_batches() -> None:
 # --------------------------------------------------------------------------------------------------
 # AUROC + EER on synthetic score distributions with known expected values
 # --------------------------------------------------------------------------------------------------
+def test_eer_auroc_scale_to_large_inputs() -> None:
+    """EER/AUROC stay O(n log n): a 12k-probe separable set is exact and returns instantly.
+
+    Regression guard for the open-set hang: a per-threshold linear scan made ``eer`` O(n^2),
+    which stalled the SEI open-set eval (144k probes) for hours. With binary-search sweeps a
+    12k-point call is trivial, and perfect separation still gives AUROC 1.0 / EER 0.0.
+    """
+    negatives = [float(i) for i in range(6000)]  # 0 .. 5999
+    positives = [10000.0 + i for i in range(6000)]  # 10000 .. 15999, strictly above every negative
+    assert auroc(positives, negatives) == pytest.approx(1.0)
+    assert eer(positives, negatives) == pytest.approx(0.0)
+
+
 def test_auroc_eer_perfectly_separable() -> None:
     """Perfectly separable scores -> AUROC == 1.0 and EER == 0.0."""
     positives = [0.9, 0.8, 0.95, 0.7]

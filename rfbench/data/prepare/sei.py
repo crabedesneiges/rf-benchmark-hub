@@ -45,7 +45,7 @@ from rfbench.data.prepare._common import (
 )
 
 #: The SEI datasets this WP prepares.
-SeiDataset = Literal["wisig", "oracle", "lora"]
+SeiDataset = Literal["wisig", "oracle", "lora", "powder"]
 
 #: The SEI split conditions, reported separately (``docs/EVALUATION_PROTOCOL.md`` §SEI).
 SeiCondition = Literal["closed_set", "cross_receiver", "cross_day"]
@@ -69,6 +69,9 @@ CANONICAL_SPLIT_IDS: dict[str, dict[str, str]] = {
     "lora": {
         "closed_set": "sei-lora-closedset-strat-dev-8010-seed42-v1",
     },
+    "powder": {
+        "closed_set": "sei-powder-wifi4-closedset-strat-dev-8010-seed42-v1",
+    },
 }
 
 #: Official source URL recorded in each dataset's manifest (provenance, never redistributed).
@@ -76,13 +79,17 @@ SOURCE_URLS: dict[str, str] = {
     "wisig": "https://cores.ee.ucla.edu/downloads/datasets/wisig/",
     "oracle": "https://www.genesys-lab.org/oracle",
     "lora": "https://ieee-dataport.org/open-access/lorarffidataset",
+    "powder": "https://genesys-lab.org/powder",
 }
 
 #: Conditions each dataset supports (WiSig carries receiver + day metadata; the others do not).
+#: POWDER (4 BS, one fixed receiver) is closed-set only -- like the two FM SEI evaluators
+#: (WirelessJEPA, IQFM), which pool the two capture days into a single closed-set task.
 _CONDITIONS: dict[str, tuple[str, ...]] = {
     "wisig": ("closed_set", "cross_receiver", "cross_day"),
     "oracle": ("closed_set",),
     "lora": ("closed_set",),
+    "powder": ("closed_set",),
 }
 
 #: Which record field a grouped condition partitions on (index into :data:`SeiRecord`).
@@ -482,6 +489,79 @@ def extract_lora_records(labels: Sequence[int]) -> list[SeiRecord]:
     return [(int(dev), None, None) for dev in labels]
 
 
+def load_powder_records(
+    cache: str | Path | None = None,
+    *,
+    window: int = 256,
+) -> list[SeiRecord]:
+    """Extract per-item ``(device_id, None, day_id)`` records from the POWDER SigMF captures.
+
+    POWDER RF Fingerprinting (Reus-Muns, Jaisinghani, Sankhe, Chowdhury, "Trust in 5G Open RANs
+    through Machine Learning: RF Fingerprinting on the POWDER PAWR Platform", IEEE GLOBECOM 2020)
+    is the 4-base-station WiFi hardware-fingerprinting set used by the two FM SEI evaluators
+    (WirelessJEPA arXiv:2601.20190, IQFM arXiv:2506.06718). It is distributed as SigMF captures
+    (a ``.sigmf-data`` raw-IQ file + a ``.sigmf-meta`` JSON header per recording) named
+    ``[Waveform]_[Day]_[TransmitterBS]_[RecordingSet]`` -- the transmitter base station (field 3)
+    is the fingerprint identity, and the day (field 2) is carried so a future cross-day track is
+    possible (the closed-set track pools both days, matching the FM evals).
+
+    Each recording is sliced into non-overlapping ``window``-sample frames (the FM papers use 256;
+    the origin paper used 512), emitting one ``(device_id, None, day_id)`` record per frame in
+    sorted file order. numpy is imported lazily; never called in unit tests (needs real data +
+    numpy). See :func:`extract_powder_records` for the pure-Python frame-count -> record mapping.
+
+    NOTE (download): the POWDER DRS host anti-scrapes programmatic fetches, so the raw captures
+    must be placed under ``$RFBENCH_CACHE/powder/`` manually -- see
+    :mod:`rfbench.data.download.sei_powder` for the exact procedure. This loader only reads what
+    is already there.
+    """
+    import json  # stdlib
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Reading POWDER needs numpy; install it with `pip install rfbench[data]`."
+        ) from exc
+
+    cache_dir = resolve_cache_dir(cache)
+    root = cache_dir / "powder"
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"POWDER not found at {root}; place the SigMF captures there first "
+            "(see rfbench.data.download.sei_powder for the manual-download procedure)."
+        )
+
+    frame_counts: list[tuple[str, str, int]] = []
+    for data_path in sorted(root.rglob("*.sigmf-data")):
+        device_id, day_id = _powder_ids(data_path.name)
+        meta_path = data_path.with_suffix(".sigmf-meta")
+        dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
+        iq = np.fromfile(data_path, dtype=dtype)
+        n_complex = int(iq.size // 2)
+        n_frames = n_complex // window
+        frame_counts.append((device_id, day_id, n_frames))
+    if not frame_counts:
+        raise FileNotFoundError(
+            f"no POWDER .sigmf-data captures found under {root}; check the manual extraction."
+        )
+    return extract_powder_records(frame_counts)
+
+
+def extract_powder_records(frame_counts: Sequence[tuple[object, object, int]]) -> list[SeiRecord]:
+    """Map ``(device_id, day_id, n_frames)`` triples to per-frame closed-set POWDER records.
+
+    Pure-Python view of the POWDER layout (see :func:`load_powder_records`): each entry is one
+    recording's ``(device_id, day_id, n_frames)`` and this emits one ``(device_id, None,
+    day_id)`` record per frame, preserving file order. ``rx_id`` is ``None`` (POWDER has a single
+    fixed receiver). Pulls in no third-party dependency, so it is exercised directly in tests.
+    """
+    records: list[SeiRecord] = []
+    for device_id, day_id, n_frames in frame_counts:
+        records.extend((device_id, None, day_id) for _ in range(int(n_frames)))
+    return records
+
+
 #: ORACLE capture-window length (complex samples per record); matches the reference
 #: IEEE802.11a burst length used to slice each raw-IQ ``.sigmf-data`` file.
 _ORACLE_WINDOW = 128
@@ -515,6 +595,21 @@ def _oracle_tx_id(filename: str) -> str:
     return filename.rsplit(".", 1)[0]
 
 
+def _powder_ids(filename: str) -> tuple[str, str]:
+    """Parse ``(device_id, day_id)`` from a POWDER SigMF capture file name.
+
+    Expects the reference naming ``[Waveform]_[Day]_[TransmitterBS]_[RecordingSet]`` (e.g.
+    ``WiFi_Day1_MEB_1.sigmf-data``): the transmitter base station (field 3, index 2) is the
+    fingerprint identity and the day (field 2, index 1) is carried for provenance / a future
+    cross-day track. Falls back to ``(stem, "unknown_day")`` if the name deviates.
+    """
+    stem = filename.rsplit(".", 1)[0].split(".sigmf")[0]
+    parts = stem.split("_")
+    if len(parts) >= 3:
+        return parts[2], parts[1]
+    return stem, "unknown_day"
+
+
 def _sigmf_np_dtype(np_mod: object, meta_path: Path, json_mod: object) -> object:
     """Map a SigMF ``core:datatype`` to a numpy dtype (defaults to interleaved f32)."""
     meta = json_mod.loads(meta_path.read_text(encoding="utf-8"))  # type: ignore[attr-defined]
@@ -540,4 +635,6 @@ __all__ = [
     "load_oracle_records",
     "load_lora_records",
     "extract_lora_records",
+    "load_powder_records",
+    "extract_powder_records",
 ]

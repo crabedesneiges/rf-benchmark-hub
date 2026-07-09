@@ -10,7 +10,14 @@ dependency-free (numpy/torch stay lazy inside the dataset loader).
 from __future__ import annotations
 
 from rfbench.tasks.sei.dataset import SeiDataset
-from rfbench.tasks.sei.metrics import OpenSetMetric, Rank1Accuracy
+from rfbench.tasks.sei.metrics import BalancedAccuracy, OpenSetMetric, Rank1Accuracy
 from rfbench.tasks.sei.task import SEI_TRACKS, SeiTask
 
-__all__ = ["SeiTask", "SEI_TRACKS", "SeiDataset", "Rank1Accuracy", "OpenSetMetric"]
+__all__ = [
+    "SeiTask",
+    "SEI_TRACKS",
+    "SeiDataset",
+    "Rank1Accuracy",
+    "BalancedAccuracy",
+    "OpenSetMetric",
+]

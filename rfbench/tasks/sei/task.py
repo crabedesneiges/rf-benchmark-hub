@@ -31,7 +31,7 @@ from rfbench.core.registry import register_task
 from rfbench.core.task import Task
 from rfbench.core.types import Batch, SplitName, Tensor, Track
 from rfbench.tasks.sei.dataset import SeiDataset
-from rfbench.tasks.sei.metrics import OpenSetMetric, Rank1Accuracy
+from rfbench.tasks.sei.metrics import BalancedAccuracy, OpenSetMetric, Rank1Accuracy
 
 #: The SEI tracks/conditions reported *separately* on the board (protocol §SEI). The first
 #: three are closed-set identification conditions; ``open_set`` is the open-set
@@ -73,16 +73,18 @@ class SeiTask(Task):
         return [SeiDataset(self._dataset_name, track=self._track)]
 
     def metrics(self) -> list[Metric]:
-        """Return the *single* metric family for the active track (never conflated).
+        """Return the metric family for the active track (closed-set and open-set never mix).
 
-        Closed-set tracks -> :class:`Rank1Accuracy` (primary ``rank1_accuracy``); the
-        ``open_set`` track -> :class:`OpenSetMetric` (``auroc`` + ``eer``). The two are
-        kept strictly separate so a closed-set row never carries open-set scalars and
+        Closed-set tracks -> :class:`Rank1Accuracy` (PRIMARY ``rank1_accuracy``, the ranking
+        key -- ``evaluate`` takes ``metrics()[0]``) followed by :class:`BalancedAccuracy`
+        (SECONDARY ``balanced_accuracy``, the class-balanced accuracy the WiSig paper reports).
+        The ``open_set`` track -> :class:`OpenSetMetric` (``auroc`` + ``eer``). The two families
+        are kept strictly separate so a closed-set row never carries open-set scalars and
         vice-versa.
         """
         if self._track in _OPEN_SET_TRACKS:
             return [OpenSetMetric()]
-        return [Rank1Accuracy()]
+        return [Rank1Accuracy(), BalancedAccuracy()]
 
     def default_split(self) -> SplitName:
         """Return the partition scored by default (``"test"``).

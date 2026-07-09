@@ -22,7 +22,14 @@ from rfbench.core.evaluate import _resolve_schema_path, evaluate
 from rfbench.core.model import Model, Regime, RegimeSpec
 from rfbench.core.registry import TASKS, get_task
 from rfbench.core.types import Batch, SplitName, Tensor, Track
-from rfbench.tasks.sei import SEI_TRACKS, OpenSetMetric, Rank1Accuracy, SeiDataset, SeiTask
+from rfbench.tasks.sei import (
+    SEI_TRACKS,
+    BalancedAccuracy,
+    OpenSetMetric,
+    Rank1Accuracy,
+    SeiDataset,
+    SeiTask,
+)
 from rfbench.tasks.sei.metrics import auroc, eer
 
 
@@ -74,10 +81,12 @@ def test_each_track_binds_its_canonical_split_id(track: Track, expected_split_id
 
 
 def test_closed_and_open_set_metrics_are_separate() -> None:
-    """Closed-set tracks emit rank-1; the open-set track emits AUROC+EER -- never mixed."""
+    """Closed-set tracks emit rank-1 (primary) + balanced accuracy; open-set emits AUROC+EER."""
     closed_metrics = SeiTask("closed_set").metrics()
-    assert [m.primary_key for m in closed_metrics] == ["rank1_accuracy"]
+    # rank1_accuracy is the PRIMARY (first) ranking metric; balanced_accuracy is the secondary.
+    assert [m.primary_key for m in closed_metrics] == ["rank1_accuracy", "balanced_accuracy"]
     assert isinstance(closed_metrics[0], Rank1Accuracy)
+    assert isinstance(closed_metrics[1], BalancedAccuracy)
 
     open_metrics = SeiTask("open_set").metrics()
     assert [m.primary_key for m in open_metrics] == ["auroc"]
@@ -460,3 +469,42 @@ def test_wisig_flatten_labels_map_to_dense_class_indices() -> None:
     labels = [class_of[_tx_key(rec[0])] for rec in records]
     assert set(labels) == {0, 1}  # two transmitters -> dense {0, 1}
     assert class_of[_tx_key("tx-a")] == 0 and class_of[_tx_key("tx-b")] == 1
+
+
+# --------------------------------------------------------------------------------------------------
+# BalancedAccuracy (SEI closed-set SECONDARY metric) -- pure stdlib
+# --------------------------------------------------------------------------------------------------
+
+
+def test_balanced_accuracy_equals_mean_per_class_recall() -> None:
+    """balanced_accuracy is the unweighted mean of per-class recalls, not overall accuracy."""
+    metric = BalancedAccuracy()
+    # class 0: 3 samples, 2 correct (recall 2/3); class 1: 1 sample, 0 correct (recall 0).
+    metric.update(pred=[0, 0, 1, 2], target=[0, 0, 0, 1])
+    # overall accuracy would be 2/4 = 0.5; balanced = mean(2/3, 0) = 1/3.
+    assert metric.compute()["balanced_accuracy"] == pytest.approx(1 / 3)
+
+
+def test_balanced_accuracy_argmaxes_score_rows() -> None:
+    """Per-class score rows are argmaxed (like rank-1), then averaged per class."""
+    metric = BalancedAccuracy()
+    metric.update(pred=[[0.1, 0.9], [0.8, 0.2]], target=[1, 0])  # both correct, 2 classes
+    assert metric.compute()["balanced_accuracy"] == pytest.approx(1.0)
+
+
+def test_balanced_accuracy_empty_stream_is_zero() -> None:
+    """An empty stream degrades to 0.0 (never divides by zero)."""
+    assert BalancedAccuracy().compute()["balanced_accuracy"] == 0.0
+
+
+def test_balanced_and_rank1_diverge_on_imbalance() -> None:
+    """On an imbalanced stream, balanced accuracy down-weights the majority class vs rank-1."""
+    rank1 = Rank1Accuracy()
+    balanced = BalancedAccuracy()
+    # 8 majority-class samples all correct, 2 minority all wrong.
+    preds = [0] * 8 + [0, 0]
+    targets = [0] * 8 + [1, 1]
+    rank1.update(pred=preds, target=targets)
+    balanced.update(pred=preds, target=targets)
+    assert rank1.compute()["rank1_accuracy"] == pytest.approx(0.8)  # 8/10
+    assert balanced.compute()["balanced_accuracy"] == pytest.approx(0.5)  # mean(1.0, 0.0)

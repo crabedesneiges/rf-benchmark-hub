@@ -72,6 +72,55 @@ class Rank1Accuracy(Metric):
         return {"rank1_accuracy": accuracy}
 
 
+class BalancedAccuracy(Metric):
+    """Closed-set balanced accuracy -- the SEI SECONDARY metric (WiSig parity).
+
+    The unweighted mean of the per-class rank-1 recalls: for each ground-truth transmitter
+    class present in the stream, the fraction of its probes classified correctly, averaged
+    with equal weight across classes. This is the class-balanced counterpart of
+    :class:`Rank1Accuracy` -- on an imbalanced closed set (WiSig ManyTx is built with
+    ``p=0.9``) it down-weights over-represented emitters, matching the balanced accuracy the
+    WiSig paper reports (``docs/EVALUATION_PROTOCOL.md`` SEI). Reported ALONGSIDE
+    ``rank1_accuracy`` (never as the primary/ranking key). ``pred`` accepts either argmaxed
+    ids or per-class score rows (argmaxed here); pure stdlib, no numpy.
+    """
+
+    name = "balanced_accuracy"
+    primary_key = "balanced_accuracy"
+
+    def __init__(self) -> None:
+        """Start with empty per-class correct/total accumulators."""
+        self._correct: dict[object, int] = {}
+        self._total: dict[object, int] = {}
+
+    def reset(self) -> None:
+        """Clear the per-class correct/total counts."""
+        self._correct = {}
+        self._total = {}
+
+    def update(
+        self,
+        pred: Tensor,
+        target: Tensor,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        """Accumulate one batch of predicted vs ground-truth transmitter ids, keyed by class."""
+        for predicted, expected in zip(pred, target, strict=True):
+            self._total[expected] = self._total.get(expected, 0) + 1
+            if _as_label(predicted) == expected:
+                self._correct[expected] = self._correct.get(expected, 0) + 1
+
+    def compute(self) -> dict[str, float | list[dict[str, float]]]:
+        """Return ``{"balanced_accuracy": mean_c(correct_c / total_c)}`` (0.0 on empty)."""
+        if not self._total:
+            return {"balanced_accuracy": 0.0}
+        per_class = [
+            self._correct.get(cls, 0) / total for cls, total in self._total.items() if total
+        ]
+        balanced = sum(per_class) / len(per_class) if per_class else 0.0
+        return {"balanced_accuracy": balanced}
+
+
 class OpenSetMetric(Metric):
     """Open-set verification metric: AUROC + EER over match scores (never conflated).
 
@@ -246,4 +295,4 @@ def _interpolate_eer(far0: float, frr0: float, far1: float, frr1: float) -> floa
     return far0 + fraction * (far1 - far0)
 
 
-__all__ = ["Rank1Accuracy", "OpenSetMetric", "auroc", "eer"]
+__all__ = ["Rank1Accuracy", "BalancedAccuracy", "OpenSetMetric", "auroc", "eer"]

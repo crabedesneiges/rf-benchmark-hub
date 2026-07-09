@@ -33,12 +33,16 @@ et committé sur `claude/ecstatic-torvalds-a6ced8`.
   (`docs/EVALUATION_PROTOCOL.md` : track canonique `all_snr`, plage SNR complète, pas de
   cherry-picking). Tests : workaround `task.name='amc'` retiré + test end-to-end de rendu de page.
 
-### Added — J3 (partiel) : sécurisation des 9 `result.json` SEI
+### Added — J3 : colonne SEI mergée sur la branche d'intégration + 9 lignes de board
 
-Sur la branche `feat/sei-complete` : commit des 9 lignes de board SEI post-fix Keras-fidelity
-(`wisig_cnn_paper`/`complex_cnn`/`resnet1d_sei` × closed_set/cross_receiver/cross_day, validées 9/9),
-jusque-là untracked. Le merge de la branche vers l'intégration et la piste open-set restent à
-trancher.
+`feat/sei-complete` mergée dans `claude/ecstatic-torvalds-a6ced8` (merge `--no-ff`, 2 conflits docs
+résolus : CHANGELOG + BIBLIOGRAPHY ; 36 fichiers auto-mergés). Apporte l'implémentation SEI
+paper-faithful (voir l'entrée « SEI benchmark column » ci-dessous) ET les **9 lignes de board**
+post-fix Keras-fidelity (`wisig_cnn_paper`/`complex_cnn`/`resnet1d_sei` × closed_set/cross_receiver/
+cross_day, validées 9/9 contre le schéma). Les splits WiSig sont byte-identiques entre les deux
+branches (même `split_checksum`), donc les résultats attestent bien les splits d'intégration.
+Reste ouvert : la **piste open-set WiSig** (mentionnée au plan, aucun track `open_set` implémenté)
+et la re-vérification cluster officielle.
 
 ### Added — Phase 0 quality hardening: schema 1.2.0, protocol lock-in, bootstrap CI, repro ops
 
@@ -282,6 +286,65 @@ was done in the main loop and is flagged as such.
   clean on all 15 generated pages; the homepage filter JS reads attributes the HTML actually
   renders (`data-status`/`data-filter` sets match); `docs/BIBLIOGRAPHY.md` "Our score" already
   current (61.71/58.05/56.61); no stale "no runtime JS/CDN" doc claims remain.
+
+### Added — SEI benchmark column: paper-faithful WiSig 2-D CNN, ORACLE + SOTA baselines, POWDER track
+
+The SEI task and WiSig loader existed but the board had **no SEI rows** (fabricated lines removed,
+`a689e86`) and the only model, `wisig_cnn`, was a compact 1-D CNN that does **not** reproduce the
+paper. This lands the real SEI column. Preceded by a verbatim-code Phase-0 audit (the official WiSig
+`master` branch, both FM papers, and the SOTA literature) — the REPO/primary source is authoritative,
+and several `docs/BIBLIOGRAPHY.md` claims were **corrected** (below).
+
+- **`wisig_cnn_paper` — byte-faithful WiSig ManyTx 2-D CNN** (`rfbench/models/baselines/wisig_cnn_paper.py`).
+  Reconstructs `create_net` in `py/d006_ManyTx_ntx.py` exactly: `(256,2)`→`Reshape(256,2,1)`→conv
+  8/16/16/32/16, kernels (3,2)×3 then (3,1)×2 `same`+ReLU, **only 4 max-pools** (the 5th conv is
+  **unpooled**) →Flatten(256)→Dense(100)→Dense(80)→Dropout(0.5)→Dense(N). Keras **`same`** padding
+  reproduced with the trailing-edge asymmetry (torch's `'same'` pads the leading edge); **L2 λ=1e-4 on
+  the three Dense kernels ONLY** (via `l2_penalty()`, added to the loss — Keras-exact, not coupled
+  `weight_decay`); per-signal **unit-average-power** normalisation folded into the model (scale-invariant
+  logits, unit-tested). The compact 1-D `wisig_cnn` stays as a documented board-seeding variant.
+- **`oracle_cnn`** (Sankhe et al. INFOCOM 2019, arXiv:1812.01124): Conv 50@(1×7) + Conv 50@(2×7) + FC
+  256/80 + softmax, `2×128` raw IQ, Adam 1e-4, dropout 0.5, L2 1e-4, patience 10. (Default per-signal
+  input norm on; the paper's exact scaling is under-specified — `input_norm=False` ablation provided.)
+- **SOTA-leaning baselines (screened, 2 retained):** **`complex_cnn`** — faithful
+  `network_20_modrelu_short` (Gopalakrishnan/Cekic/Madhow GLOBECOM 2019, arXiv:1905.09388; MIT repo
+  `metehancekic/wireless-fingerprinting`): complex-multiply `ComplexConv1d` + Trabelsi **modReLU** →
+  magnitude → GAP → Dense, the biggest inductive-bias contrast (phase-coupled) to the real-valued CNNs;
+  and **`resnet1d_sei`** — a ResNet-18-1D over raw IQ (Jian et al. IoT-Mag 2020; He et al. 2016), the
+  depth axis. Both raw-IQ, reproducible, registered + CLI-reachable. (Deferred with rationale:
+  Al-Shawabka 2020 is a channel *study* not a packaged model; triplet/contrastive works lack runnable
+  public code on WiSig/ORACLE — see `docs/BIBLIOGRAPHY.md` C.2.)
+- **`balanced_accuracy` secondary metric** (mean per-class recall, pure-stdlib) alongside primary
+  `rank1_accuracy` on the SEI closed-set tracks — the class-balanced accuracy the WiSig paper reports for
+  the imbalanced ManyTx set. Additive (does not change the ranking key); no schema bump.
+- **Dedicated SEI training loop** `rfbench/training_sei.py` (the shared AMC `rfbench/training.py` is
+  **UNTOUCHED**, per constraint): class-weighted CE reproducing Keras' `class_weight=max(count)/count`
+  semantics exactly (`Σ w·CE / N`), explicit L2 via the model's `l2_penalty()`, best checkpoint + early
+  stop on **val_loss** (WiSig recipe, not the AMC loop's val-accuracy), and the SEI `(window,2)`
+  time-major layout. A `rfbench sei-train --track {closed_set,cross_receiver,cross_day}` CLI subcommand
+  threads the track into `evaluate` so the three conditions are scored as **SEPARATE** rows; a fixed
+  `_InMemorySplit.__getitem__` makes the split map-style so the DataLoader works (also fixes the cluster
+  path). Baselines added to the CLI `_MODEL_MODULES` dispatch (eval-reachable).
+- **POWDER track (FM-comparable, download-blocked).** Identified the exact dataset both FM SEI evaluators
+  use — **POWDER RF Fingerprinting** (Reus-Muns et al., *IEEE GLOBECOM 2020*; 4-BS WiFi), NOT
+  Gaskin/Tractor. `rfbench/data/download/sei_powder.py` (+ `prepare`/loader/task wiring): the DRS record
+  is public **without** POWDER/Emulab credentials (Handle `2047/D20385049` → `neu:gm80mp276`) but the host
+  **anti-scrapes** programmatic clients (HTTP 403, not defeated by a browser UA), so the downloader raises
+  a precise **manual-download** procedure and the split (`closed_set`, 256-frame, stratified by device) is
+  built only once the SigMF captures are placed under `$RFBENCH_CACHE/powder/`. Indices/checksums only,
+  never raw IQ (D3). FM references kept regime-separated (linear-probe 90.5/83.4 vs LoRA 96.05).
+- **BIBLIOGRAPHY corrections (REPO is truth).** §A.3 WiSig: **L2 is on the 3 Dense layers only** (not
+  conv); there are **4 pools** (5th conv unpooled); best weights via `ModelCheckpoint`+`load_weights` (no
+  `restore_best_weights`); DOI is **10.1109/ACCESS.2022.3154790**; code repo is **BSD-3** (dataset CC
+  BY-NC-SA); and the **99%→<33% cross-rx headline is a ManyRx/equalized/single-day experiment, NOT
+  ManyTx** (which pools all rx/days for ~53%/~80%). §A.5 gains the POWDER FM SEI numbers; §B.4 rewritten as
+  a per-baseline reproduction audit; §C.2 items marked done.
+- **Tests** (all torch-gated tests SKIP cleanly in the dep-free venv; validated on CPU torch locally):
+  `test_wisig_cnn_paper.py` (flatten-dim=256, L2-on-Dense-only, scale invariance), `test_oracle_cnn.py`,
+  `test_complex_cnn.py` (ComplexConv1d complex-multiply + modReLU phase/threshold), `test_resnet1d_sei.py`,
+  `test_training_sei.py` (end-to-end learns + emits a schema-valid track-tagged result; class-weight math;
+  regime guard), plus POWDER prepare + `balanced_accuracy` dep-free tests. `ruff`/`black`/`mypy` green;
+  dep-free `pytest -q` green. **Cluster runs pending** (WiSig `ManyTx.pkl` present; `slurm/train_sei_arm.sh`).
 
 ### Fixed — LWM-Spectro FM wrapper made faithful to the real weights (WP-62 verification)
 

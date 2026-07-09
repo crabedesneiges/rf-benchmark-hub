@@ -270,6 +270,75 @@ def test_open_set_metric_reduces_per_class_rows() -> None:
     assert computed["eer"] == pytest.approx(0.0)
 
 
+def test_open_set_evaluate_end_to_end_emits_schema_valid_row() -> None:
+    """Full open-set chain: genuine flags -> forward rows -> MSP -> bootstrap -> result.json.
+
+    Exercises the exact path the cluster runs (evaluate over the open_set track), on a tiny
+    synthetic in-memory dataset with a dummy model. This is the coverage that was missing when
+    three GPU round-trips were needed to surface the ``.item()`` and bootstrap-reduction bugs:
+    it runs the real ``evaluate`` + ``OpenSetMetric`` + percentile bootstrap and validates the
+    emitted row against ``result.schema.json`` -- no torch, no GPU.
+    """
+    from rfbench.core.evaluate import evaluate
+
+    n_classes = 4
+
+    class _DummySei(Model):
+        name = "dummy_sei"
+        family = "baseline"
+
+        def forward(self, x: Tensor) -> Tensor:
+            # Genuine probe -> a sharp peak on its class (high MSP); impostor -> near-uniform (low).
+            rows = []
+            for genuine, cls in x["iq"]:
+                if genuine == 1:
+                    rows.append([9.0 if i == cls else 0.1 for i in range(n_classes)])
+                else:
+                    rows.append([0.4, 0.3, 0.2, 0.1])
+            return rows
+
+        def embed(self, x: Tensor) -> Tensor:  # pragma: no cover - not exercised
+            raise NotImplementedError
+
+        @property
+        def n_params(self) -> int:
+            return 0
+
+    def _s(genuine: int, cls: int) -> dict[str, Any]:
+        return {"iq": (genuine, cls), "genuine": genuine, "label": cls if genuine else -1}
+
+    test = [_s(1, c) for c in range(n_classes) for _ in range(2)] + [_s(0, -1) for _ in range(6)]
+    gallery = [_s(1, c) for c in range(n_classes)]
+    dataset = SeiDataset(
+        "wisig", track="open_set", samples={"train": gallery, "val": gallery, "test": test}
+    )
+    task = SeiTask("open_set")
+    task.datasets = lambda: [dataset]  # type: ignore[method-assign]
+
+    result = evaluate(
+        _DummySei(),
+        task,
+        "test",
+        RegimeSpec(Regime.FROM_SCRATCH),
+        dataset="wisig",
+        track="open_set",
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=100,
+    )
+
+    assert result["split"]["track"] == "open_set"
+    assert result["metrics"]["primary"] == "auroc"
+    values = result["metrics"]["values"]
+    assert values["auroc"] == pytest.approx(1.0)  # dummy model perfectly separates genuine/impostor
+    assert values["eer"] == pytest.approx(0.0)
+    assert set(result["metrics"].get("uncertainty", {})) == {"auroc", "eer"}  # bootstrap ran
+
+    schema = json.loads(_resolve_schema_path("result.schema.json").read_text(encoding="utf-8"))
+    from jsonschema import Draft202012Validator
+
+    Draft202012Validator(schema).validate(result)  # raises if the emitted open_set row is invalid
+
+
 def test_prepare_predictions_reduces_rows_once_for_bootstrap() -> None:
     """``prepare_predictions`` maps per-class rows to scalar MSP scores that ``update`` accepts.
 

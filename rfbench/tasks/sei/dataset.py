@@ -35,13 +35,14 @@ from rfbench.data.prepare.sei import CANONICAL_SPLIT_IDS, SeiRecord
 if TYPE_CHECKING:  # pragma: no cover - typing-only import, never executed at runtime
     import torch.utils.data
 
-#: The SEI conditions/tracks this adapter serves. ``open_set`` reuses the ``closed_set``
-#: canonical split id (same emitters/captures) but is scored with the open-set metrics.
+#: The SEI conditions/tracks this adapter serves. ``open_set`` has its OWN canonical split
+#: (whole transmitters held out as novel/impostor identities) and is scored with the open-set
+#: metrics; the closed-set conditions map to their own stratified/grouped split ids.
 _TRACK_TO_CONDITION: dict[Track, str] = {
     "closed_set": "closed_set",
     "cross_receiver": "cross_receiver",
     "cross_day": "cross_day",
-    "open_set": "closed_set",
+    "open_set": "open_set",
 }
 
 #: Placeholder checksum for the in-memory synthetic adapter (schema pattern
@@ -165,8 +166,15 @@ class SeiDataset(Dataset):
         index via a deterministic (sorted-id) map, consistent across train/val/test loads
         exactly like the AMC on-disk adapter.
         """
-        indices = self._read_split_indices(split)
         iq_all, records = _load_sei_arrays(self.name)
+        if self._track == "open_set":
+            # Open-set: derive the gallery (KNOWN tx = those in the train partition) and tag
+            # each probe genuine (in-gallery) vs impostor (novel/held-out) -- see
+            # rfbench.data.prepare.sei._prepare_open_set. The class map spans known tx only.
+            train_indices = self._read_split_indices("train")
+            split_indices = self._read_split_indices(split)
+            return _InMemorySplit(open_set_samples(iq_all, records, split_indices, train_indices))
+        indices = self._read_split_indices(split)
         tx_ids = sorted({_tx_key(rec[0]) for rec in records})
         class_of = {tx: i for i, tx in enumerate(tx_ids)}
         samples: list[Batch] = [
@@ -218,6 +226,39 @@ def _tx_key(tx_id: object) -> tuple[int, str]:
     if isinstance(tx_id, str):
         return (0, tx_id)
     return (1, f"{tx_id!r}")
+
+
+def open_set_samples(
+    iq_all: Sequence[Any],
+    records: Sequence[SeiRecord],
+    split_indices: Sequence[int],
+    train_indices: Sequence[int],
+) -> list[Batch]:
+    """Materialise open-set probes with a genuine/impostor flag (pure Python, unit-tested).
+
+    The gallery is the set of KNOWN transmitters -- those present in the open-set split's
+    ``train`` partition. Each probe in ``split_indices`` becomes a canonical batch carrying
+    ``genuine == 1`` if its transmitter is in the gallery (in-gallery probe) or ``0`` if it
+    is a held-out novel identity (impostor). ``label`` is the dense gallery-class index for a
+    known tx (over the sorted known set, consistent with what the model was trained on) and
+    ``-1`` for an impostor (unused by :class:`~rfbench.tasks.sei.metrics.OpenSetMetric`, which
+    reads only the score and the genuine flag). No numpy: ``iq_all`` rows are passed through
+    verbatim, so this runs on stdlib fixtures.
+    """
+    known = {_tx_key(records[i][0]) for i in train_indices}
+    class_of = {tx: index for index, tx in enumerate(sorted(known))}
+    samples: list[Batch] = []
+    for i in split_indices:
+        tx = _tx_key(records[i][0])
+        samples.append(
+            {
+                "iq": iq_all[i],
+                "label": class_of.get(tx, -1),
+                "genuine": 1 if tx in known else 0,
+                "meta": {"rx": records[i][1], "day": records[i][2]},
+            }
+        )
+    return samples
 
 
 def _load_sei_arrays(
@@ -432,4 +473,4 @@ def _require_seq(dataset: Mapping[str, Any], key: str) -> Sequence[Any]:  # prag
     return value
 
 
-__all__ = ["SeiDataset"]
+__all__ = ["SeiDataset", "open_set_samples"]

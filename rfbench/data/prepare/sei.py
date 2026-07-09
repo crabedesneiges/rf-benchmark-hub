@@ -48,7 +48,12 @@ from rfbench.data.prepare._common import (
 SeiDataset = Literal["wisig", "oracle", "lora", "powder"]
 
 #: The SEI split conditions, reported separately (``docs/EVALUATION_PROTOCOL.md`` §SEI).
-SeiCondition = Literal["closed_set", "cross_receiver", "cross_day"]
+SeiCondition = Literal["closed_set", "cross_receiver", "cross_day", "open_set"]
+
+#: Fraction of distinct transmitters kept as the KNOWN gallery in the open-set split; the
+#: rest are held out as novel/impostor identities (never seen in train/val). Changing it is
+#: a breaking change -> bump the task version.
+_OPEN_SET_KNOWN_FRACTION = 0.8
 
 #: A per-item SEI record: ``(transmitter_id, receiver_id, day_id)``. ``rx_id`` / ``day_id``
 #: may be omitted (``None``) for datasets/conditions that do not carry them, but the
@@ -62,6 +67,7 @@ CANONICAL_SPLIT_IDS: dict[str, dict[str, str]] = {
         "closed_set": "sei-wisig-closedset-strat-tx-8010-seed42-v1",
         "cross_receiver": "sei-wisig-crossrx-grouped-8010-seed42-v1",
         "cross_day": "sei-wisig-crossday-grouped-8010-seed42-v1",
+        "open_set": "sei-wisig-openset-heldouttx-8010-seed42-v1",
     },
     "oracle": {
         "closed_set": "sei-oracle-closedset-strat-tx-8010-seed42-v1",
@@ -86,7 +92,7 @@ SOURCE_URLS: dict[str, str] = {
 #: POWDER (4 BS, one fixed receiver) is closed-set only -- like the two FM SEI evaluators
 #: (WirelessJEPA, IQFM), which pool the two capture days into a single closed-set task.
 _CONDITIONS: dict[str, tuple[str, ...]] = {
-    "wisig": ("closed_set", "cross_receiver", "cross_day"),
+    "wisig": ("closed_set", "cross_receiver", "cross_day", "open_set"),
     "oracle": ("closed_set",),
     "lora": ("closed_set",),
     "powder": ("closed_set",),
@@ -143,6 +149,16 @@ def prepare_sei(
 
     if condition == "closed_set":
         return _prepare_closed_set(
+            dataset=dataset,
+            split_id=split_id,
+            source_url=source_url,
+            out_dir=out_dir,
+            records=records,
+            source_checksums=source_checksums,
+            seed=seed,
+        )
+    if condition == "open_set":
+        return _prepare_open_set(
             dataset=dataset,
             split_id=split_id,
             source_url=source_url,
@@ -209,6 +225,97 @@ def _prepare_grouped(
         )
 
     official = _partition_by_group(groups, seed=seed)
+    return prepare_from_official(
+        dataset=dataset,
+        split_id=split_id,
+        official=official,
+        source_url=source_url,
+        out_dir=out_dir,
+        source_checksums=source_checksums,
+        seed=seed,
+    )
+
+
+def partition_known_unknown_tx(
+    tx_ids: Sequence[object],
+    *,
+    seed: int,
+    known_fraction: float = _OPEN_SET_KNOWN_FRACTION,
+) -> tuple[set[tuple[int, str]], set[tuple[int, str]]]:
+    """Split the distinct transmitters into a KNOWN gallery and UNKNOWN (impostor) set.
+
+    The distinct transmitter ids (normalised via :func:`_norm_group` for a type-agnostic
+    deterministic order) are shuffled with a fixed ``seed`` and partitioned so the first
+    ``round(known_fraction * n)`` are the known gallery and the rest are held-out novel
+    identities. Guarantees at least one known AND one unknown transmitter (needs >= 2
+    distinct tx). Returns ``(known_keys, unknown_keys)`` as sets of ``_norm_group`` keys,
+    so callers classify a record's tx via ``_norm_group(tx) in known``. Pure stdlib.
+    """
+    import random
+
+    unique = sorted({_norm_group(t) for t in tx_ids})
+    n = len(unique)
+    if n < 2:
+        raise ValueError(f"open-set needs >= 2 distinct transmitters to hold one out; got {n}")
+    rng = random.Random(seed)
+    shuffled = list(unique)
+    rng.shuffle(shuffled)
+    n_known = max(1, min(n - 1, round(known_fraction * n)))
+    return set(shuffled[:n_known]), set(shuffled[n_known:])
+
+
+def _prepare_open_set(
+    *,
+    dataset: str,
+    split_id: str,
+    source_url: str,
+    out_dir: str | Path,
+    records: Sequence[SeiRecord],
+    source_checksums: Mapping[str, str] | None,
+    seed: int,
+) -> tuple[SplitManifest, DatasetManifest]:
+    """Open-set verification split: hold out whole transmitters as novel/impostor identities.
+
+    Partitions the transmitters into a KNOWN gallery (~80%) and UNKNOWN impostors (~20%,
+    :func:`partition_known_unknown_tx`), then:
+
+    * ``train`` / ``val`` = the known transmitters' train/val samples (an 80/10/10 split
+      **stratified by transmitter** over the known records only), so the model is fit as a
+      ``|known|``-class identifier that never sees an impostor;
+    * ``test`` = the known transmitters' test samples (**genuine** probes) PLUS **every**
+      impostor sample (**novel** probes). Genuine/impostor is not stored in the split file:
+      the dataset derives it as ``tx in {transmitters present in train}`` (the gallery), so
+      the split stays a plain ``{train, val, test}`` index partition.
+
+    The open-set score is the model's max-softmax probability and AUROC/EER separate genuine
+    from impostor (``docs/EVALUATION_PROTOCOL.md`` §SEI open-set). Runs on pure-stdlib record
+    tuples (no numpy), like the sibling conditions.
+    """
+    from rfbench.core.splits import make_split
+
+    tx_ids = [rec[0] for rec in records]
+    known, _unknown = partition_known_unknown_tx(tx_ids, seed=seed)
+
+    known_global = [i for i, tx in enumerate(tx_ids) if _norm_group(tx) in known]
+    unknown_global = [i for i, tx in enumerate(tx_ids) if _norm_group(tx) not in known]
+
+    # Stratify the known records by transmitter into train/val/test (dense int codes so
+    # make_split's canonical stratified partition applies); map subset indices back to global.
+    known_keys = sorted({_norm_group(tx_ids[i]) for i in known_global})
+    code_of = {key: code for code, key in enumerate(known_keys)}
+    stratify = [code_of[_norm_group(tx_ids[i])] for i in known_global]
+    sub = make_split(
+        len(known_global),
+        seed=seed,
+        stratify=stratify,
+        split_id=f"{split_id}-knownsub",
+        dataset=dataset,
+    )
+    official = {
+        "train": [known_global[j] for j in sub.indices["train"]],
+        "val": [known_global[j] for j in sub.indices["val"]],
+        "test": [known_global[j] for j in sub.indices["test"]] + unknown_global,
+    }
     return prepare_from_official(
         dataset=dataset,
         split_id=split_id,
@@ -630,6 +737,7 @@ __all__ = [
     "CANONICAL_SPLIT_IDS",
     "SOURCE_URLS",
     "prepare_sei",
+    "partition_known_unknown_tx",
     "load_wisig_records",
     "extract_wisig_records",
     "load_oracle_records",

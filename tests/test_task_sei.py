@@ -30,7 +30,8 @@ from rfbench.tasks.sei import (
     SeiDataset,
     SeiTask,
 )
-from rfbench.tasks.sei.metrics import auroc, eer
+from rfbench.tasks.sei.dataset import open_set_samples
+from rfbench.tasks.sei.metrics import auroc, eer, match_score
 
 
 # --------------------------------------------------------------------------------------------------
@@ -71,7 +72,7 @@ def test_default_track_canonical_split_id_is_closed_set() -> None:
         ("closed_set", "sei-wisig-closedset-strat-tx-8010-seed42-v1"),
         ("cross_receiver", "sei-wisig-crossrx-grouped-8010-seed42-v1"),
         ("cross_day", "sei-wisig-crossday-grouped-8010-seed42-v1"),
-        ("open_set", "sei-wisig-closedset-strat-tx-8010-seed42-v1"),
+        ("open_set", "sei-wisig-openset-heldouttx-8010-seed42-v1"),
     ],
 )
 def test_each_track_binds_its_canonical_split_id(track: Track, expected_split_id: str) -> None:
@@ -198,6 +199,49 @@ def test_open_set_metric_streams_scores() -> None:
     computed = metric.compute()
     assert computed["auroc"] == pytest.approx(1.0)
     assert computed["eer"] == pytest.approx(0.0)
+
+
+def test_match_score_is_max_softmax_probability() -> None:
+    """A per-class row reduces to max softmax prob; a scalar passes through verbatim."""
+    import math
+
+    row = [2.0, 1.0, 0.0]
+    denom = math.exp(0.0) + math.exp(-1.0) + math.exp(-2.0)  # shifted by the peak (2.0)
+    assert match_score(row) == pytest.approx(1.0 / denom)
+    # A confident (peaked) row scores higher than a flat one -> good genuine/impostor separation.
+    assert match_score([10.0, 0.0, 0.0]) > match_score([0.1, 0.0, -0.1])
+    # A flat row over C classes tends to 1/C (max softmax of a uniform row).
+    assert match_score([0.0, 0.0, 0.0, 0.0]) == pytest.approx(0.25)
+    # A scalar (already a match score) is returned unchanged.
+    assert match_score(0.73) == pytest.approx(0.73)
+
+
+def test_open_set_metric_reduces_per_class_rows() -> None:
+    """Fed raw forward rows, the metric reduces each to MSP: peaked=genuine, flat=impostor."""
+    metric = OpenSetMetric()
+    metric.reset()
+    # Genuine probes peak hard on one class (high MSP); impostors are near-uniform (low MSP).
+    metric.update([[8.0, 0.0, 0.0], [7.0, 0.5, 0.5]], [1, 1])
+    metric.update([[0.1, 0.0, -0.1], [0.0, 0.1, 0.0]], [0, 0])
+    computed = metric.compute()
+    assert computed["auroc"] == pytest.approx(1.0)  # perfectly separated by MSP
+    assert computed["eer"] == pytest.approx(0.0)
+
+
+def test_open_set_samples_flags_genuine_and_impostor() -> None:
+    """``open_set_samples`` tags in-gallery probes genuine (1) and held-out tx impostor (0)."""
+    # records: (tx, rx, day); train defines the gallery = {tx 1, 2}. tx 3 is a held-out impostor.
+    records = [(1, 0, 0), (2, 0, 0), (1, 0, 0), (3, 0, 0), (2, 0, 0), (3, 0, 0)]
+    iq = [f"iq{i}" for i in range(len(records))]  # opaque per-sample payloads
+    train_indices = [0, 1]  # tx 1 and 2 -> the known gallery
+    test_indices = [2, 3, 4, 5]  # tx 1 (genuine), 3 (impostor), 2 (genuine), 3 (impostor)
+
+    samples = open_set_samples(iq, records, test_indices, train_indices)
+    assert [s["genuine"] for s in samples] == [1, 0, 1, 0]
+    # Known-tx probes carry a valid gallery-class index; impostors get the -1 sentinel.
+    assert samples[0]["label"] in (0, 1) and samples[2]["label"] in (0, 1)
+    assert samples[1]["label"] == -1 and samples[3]["label"] == -1
+    assert [s["iq"] for s in samples] == ["iq2", "iq3", "iq4", "iq5"]
 
 
 def test_open_set_metric_rejects_non_binary_label() -> None:

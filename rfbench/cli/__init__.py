@@ -949,9 +949,11 @@ def _cmd_train(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------------------------------
 # `sei-train` handler (track-aware SEI from-scratch training, dedicated recipe)
 # --------------------------------------------------------------------------------------------------
-#: SEI tracks reachable from `sei-train` (closed-set identification conditions -- open_set is a
-#: verification protocol scored differently and not trained here).
-_SEI_TRAIN_TRACKS: tuple[str, ...] = ("closed_set", "cross_receiver", "cross_day")
+#: SEI tracks reachable from `sei-train`. The three closed-set identification conditions plus
+#: `open_set`: the model is still fit as a `|known|`-class identifier (CE on the gallery train
+#: split), but the FINAL score is the open-set AUROC/EER (max-softmax genuine-vs-impostor) that
+#: `evaluate` computes for the open_set track -- no separate training recipe needed.
+_SEI_TRAIN_TRACKS: tuple[str, ...] = ("closed_set", "cross_receiver", "cross_day", "open_set")
 
 
 def _cmd_sei_train(args: argparse.Namespace) -> int:
@@ -1602,7 +1604,8 @@ def _build_sei_train_parser(
         "--track",
         default="closed_set",
         choices=_SEI_TRAIN_TRACKS,
-        help="Closed-set condition, scored as its own row (default: closed_set).",
+        help="SEI condition, scored as its own row: closed_set / cross_receiver / cross_day "
+        "(rank-1) or open_set (AUROC/EER). Default: closed_set.",
     )
     st.add_argument(
         "--regime",

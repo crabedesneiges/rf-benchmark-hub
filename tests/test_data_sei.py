@@ -33,6 +33,7 @@ from rfbench.data.prepare.sei import (
     extract_lora_records,
     extract_powder_records,
     extract_wisig_records,
+    partition_known_unknown_tx,
     prepare_sei,
 )
 
@@ -105,6 +106,54 @@ def test_prepare_sei_closed_set_stratified_by_tx(
     assert manifest.dataset == "wisig"
     assert manifest.n_items == len(records)
     assert manifest.seed == 42
+
+
+# --- open_set: whole transmitters held out as impostors -----------------------------
+
+
+def test_partition_known_unknown_tx_deterministic() -> None:
+    """~80/20 known/unknown transmitter split; deterministic, non-empty on both sides."""
+    tx_ids = list(range(10)) * 3  # 10 distinct tx, repeated
+    known, unknown = partition_known_unknown_tx(tx_ids, seed=42)
+    assert len(known) == 8 and len(unknown) == 2  # round(0.8 * 10) known
+    assert not (known & unknown) and (known | unknown)  # a clean partition of the 10 tx
+    assert (known, unknown) == partition_known_unknown_tx(tx_ids, seed=42)  # deterministic
+    # A different seed generally yields a different held-out set.
+    assert partition_known_unknown_tx(tx_ids, seed=7)[1] != unknown
+    # Fewer than 2 transmitters cannot hold one out.
+    with pytest.raises(ValueError, match="2 distinct transmitters"):
+        partition_known_unknown_tx([5, 5, 5], seed=42)
+
+
+def test_prepare_sei_open_set_holds_out_transmitters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """open_set -> train/val are known-tx only; test adds every held-out (impostor) tx."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    txs = (1, 2, 3, 4, 5)  # 5 tx -> round(0.8*5)=4 known, 1 unknown
+    records = _wisig_records(txs, rxs=(10, 11), days=(0,), per_cell=5)  # 5 tx x 10 = 50 items
+
+    split, manifest = prepare_sei("wisig", "open_set", out_dir=str(tmp_path), records=records)
+
+    tx_of = {i: records[i][0] for i in range(len(records))}
+    train_tx = {tx_of[i] for i in split.indices["train"]}
+    val_tx = {tx_of[i] for i in split.indices["val"]}
+    test_tx = {tx_of[i] for i in split.indices["test"]}
+
+    known, unknown = partition_known_unknown_tx([r[0] for r in records], seed=42)
+    assert len(train_tx) == len(known) == 4  # 4 known transmitters form the gallery
+    assert val_tx <= train_tx  # val is known-only
+    # The impostor transmitters appear ONLY in test (never in train/val), fully included.
+    impostor_tx = test_tx - train_tx
+    assert len(impostor_tx) == 1
+    impostor_count = sum(1 for i in range(len(records)) if tx_of[i] in impostor_tx)
+    assert sum(1 for i in split.indices["test"] if tx_of[i] in impostor_tx) == impostor_count == 10
+    # test also carries the known transmitters' held-out (genuine) samples.
+    assert test_tx & train_tx
+
+    _assert_partition(split.indices, len(records))
+    assert split.canonical_split_id == CANONICAL_SPLIT_IDS["wisig"]["open_set"]
+    assert manifest.n_items == len(records)
 
 
 # --- cross_receiver: grouped by receiver --------------------------------------------

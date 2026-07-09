@@ -21,6 +21,7 @@ and :meth:`compute` returns JSON-serialisable floats. The metrics implement the 
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from rfbench.core.metric import Metric
@@ -161,12 +162,15 @@ class OpenSetMetric(Metric):
     ) -> None:
         """Accumulate a batch of match scores (``pred``) with binary labels (``target``).
 
-        ``pred[i]`` is a real-valued match/confidence score (higher = more genuine) and
-        ``target[i]`` is ``1`` for a genuine/in-gallery probe or ``0`` for an
-        impostor/novel one. Labels outside ``{0, 1}`` raise :class:`ValueError`.
+        ``pred[i]`` is the model's per-class score row (as returned by ``forward``), reduced
+        to a scalar **maximum-softmax-probability** (MSP) confidence via
+        :func:`match_score` -- the standard open-set score (higher = more likely genuine).
+        A ``pred[i]`` that is already a scalar match score is used verbatim (so synthetic
+        score fixtures keep working). ``target[i]`` is ``1`` for a genuine/in-gallery probe
+        or ``0`` for an impostor/novel one. Labels outside ``{0, 1}`` raise :class:`ValueError`.
         """
-        for score, label in zip(pred, target, strict=True):
-            value = float(score)
+        for prediction, label in zip(pred, target, strict=True):
+            value = match_score(prediction)
             if label == 1:
                 self._pos.append(value)
             elif label == 0:
@@ -209,6 +213,35 @@ def _as_label(prediction: object) -> object:
             best_score = row[index]
             best_index = index
     return best_index
+
+
+def match_score(prediction: object) -> float:
+    """Reduce one prediction to a scalar open-set **match score** (higher = more genuine).
+
+    A per-class score row (a non-string sequence, i.e. the model's ``forward`` logits/scores
+    for the sample) is reduced to its **maximum softmax probability** (MSP):
+    ``max_i softmax(row)_i = 1 / Σ_j exp(row_j - max(row))``. MSP is the standard confidence
+    an open-set verifier thresholds — an in-gallery (genuine) input peaks high on one class,
+    a novel/impostor input spreads its mass and peaks lower. A ``0``-d tensor-like exposing
+    ``.item()`` or a plain scalar is treated as an already-computed match score and returned
+    verbatim (so synthetic score fixtures still work). Pure stdlib (``math.exp``), no numpy.
+    """
+    if isinstance(prediction, bool):  # avoid bool being read as a 0/1 score row
+        return float(prediction)
+    if isinstance(prediction, (int, float)):
+        return float(prediction)
+    item = getattr(prediction, "item", None)
+    if callable(item):  # 0-d tensor / numpy scalar -> its Python scalar
+        return float(item())
+    try:
+        row = [float(x) for x in prediction]  # type: ignore[union-attr]
+    except TypeError:
+        return float(prediction)  # type: ignore[arg-type]
+    if not row:
+        raise ValueError("cannot score an empty prediction row")
+    peak = max(row)
+    denom = sum(math.exp(value - peak) for value in row)
+    return 1.0 / denom  # == max(softmax(row)); denom >= 1 so the score is in (0, 1]
 
 
 def auroc(positives: list[float], negatives: list[float]) -> float:

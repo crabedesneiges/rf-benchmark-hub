@@ -82,10 +82,11 @@ DEFAULT_L2_LAMBDA = 1e-4
 def count_classes(dataset: Dataset, *, split: SplitName = "train") -> int:
     """Return the transmitter-class count = ``max(label) + 1`` over ``split`` (head width).
 
-    The SEI on-disk loader assigns dense class indices from the sorted set of transmitter ids
-    across ALL records, so every WiSig condition's ``train`` split spans the full ``0..n_tx-1``
-    label space -- ``max(label) + 1`` recovers ``n_tx`` for building the model head. Raises if
-    the split is empty.
+    The SEI on-disk loader assigns dense class indices from the sorted set of transmitter ids,
+    so the ``train`` split spans a contiguous ``0..C-1`` label space and ``max(label) + 1``
+    recovers ``C`` for building the model head. ``C`` is the full ``n_tx`` for the closed-set
+    conditions and the **gallery size** (``|known|``) for the ``open_set`` track, whose train
+    split holds only the known transmitters. Raises if the split is empty.
     """
     source = dataset.load(split, None)
     max_label = -1

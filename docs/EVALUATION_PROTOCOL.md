@@ -13,12 +13,23 @@ Any change here that alters a metric or split is a **breaking change** → bump 
 ## SEI — RF fingerprinting
 - **Datasets**: WiSig (ManyTx, 150 tx / 18 rx / 4 days, non-equalized), ORACLE (16-tx), LoRa RFFI,
   and **POWDER** (4-BS WiFi; the dataset the two FM SEI evaluators use — see the POWDER track below).
-- **Splits**: `closed_set`, **`cross_receiver`**, **`cross_day`** (WiSig) — reported separately, never
-  blended. ORACLE / POWDER are `closed_set` only (single receiver). All are deterministic 80/10/10
-  seed 42: `closed_set` stratified by transmitter; `cross_receiver` / `cross_day` **grouped** by
-  receiver / day (whole receivers/days held out → no leakage across the boundary the condition
-  guards). The **key WiSig result is the cross-receiver drop** vs closed_set; the full SNR-free
-  protocol runs every transmitter (no cherry-picking).
+- **Splits**: `closed_set`, **`cross_receiver`**, **`cross_day`**, **`open_set`** (WiSig) — reported
+  separately, never blended. ORACLE / POWDER are `closed_set` only (single receiver). The closed-set
+  conditions are deterministic 80/10/10 seed 42: `closed_set` stratified by transmitter;
+  `cross_receiver` / `cross_day` **grouped** by receiver / day (whole receivers/days held out → no
+  leakage across the boundary the condition guards). The **key WiSig result is the cross-receiver
+  drop** vs closed_set; the full SNR-free protocol runs every transmitter (no cherry-picking).
+- **Open-set split** (`sei-wisig-openset-heldouttx-8010-seed42-v1`): whole **transmitters** are held
+  out as *novel/impostor* identities. A deterministic seed-42 shuffle keeps **80% of the transmitters
+  as the known gallery** and holds out the remaining **20% as unknown**; the known transmitters'
+  captures are split 80/10/10 stratified-by-transmitter into `train`/`val`/`test`, and the scored
+  `test` partition is the known-tx **test** samples (**genuine**, in-gallery) plus **every** held-out
+  transmitter's samples (**impostor**, novel). The model is fit as a `|known|`-class identifier that
+  never sees an impostor. Genuine vs impostor is **not** stored in the split file — it is derived as
+  `transmitter ∈ {transmitters present in train}` — so the split stays a plain `{train,val,test}`
+  index partition. **Open-set score = maximum softmax probability (MSP)** over the gallery classes
+  (`rfbench.tasks.sei.metrics.match_score`); AUROC/EER separate genuine from impostor. Changing the
+  known fraction or the seed is a breaking change → bump the task version.
 - **Metrics**: closed-set → `rank1_accuracy` (**primary**, top-1 identification over the full test
   split) + `balanced_accuracy` (**secondary**, the unweighted mean of per-class recalls — the
   class-balanced accuracy the WiSig paper reports for the imbalanced ManyTx set, `p=0.9`; additive,

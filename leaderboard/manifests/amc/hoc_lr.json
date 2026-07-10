@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.1.0",
+  "result_path": "leaderboard/results/amc/hoc_lr.json",
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "code_commit": "git@edada7a4e27501fc7a81bf16f2bba56aecf5b534",
+  "command": "sbatch slurm/train_hoc_amc.sh hoc_lr  # RadioML 2016.10a, seed 42, full SNR range (CPU/defq)",
+  "artifacts": {
+    "source_only": true
+  },
+  "hardware": "1x Dalia defq node (ARM Neoverse V2, CPU-only)",
+  "expected_metrics": {
+    "accuracy_overall": 0.2629090909090909,
+    "macro_f1": 0.24991268667908376
+  },
+  "tolerance": {
+    "absolute": 0.005
+  },
+  "rerun_mode": "full_retrain"
+}

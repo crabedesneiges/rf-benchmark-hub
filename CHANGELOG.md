@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — bar charts par métrique + intervalles de confiance sur les plots
+
+Chaque **métrique scalaire** (celles sans plot 2-D — `accuracy_overall`, `macro_f1`, `rmse_db`,
+`mae_db`, `rank1_accuracy`, `auroc`, `eer`, …) a désormais un **bar chart inline-SVG** sur sa page
+tâche : **X = modèle**, **Y = performance**, barres triées best-first (ascendant pour les métriques
+lower-is-better). Quand un `result.json` porte `metrics.uncertainty[<metric>]` (schéma 1.2.0 :
+multi-seed ±1σ ou bootstrap percentile), le bar chart affiche des **barres d'erreur (whiskers)**
+couvrant `[ci_low, ci_high]` — l'incertitude est ainsi montrée directement sur le plot. Pur SVG
+stdlib (aucun JS, aucune lib de chart), à côté des courbes existantes (ex. `accuracy_vs_snr`).
+
+`leaderboard/site/generate.py` : `_render_bar_chart(metric, rows)` + `_metric_uncertainty()` +
+`_svg_line()`, câblés dans `_render_group` (un bar chart par métrique scalaire découverte). Tests :
+rendu du bar chart + whiskers d'IC, tâche scalaire-seule (bar charts mais pas de courbe).
+
 ### Added — tier `verified` (D4) : premières lignes officiellement re-vérifiées
 
 Le board a ses **3 premières lignes `verified`** (jusqu'ici 25/25 `self_reported`). Le mainteneur a

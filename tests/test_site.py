@@ -396,8 +396,8 @@ def test_curve_metric_yields_inline_svg_plot(tmp_path: Path) -> None:
     assert "<polyline" in sei_html
 
 
-def test_scalar_only_task_has_no_plot(tmp_path: Path) -> None:
-    """A task whose rows carry only scalar metrics renders its table but zero plots."""
+def test_scalar_only_task_has_bar_charts_but_no_curve(tmp_path: Path) -> None:
+    """A scalar-only task renders its table + a bar chart per metric, but no 2-D line plot."""
     results = tmp_path / "results"
     out = tmp_path / "site"
     _write(
@@ -408,10 +408,12 @@ def test_scalar_only_task_has_no_plot(tmp_path: Path) -> None:
     generate.build_site(results, out)
     sei_html = (out / "sei.html").read_text(encoding="utf-8")
 
-    # Table rendered (has the model + a primary column), and NO plot SVG at all.
+    # Table rendered, plus a per-model bar chart for the scalar metric -- but NO curve/line plot.
     assert "scalar-net" in sei_html
-    assert 'class="plot"' not in sei_html
-    assert '<div class="plots">' not in sei_html
+    assert 'class="plot barplot"' in sei_html
+    assert "rank1_accuracy by model" in sei_html
+    assert "line plot" not in sei_html
+    assert '<polyline fill="none"' not in sei_html
 
 
 def test_rows_sorted_by_primary_descending_within_group(tmp_path: Path) -> None:
@@ -1588,3 +1590,30 @@ def test_methods_page_shows_paper_refs_and_no_paper_note(tmp_path: Path) -> None
         re.S,
     )
     assert section is not None and "No published paper" in section.group(0)
+
+
+def test_scalar_metric_gets_bar_chart_with_ci_whiskers(tmp_path: Path) -> None:
+    """Each scalar metric (no 2-D curve) renders a bar chart; a row's CI -> error-bar whiskers."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    r1 = _amc_row("bar-a", "top", "from_scratch", 0.70, "self_reported")
+    r1["schema_version"] = "1.2.0"
+    r1["metrics"]["uncertainty"] = {
+        "accuracy_overall": {"ci_low": 0.68, "ci_high": 0.72, "method": "bootstrap_percentile"}
+    }
+    r2 = _amc_row("bar-b", "bot", "from_scratch", 0.55, "self_reported")
+    _write(results / "amc" / "a.json", r1)
+    _write(results / "amc" / "b.json", r2)
+    generate.build_site(results, out)
+
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+    assert 'class="plot barplot"' in amc  # a bar chart is rendered for the scalar metric
+    assert "accuracy_overall by model" in amc
+    assert 'class="errbar"' in amc  # the CI on r1 draws whisker error bars
+    assert "whiskers = confidence interval" in amc
+
+
+def test_render_bar_chart_empty_without_metric() -> None:
+    """A metric absent from every row yields no chart (no broken SVG)."""
+    rows = [_amc_row("z", "m", "from_scratch", 0.5, "self_reported")]
+    assert generate._render_bar_chart("does_not_exist", rows) == ""

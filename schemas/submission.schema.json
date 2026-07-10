@@ -20,9 +20,9 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "description": "SemVer of this submission schema. Frozen at Sprint-0.",
+      "description": "SemVer of this submission schema. 1.0.0 (Sprint-0) or 1.1.0 (adds the `artifacts.source_only` form). Additive: 1.0.0 manifests keep validating unchanged.",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
-      "const": "1.0.0"
+      "enum": ["1.0.0", "1.1.0"]
     },
     "result_path": {
       "type": "string",
@@ -88,7 +88,7 @@
     },
     "artifacts": {
       "type": "object",
-      "description": "How the maintainer obtains the runnable environment. At least one of weights_url / docker_image is REQUIRED (anyOf): the default eval_only re-run needs fetchable weights; a full_retrain of a seed baseline may provide only a pinned image.",
+      "description": "How the maintainer obtains the runnable environment. At least one of weights_url / docker_image / source_only is REQUIRED (anyOf): the default eval_only re-run needs fetchable weights; a full_retrain of a seed baseline may provide a pinned image; `source_only: true` covers a deterministic from-source baseline reproducible with no external artifact (schema 1.1.0).",
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
@@ -106,11 +106,17 @@
           "type": "string",
           "description": "Pinned, digest-addressed image that froze the eval environment (risk: fragile old stacks, e.g. MCLDNN/TF1). 'name@sha256:...' form preferred.",
           "pattern": "^[^\\s]+(@sha256:[0-9a-f]{64}|:[A-Za-z0-9_.-]+)$"
+        },
+        "source_only": {
+          "type": "boolean",
+          "const": true,
+          "description": "The result is fully reproducible FROM SOURCE alone: `code_commit` + the exact `command` + the committed canonical split indices + the pinned `uv.lock` -- with no external weights or image to fetch (the D3 from-source ethos; `rfbench data prepare` re-downloads the dataset). Use for deterministic from_scratch / full_retrain seed baselines whose re-run needs no artifact; the maintainer re-runs the command at code_commit. Added in schema 1.1.0."
         }
       },
       "anyOf": [
         {"required": ["weights_url"]},
-        {"required": ["docker_image"]}
+        {"required": ["docker_image"]},
+        {"required": ["source_only"]}
       ]
     },
     "hardware": {

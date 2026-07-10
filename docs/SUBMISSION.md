@@ -18,8 +18,17 @@ The number is yours to cite; it is marked `self_reported` on the board.
    `verified_by/date/hardware`.
 
 ## What makes a submission reproducible
-`code_commit` (`git@sha`), exact `command`, `weights_url` and/or `docker_image`, `hardware`,
-`expected_metrics`, `tolerance`. Without these, a result can only stay `self_reported`.
+`code_commit` (`git@sha`), exact `command`, an `artifacts` block, `hardware`, `expected_metrics`,
+`tolerance`. Without these, a result can only stay `self_reported`.
+
+The `artifacts` block says how the maintainer obtains the runnable environment — **one of**:
+- `weights_url` (+ `weights_checksum`) — a fetchable checkpoint, for the default *eval_only* re-run;
+- `docker_image` — a pinned, digest-addressed image (for fragile old stacks);
+- `artifacts.source_only: true` (schema **1.1.0**) — the result is fully reproducible **from source
+  alone**: `code_commit` + the exact `command` + the committed canonical split indices + the pinned
+  `uv.lock`, with no external artifact to fetch. This is the honest form for a **deterministic
+  `from_scratch` seed baseline** (e.g. `hoc_lr`, `mean_snr`): the maintainer re-runs the command at
+  `code_commit` (`rfbench data prepare` re-downloads the dataset) and matches within `tolerance`.
 
 ## Tier 3 — literature reference (never re-run by us)
 

@@ -386,3 +386,45 @@ def _load_schema(name: str) -> dict[str, Any]:
     import json
 
     return json.loads((_REPO_ROOT / "schemas" / name).read_text(encoding="utf-8"))
+
+
+def test_source_only_artifact_flips_to_verified() -> None:
+    """A schema-1.1.0 manifest with `artifacts.source_only` (no weights/image) flips to verified.
+
+    The honest artifact form for a deterministic from-source seed baseline: reproducible from
+    code_commit + the exact command + the committed splits + uv.lock, with no external artifact.
+    verify_result validates the manifest against submission.schema.json first, so a successful
+    flip proves the source_only manifest is schema-valid AND accepted by the pipeline.
+    """
+    result = _self_reported_result()
+    manifest = _complete_manifest()
+    manifest["schema_version"] = "1.1.0"
+    manifest["artifacts"] = {"source_only": True}
+
+    report = verify_result(
+        result,
+        manifest,
+        {"accuracy_overall": 0.6123, "macro_f1": 0.5987},
+        verified_by="rf-bench-maintainers",
+        verified_hardware="1x Dalia defq node (ARM Neoverse V2, CPU-only)",
+        method="full_retrain",
+    )
+    assert report.verified is True
+    assert report.result["verification"]["status"] == "verified"
+    assert report.result["verification"]["method"] == "full_retrain"
+
+
+def test_empty_artifacts_manifest_is_rejected() -> None:
+    """An artifacts block with none of weights_url/docker_image/source_only stays self_reported."""
+    result = _self_reported_result()
+    manifest = _complete_manifest()
+    manifest["artifacts"] = {}  # violates artifacts.anyOf + minProperties
+    report = verify_result(
+        result,
+        manifest,
+        {"accuracy_overall": 0.6123, "macro_f1": 0.5987},
+        verified_by="rf-bench-maintainers",
+        verified_hardware="1x Dalia defq node",
+    )
+    assert report.verified is False
+    assert any("manifest" in e for e in report.errors)

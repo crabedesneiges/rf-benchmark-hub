@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — page « Methods » : explication cliquable et fidèle à l'implémentation par méthode
+
+Chaque méthode **sans papier** du board a désormais un nom **cliquable** qui pointe vers une page
+`methods.html` expliquant son fonctionnement, générée **verbatim depuis la docstring de la classe
+du modèle** (donc fidèle à l'implémentation par construction) — les méthodes **à papier** gardent
+leur lien externe (arXiv/DOI). Les explications sont extraites par **`ast`** (aucun import de
+torch/numpy, donc le build de site reste dépendance-free), avec un lien vers le fichier source.
+
+- `leaderboard/site/generate.py` : `_extract_method_docs()` (parse `rfbench/models/**/*.py`, résout
+  `@register_model("x")` ET `@register_model(CONST)`), `render_methods_page()`, `_render_docstring()`
+  (sous-ensemble reStructuredText sûr : paragraphes, listes à puces avec continuations, `` `code` ``,
+  rôles `:class:`/`:meth:` → `<code>`, `**gras**`/`*emph*`, tout HTML-échappé), routage du nom
+  (`model.url` externe sinon `methods.html#<nom>`), onglet **Methods** dans la nav.
+- Couvre les 10 méthodes maison/reproductions (`mean_snr`, `snr_moment_ridge`, `hoc_lr`,
+  `majority_class`, `chance`, `cldnn`, `interf_cnn`, `complex_cnn`, `resnet1d_sei`, `wisig_cnn_paper`).
+- Tests : extraction, rendu docstring (puces/code/rôles, pas de fuite rst), linking end-to-end
+  (sans-papier → `methods.html#`, papier → externe).
+
 ### Added — J4 complété : premières lignes de board `snr_estimation` (baselines de régression)
 
 La tâche `snr_estimation` (livrée sans score) a désormais ses baselines seed et sa page de

@@ -47,6 +47,15 @@ torch/numpy, donc le build de site reste dépendance-free), avec un lien vers le
 - Tests : extraction, rendu docstring (puces/code/rôles, pas de fuite rst), linking end-to-end
   (sans-papier → `methods.html#`, papier → externe).
 
+Enrichissement (archi + références) : chaque entrée Methods montre la **description d'architecture**
+(la docstring **module** — qui porte la citation papier + le rationale d'archi — préposée à la class
+docstring pour un fichier à modèle unique) et une ligne **« Paper / references »** avec les liens
+**arXiv/DOI cliquables** (parsés du docstring + `result.json model.url`, dédupliqués) ; les arXiv/DOI
+sont aussi rendus cliquables **inline**. Une méthode sans papier (non-deep : `hoc_lr`, `mean_snr`,
+`snr_moment_ridge`, planchers) affiche une note explicite et sa description exhaustive. Les **8 liens
+papier ont été vérifiés** (WebFetch : titre/auteurs/venue concordent — West&O'Shea/DySPAN,
+GLOBECOM'19, WiSig Access'22, MCLDNN WCL'20, ORACLE INFOCOM'19, T-PRIME, etc.).
+
 ### Added — J4 complété : premières lignes de board `snr_estimation` (baselines de régression)
 
 La tâche `snr_estimation` (livrée sans score) a désormais ses baselines seed et sa page de

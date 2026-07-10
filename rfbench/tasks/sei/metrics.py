@@ -249,7 +249,7 @@ def match_score(prediction: object) -> float:
     # ``.item()`` eagerly would raise on a multi-element 1-D tensor ("a Tensor with N elements
     # cannot be converted to Scalar"), which is exactly a per-class row.
     try:
-        row = [float(x) for x in prediction]  # type: ignore[union-attr]
+        row = [float(x) for x in prediction]  # type: ignore[attr-defined]
     except TypeError:
         item = getattr(prediction, "item", None)
         if callable(item):  # 0-d tensor / numpy scalar -> its Python scalar

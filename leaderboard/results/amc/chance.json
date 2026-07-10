@@ -145,6 +145,12 @@
     "version": "v1"
   },
   "verification": {
-    "status": "self_reported"
+    "status": "verified",
+    "verified_by": "rf-bench-maintainers",
+    "verified_date": "2026-07-10",
+    "verified_hardware": "1x Dalia defq node (ARM Neoverse V2, CPU-only)",
+    "method": "full_retrain",
+    "tolerance": 0.005,
+    "observed_primary": 0.0895
   }
 }

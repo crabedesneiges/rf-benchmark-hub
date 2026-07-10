@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.1.0",
+  "result_path": "leaderboard/results/amc/cldnn.json",
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "code_commit": "git@1521ba29f1b24191d0687bd4b861c0809ffb0dcf",
+  "command": "sbatch slurm/train_baseline_arm.sh cldnn 50 45  # RadioML 2016.10a, from_scratch, 50 epochs ; board = moyenne seeds 42/43/44, re-run = seed 45 fra\u00eeche, doit tomber a <=2\u03c3",
+  "artifacts": {
+    "source_only": true
+  },
+  "hardware": "1x Dalia GB200 (ARM aarch64, CUDA)",
+  "expected_metrics": {
+    "accuracy_overall": 0.5801060606060606,
+    "macro_f1": 0.5966582428374202
+  },
+  "tolerance": {
+    "absolute": 0.005,
+    "per_metric": {
+      "accuracy_overall": 0.012,
+      "macro_f1": 0.015
+    }
+  },
+  "rerun_mode": "full_retrain"
+}

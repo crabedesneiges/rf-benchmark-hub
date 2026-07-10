@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified — LOT 2 : baselines snr_estimation vérifiées (tier `verified`)
+
+Re-run defq CPU (déterministe) reproduisant les valeurs **bit-exactes** (|delta|=0) → flip
+`self_reported` → `verified` :
+- `mean_snr` : rmse_db 11.5326 (obs 11.5326, tol ±0.10 dB) ✓
+- `snr_moment_ridge` : rmse_db 7.6422 (obs 7.6422, tol ±0.10 dB) ✓
+Signé `rf-bench-maintainers`, hardware defq ARM CPU, method full_retrain. Board : snr_estimation
+2/2 verified.
+
 ### Added — tier `verified` : débloquer snr_estimation + doctrine de tolérance (§1/§2)
 
 - **submission.schema.json** : `snr_estimation` ajouté à l'enum `task.name` ET au pattern

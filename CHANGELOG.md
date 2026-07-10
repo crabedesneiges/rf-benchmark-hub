@@ -41,8 +41,24 @@ paper-faithful (voir l'entrée « SEI benchmark column » ci-dessous) ET les **9
 post-fix Keras-fidelity (`wisig_cnn_paper`/`complex_cnn`/`resnet1d_sei` × closed_set/cross_receiver/
 cross_day, validées 9/9 contre le schéma). Les splits WiSig sont byte-identiques entre les deux
 branches (même `split_checksum`), donc les résultats attestent bien les splits d'intégration.
-Reste ouvert : la **piste open-set WiSig** (mentionnée au plan, aucun track `open_set` implémenté)
-et la re-vérification cluster officielle.
+
+### Added — J3b : piste open-set WiSig (held-out Tx, AUROC/EER) de bout en bout
+
+Le track `open_set` (jusque-là un stub non branché) est implémenté et scoré. **Design** (choisi
+avec l'utilisateur) : détection d'émetteurs inconnus — ~80% des Tx forment la galerie connue, 20%
+sont held-out comme impostors ; le modèle est fit en identifieur `|known|`-classes, le **score =
+max-softmax probability (MSP)**, et l'**AUROC (primary) / EER** séparent genuine (in-gallery) des
+probes novel. Split canonique `sei-wisig-openset-heldouttx-8010-seed42-v1` (511 515 records →
+326 180/40 779/144 556) ; genuine/impostor **dérivé** par le dataset (`tx ∈ train`), non stocké.
+Protocole normatif acté (`docs/EVALUATION_PROTOCOL.md` §SEI). **3 lignes de board** (from_scratch,
+seed 42, GPU) : `resnet1d_sei` **0.822** AUROC (meilleure), `complex_cnn` 0.658, `wisig_cnn_paper`
+**0.498** (~hasard, CI serré : bon en closed-set mais ne rejette pas les inconnus — un vrai constat).
+
+Trois bugs révélés par le run cluster et corrigés (invisibles aux tests pure-Python, désormais
+gardés en régression + un test end-to-end de l'éval open-set) : `match_score` appelait `.item()`
+sur une ligne 1-D (tensor multi-éléments → lève) ; `eer()` était O(n²) (→ `bisect`, O(n log n)) ;
+le bootstrap re-réduisait les 144 k lignes 1000× (→ hook `Metric.prepare_predictions`, réduction
+1×). Éval open-set : ~minutes au lieu d'heures.
 
 ### Added — Phase 0 quality hardening: schema 1.2.0, protocol lock-in, bootstrap CI, repro ops
 

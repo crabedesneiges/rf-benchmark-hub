@@ -16,21 +16,36 @@
   },
   "metrics": {
     "primary": "accuracy_overall",
+    "uncertainty": {
+      "accuracy_overall": {
+        "ci_high": 1.0,
+        "ci_low": 0.998785755196636,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
+      },
+      "macro_f1": {
+        "ci_high": 1.0,
+        "ci_low": 0.9987857357684083,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
+      }
+    },
     "values": {
-      "accuracy_overall": 0.9986666666666667,
-      "macro_f1": 0.998666645332992
+      "accuracy_overall": 0.9995555555555555,
+      "macro_f1": 0.9995555484443307
     }
   },
   "model": {
     "family": "baseline",
     "n_params": 90086,
-    "name": "interf_cnn",
-    "url": "https://doi.org/10.1109/CYBERSA52016.2021.9478250"
+    "name": "interf_cnn"
   },
   "regime": {
     "name": "from_scratch"
   },
-  "schema_version": "1.0.0",
+  "schema_version": "1.2.0",
   "split": {
     "canonical_split_id": "interf-gnss6-8010-seed42-v1",
     "checksum": "sha256:f90cf8e96a8b240520881f4b9c777980aa41af2114dca2ba990871f5dc928625",

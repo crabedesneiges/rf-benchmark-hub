@@ -25,7 +25,13 @@ Batch: TypeAlias = dict[str, Any]
 
 #: Registered benchmark task ids (``result.json.task.name`` enum).
 TaskName = Literal[
-    "amc", "sei", "wideband_detection", "spectrum_sensing", "interference_id", "protocol_tech_id"
+    "amc",
+    "sei",
+    "wideband_detection",
+    "spectrum_sensing",
+    "interference_id",
+    "protocol_tech_id",
+    "snr_estimation",
 ]
 
 #: The four locked adaptation regimes (D5, ``result.json.regime.name`` enum).

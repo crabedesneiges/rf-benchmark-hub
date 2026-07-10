@@ -1,0 +1,150 @@
+{
+  "dataset": {
+    "name": "radioml_2016_10a"
+  },
+  "environment": {
+    "framework": "torch 2.12.1+cu130",
+    "hardware": "CPU (frontend DSP baseline)",
+    "python_version": "3.11.15",
+    "rfbench_version": "0.1.0",
+    "seed": 42
+  },
+  "eval": {
+    "batch_size": 256,
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 18,
+      "snr_db_min": -20
+    },
+    "n_samples": 22000
+  },
+  "metrics": {
+    "curves": {
+      "accuracy_vs_snr": [
+        {
+          "x": -20.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -18.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -16.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -14.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -12.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -10.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -8.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -6.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -4.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": -2.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 0.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 2.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 4.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 6.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 8.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 10.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 12.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 14.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 16.0,
+          "y": 0.09090909090909091
+        },
+        {
+          "x": 18.0,
+          "y": 0.09090909090909091
+        }
+      ]
+    },
+    "primary": "accuracy_overall",
+    "uncertainty": {
+      "accuracy_overall": {
+        "ci_high": 0.09477272727272727,
+        "ci_low": 0.08722727272727272,
+        "confidence": 0.95,
+        "method": "bootstrap_percentile",
+        "n_resamples": 1000
+      },
+      "macro_f1": {
+        "ci_high": 0.015739709740124938,
+        "ci_low": 0.01458711028509097,
+        "confidence": 0.95,
+        "method": "bootstrap_percentile",
+        "n_resamples": 1000
+      }
+    },
+    "values": {
+      "accuracy_overall": 0.09090909090909091,
+      "macro_f1": 0.01515151515151515
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "n_params": 0,
+    "name": "majority_class"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.2.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "status": "self_reported"
+  }
+}

@@ -77,6 +77,7 @@ TASK_NAMES: tuple[str, ...] = (
     "spectrum_sensing",
     "interference_id",
     "protocol_tech_id",
+    "snr_estimation",
 )
 REGIME_NAMES: tuple[str, ...] = ("from_scratch", "full_finetune", "linear_probe", "few_shot")
 SPLIT_NAMES: tuple[str, ...] = ("test", "val")
@@ -87,6 +88,7 @@ DATASET_NAMES: tuple[str, ...] = (
     "wisig",
     "oracle",
     "lora",
+    "powder",
     "raddet",
     "wbsig53",
     "deepsense",
@@ -103,6 +105,7 @@ _DATASET_FAMILY: dict[str, str] = {
     "wisig": "sei",
     "oracle": "sei",
     "lora": "sei",
+    "powder": "sei",
     "raddet": "detection",
     "wbsig53": "detection",
     "interf_gnss6": "interference",
@@ -112,9 +115,14 @@ _DATASET_FAMILY: dict[str, str] = {
 #: Datasets a given data task can prepare (task name -> concrete datasets).
 #: Detection targets RadDet (the real published ICASSP-2025 artifact); wbsig53 stays a
 #: reachable name but only yields a blocker (generation-only, no static release).
+#: NOTE: ``snr_estimation`` is intentionally absent here. Its canonical split is *derived*
+#: byte-identically from the AMC ``radioml_2016_10a`` split (see
+#: rfbench.data.prepare.snr_estimation.derive_from_amc_split), so it is not a standalone
+#: ``rfbench data prepare`` target: prepare ``radioml_2016_10a`` (family ``amc``) and the SNR
+#: split falls out with the same indices/checksum.
 _TASK_DATASETS: dict[str, tuple[str, ...]] = {
     "amc": ("radioml_2016_10a", "radioml_2018_01a", "sig53"),
-    "sei": ("wisig", "oracle", "lora"),
+    "sei": ("wisig", "oracle", "lora", "powder"),
     "wideband_detection": ("raddet",),
     "detection": ("raddet",),
     "interference_id": ("interf_gnss6",),
@@ -160,6 +168,14 @@ _TASK_DEFAULTS: dict[str, dict[str, str]] = {
         "primary": "accuracy_overall",
         "canonical_split_id": "proto-tprime-wifi4-8010-seed42-v1",
         "track": "closed_set",
+    },
+    "snr_estimation": {
+        # Regression (raw-IQ -> SNR dB): primary is rmse_db (lower-is-better). The split is
+        # derived from the AMC radioml_2016_10a partition (byte-identical indices, own id).
+        "dataset": "radioml_2016_10a",
+        "primary": "rmse_db",
+        "canonical_split_id": "snr-radioml2016-strat-snr-8010-seed42-v1",
+        "track": "all_snr",
     },
 }
 
@@ -387,6 +403,7 @@ def _prepare_sei(
         from rfbench.data.prepare.sei import (
             load_lora_records,
             load_oracle_records,
+            load_powder_records,
             load_wisig_records,
         )
 
@@ -394,6 +411,8 @@ def _prepare_sei(
             records = load_wisig_records(cache=cache)
         elif dataset == "oracle":
             records = load_oracle_records(cache=cache)
+        elif dataset == "powder":
+            records = load_powder_records(cache=cache)
         else:  # lora
             records = load_lora_records(cache=cache)
         conditions = list(SEI_IDS[dataset].keys())
@@ -768,6 +787,12 @@ _MODEL_MODULES: dict[str, str] = {
     "cldnn": "rfbench.models.baselines.cldnn",
     "interf_cnn": "rfbench.models.baselines.interf_cnn",
     "tprime": "rfbench.models.baselines.tprime",
+    # SEI baselines (trained via `rfbench sei-train`; also eval-reachable here).
+    "wisig_cnn": "rfbench.models.baselines.sei_cnn",
+    "wisig_cnn_paper": "rfbench.models.baselines.wisig_cnn_paper",
+    "oracle_cnn": "rfbench.models.baselines.oracle_cnn",
+    "complex_cnn": "rfbench.models.baselines.complex_cnn",
+    "resnet1d_sei": "rfbench.models.baselines.resnet1d_sei",
     "lwm-spectro": "rfbench.models.foundation.lwm_spectro",
     "dummy-fm": "rfbench.models.foundation.dummy",
 }
@@ -796,6 +821,7 @@ _TASK_MODULES: dict[str, str] = {
     "wideband_detection": "rfbench.tasks.wideband_detection",
     "interference_id": "rfbench.tasks.interference_id",
     "protocol_tech_id": "rfbench.tasks.protocol_tech_id",
+    "snr_estimation": "rfbench.tasks.snr_estimation",
 }
 
 
@@ -835,8 +861,9 @@ def _cmd_train(args: argparse.Namespace) -> int:
 
     Loads the registered task + model (importing the model's torch module lazily), runs the
     real training loop in :func:`rfbench.training.train_baseline` for the declared regime
-    (``from_scratch`` / ``full_finetune``), and writes the result under ``--out``. torch and
-    the training module are imported inside this handler so ``import rfbench`` /
+    (``from_scratch`` / ``full_finetune``), and writes the result under ``--out``. When
+    ``--out-checkpoint`` is set, the best-val model ``state_dict`` is also persisted to disk.
+    torch and the training module are imported inside this handler so ``import rfbench`` /
     ``rfbench --help`` stay dependency-free.
     """
     if args.regime not in ("from_scratch", "full_finetune"):
@@ -905,6 +932,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
             seed=args.seed,
             device=None if args.device == "auto" else args.device,
             out_path=out_path,
+            checkpoint_out=Path(args.out_checkpoint) if args.out_checkpoint else None,
         )
     except (ValueError, RuntimeError, TypeError) as exc:
         print(f"error: [train] {exc}", file=sys.stderr)
@@ -913,6 +941,117 @@ def _cmd_train(args: argparse.Namespace) -> int:
     primary = result["metrics"]["primary"]
     score = result["metrics"]["values"].get(primary)
     print(f"[train] wrote result.json -> {out_path} ({primary}={score}).")
+    if args.out_checkpoint:
+        print(f"[train] wrote checkpoint -> {args.out_checkpoint}.")
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------------------------------
+# `sei-train` handler (track-aware SEI from-scratch training, dedicated recipe)
+# --------------------------------------------------------------------------------------------------
+#: SEI tracks reachable from `sei-train`. The three closed-set identification conditions plus
+#: `open_set`: the model is still fit as a `|known|`-class identifier (CE on the gallery train
+#: split), but the FINAL score is the open-set AUROC/EER (max-softmax genuine-vs-impostor) that
+#: `evaluate` computes for the open_set track -- no separate training recipe needed.
+_SEI_TRAIN_TRACKS: tuple[str, ...] = ("closed_set", "cross_receiver", "cross_day", "open_set")
+
+
+def _cmd_sei_train(args: argparse.Namespace) -> int:
+    """Train an SEI baseline on one (dataset, track), then emit a track-tagged result.json.
+
+    Uses the SEI-specific loop :func:`rfbench.training_sei.train_sei_baseline` (class-weighted CE,
+    explicit L2 via the model's ``l2_penalty``, best checkpoint + early stop on val LOSS) so the
+    shared AMC loop stays untouched, and threads ``--track`` into ``evaluate`` so the closed-set
+    conditions are scored as SEPARATE rows. torch + the SEI training module are imported inside
+    this handler so ``import rfbench`` / ``rfbench --help`` stay dependency-free.
+    """
+    import logging
+
+    # Surface the per-epoch training trajectory (train/val loss, best-checkpoint, early stop) on
+    # stdout so a cluster .out log shows convergence -- otherwise the loop's logger.info lines are
+    # swallowed at the default WARNING level.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    try:
+        from rfbench.core.registry import MODELS, TASKS
+        from rfbench.training_sei import count_classes, train_sei_baseline
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: [sei-train] needs the torch extra (`pip install rfbench[torch]`): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    try:
+        _import_model_module(args.model)
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: [sei-train] could not import the '{args.model}' model module "
+            f"(needs the torch extra): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    os.environ.setdefault("RFBENCH_CACHE", args.cache)
+    try:
+        _import_task_module("sei")
+        task = TASKS.get("sei")(args.track, dataset=args.dataset)
+        datasets = task.datasets()
+        if not datasets:
+            raise ValueError("SEI task declares no datasets")
+        dataset = datasets[0]
+        spec = _regime_spec(args.regime, None)
+        num_classes = count_classes(dataset)
+        model = MODELS.get(args.model)(
+            num_classes=num_classes,
+            window=args.window,
+            device=None if args.device == "auto" else args.device,
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        print(f"error: [sei-train] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    out_path = (
+        Path(args.out)
+        if args.out
+        else Path("leaderboard") / "results" / "sei" / f"{args.model}-{args.track}.json"
+    )
+    print(
+        f"[sei-train] training '{args.model}' on sei/{args.dataset} track={args.track} "
+        f"(n_classes={num_classes}, regime={args.regime}, epochs={args.epochs}, "
+        f"batch_size={args.batch_size}, lr={args.lr}, l2={args.l2_lambda}, "
+        f"class_weight={not args.no_class_weight}, device={args.device})..."
+    )
+    try:
+        _model, result = train_sei_baseline(
+            task,
+            model,
+            dataset,
+            track=args.track,
+            regime=spec,
+            num_classes=num_classes,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            l2_lambda=args.l2_lambda,
+            weight_decay=args.weight_decay,
+            use_class_weight=not args.no_class_weight,
+            seed=args.seed,
+            device=None if args.device == "auto" else args.device,
+            out_path=out_path,
+            patience=args.patience,
+        )
+    except (ValueError, RuntimeError, TypeError, FileNotFoundError) as exc:
+        print(f"error: [sei-train] {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    primary = result["metrics"]["primary"]
+    values = result["metrics"]["values"]
+    extras = ", ".join(f"{k}={v:.4f}" for k, v in values.items() if k != primary)
+    print(
+        f"[sei-train] wrote result.json -> {out_path} "
+        f"({primary}={values.get(primary):.4f}{'; ' + extras if extras else ''})."
+    )
     return EXIT_OK
 
 
@@ -1428,7 +1567,92 @@ def _build_train_parser(
         metavar="PATH",
         help="Output path (default: leaderboard/results/<task>/<model>.json).",
     )
+    tr.add_argument(
+        "--out-checkpoint",
+        dest="out_checkpoint",
+        metavar="PATH",
+        help="Persist the best-val model checkpoint (torch.save) to this path (default: unset, "
+        "no checkpoint written to disk).",
+    )
     tr.set_defaults(func=_cmd_train)
+
+
+def _build_sei_train_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    parent: argparse.ArgumentParser,
+) -> None:
+    st = subparsers.add_parser(
+        "sei-train",
+        parents=[parent],
+        help="Train an SEI baseline on one (dataset, track) with the SEI recipe (M3, GPU).",
+        description=(
+            "Runs the SEI-specific training loop (rfbench.training_sei.train_sei_baseline: "
+            "class-weighted CE, explicit L2 via the model's l2_penalty, best checkpoint + early "
+            "stop on validation LOSS) and threads --track into evaluate so closed_set / "
+            "cross_receiver / cross_day are scored as SEPARATE result.json rows. The shared AMC "
+            "loop (rfbench.training) is left untouched. Needs the torch extra; runs on the cluster."
+        ),
+    )
+    st.add_argument(
+        "--dataset",
+        default="wisig",
+        choices=("wisig", "oracle", "powder"),
+        help="SEI dataset variant (default: wisig).",
+    )
+    st.add_argument("--model", required=True, metavar="NAME", help="Registered SEI model name.")
+    st.add_argument(
+        "--track",
+        default="closed_set",
+        choices=_SEI_TRAIN_TRACKS,
+        help="SEI condition, scored as its own row: closed_set / cross_receiver / cross_day "
+        "(rank-1) or open_set (AUROC/EER). Default: closed_set.",
+    )
+    st.add_argument(
+        "--regime",
+        default="from_scratch",
+        choices=("from_scratch", "full_finetune"),
+        help="Trainable regime, ALWAYS declared (default: from_scratch).",
+    )
+    st.add_argument("--window", type=int, default=256, help="IQ window length (default: 256).")
+    st.add_argument("--epochs", type=int, default=100, help="Max epochs (default: 100).")
+    st.add_argument(
+        "--batch-size", dest="batch_size", type=int, default=32, help="Batch size (default: 32)."
+    )
+    st.add_argument("--lr", type=float, default=5e-4, help="Adam learning rate (default: 5e-4).")
+    st.add_argument(
+        "--l2-lambda",
+        dest="l2_lambda",
+        type=float,
+        default=1e-4,
+        help="L2 strength on the model's regularised kernels (default: 1e-4).",
+    )
+    st.add_argument(
+        "--weight-decay",
+        dest="weight_decay",
+        type=float,
+        default=0.0,
+        help="Fallback Adam weight_decay for models with no l2_penalty hook (default: 0.0).",
+    )
+    st.add_argument(
+        "--no-class-weight",
+        dest="no_class_weight",
+        action="store_true",
+        help="Disable the WiSig max(count)/count class weighting.",
+    )
+    st.add_argument("--patience", type=int, default=5, help="Early-stop patience (default: 5).")
+    st.add_argument("--seed", type=int, default=42, help="Global seed (default: 42).")
+    st.add_argument(
+        "--device",
+        choices=("cuda", "cpu", "auto"),
+        default="auto",
+        help="Compute device (default: auto -> cuda when available).",
+    )
+    st.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Output path (default: leaderboard/results/sei/<model>-<track>.json).",
+    )
+    st.set_defaults(func=_cmd_sei_train)
 
 
 def _build_submit_parser(
@@ -1581,6 +1805,7 @@ def build_parser() -> argparse.ArgumentParser:
     _build_data_parser(subparsers, parent)
     _build_eval_parser(subparsers, parent)
     _build_train_parser(subparsers, parent)
+    _build_sei_train_parser(subparsers, parent)
     _build_submit_parser(subparsers, parent)
     _build_leaderboard_parser(subparsers, parent)
     _build_verify_parser(subparsers, parent)

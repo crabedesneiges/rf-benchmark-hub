@@ -1,0 +1,47 @@
+{
+  "dataset": {
+    "name": "wisig"
+  },
+  "environment": {
+    "framework": "torch 2.12.1+cu130",
+    "hardware": "1x NVIDIA GB200",
+    "python_version": "3.11.15",
+    "rfbench_version": "0.1.0",
+    "seed": 42
+  },
+  "eval": {
+    "batch_size": 256,
+    "conditions": {},
+    "n_samples": 51145
+  },
+  "metrics": {
+    "primary": "rank1_accuracy",
+    "values": {
+      "balanced_accuracy": 0.7978681263473587,
+      "rank1_accuracy": 0.8031479127969499
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "n_params": 229450,
+    "name": "complex_cnn"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.0.0",
+  "split": {
+    "canonical_split_id": "sei-wisig-closedset-strat-tx-8010-seed42-v1",
+    "checksum": "sha256:26981a0bc303c4c53ad03b3f7a84d290b799f40b2a96718efc2233f35e010d01",
+    "name": "test",
+    "seed": 42,
+    "track": "closed_set"
+  },
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "verification": {
+    "status": "self_reported"
+  }
+}

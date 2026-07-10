@@ -7,6 +7,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — J2 baselines DSP AMC + J4 tâche régression `snr_estimation` (reprise 2026-07-09)
+
+Reprise d'un WIP de session interrompue (jalons J2 + J4), câblé, vérifié (ruff/black/pytest verts)
+et committé sur `claude/ecstatic-torvalds-a6ced8`.
+
+- **J2 — baselines classiques AMC.** `hoc_lr` (cumulants d'ordre supérieur + `LogisticRegression`
+  seed-42, même estimateur que la head logreg normative) comme référence DSP, et deux planchers
+  triviaux `majority_class` / `chance` (stdlib pur). Enregistrés dans `MODELS` ; hors table CLI
+  `_MODEL_MODULES` by-design (le job SLURM `slurm/train_hoc_amc.sh`, CPU/defq, les instancie
+  explicitement). **Lignes de board produites** sur RadioML 2016.10a (plage SNR complète,
+  from_scratch, seed 42) : `hoc_lr` 0.2629, `majority_class` 0.0909 (=1/11), `chance` 0.0895 —
+  déterministes single-seed (IC bootstrap par seed conservé). Étage le board sous les baselines
+  deep (resnet/cldnn/mcldnn 0.57–0.62).
+- **J4 — tâche de régression `snr_estimation`** (raw-IQ → SNR dB) sur RadioML 2016.10a :
+  `Task`/`Dataset`/métriques `rmse_db` (primary) + `mae_db` (**lower-is-better**), split
+  `snr-radioml2016-strat-snr-8010-seed42-v1` (indices byte-identiques au split AMC, dérivés, id
+  propre), config Hydra. **Extension additive des contrats figés** (précédent
+  `interference_id`/`protocol_tech_id`) : `snr_estimation` ajouté à l'enum `task.name`
+  (`result.schema.json`) et au `Literal TaskName` — additif, `task.version=v1`, `schema_version`
+  inchangé. **CLI** câblée (`TASK_NAMES`/`_TASK_MODULES`/`_TASK_DEFAULTS`), `rfbench eval
+  snr_estimation` sélectionnable ; le split SNR est dérivé du split AMC (pas de cible `data prepare`
+  dédiée, documenté). **Site** : rendu lower-is-better (tri ascendant + barre inversée) + badge de
+  contamination (`pretraining.overlap_with_eval`). Protocole normatif acté
+  (`docs/EVALUATION_PROTOCOL.md` : track canonique `all_snr`, plage SNR complète, pas de
+  cherry-picking). Tests : workaround `task.name='amc'` retiré + test end-to-end de rendu de page.
+
+### Added — J3 : colonne SEI mergée sur la branche d'intégration + 9 lignes de board
+
+`feat/sei-complete` mergée dans `claude/ecstatic-torvalds-a6ced8` (merge `--no-ff`, 2 conflits docs
+résolus : CHANGELOG + BIBLIOGRAPHY ; 36 fichiers auto-mergés). Apporte l'implémentation SEI
+paper-faithful (voir l'entrée « SEI benchmark column » ci-dessous) ET les **9 lignes de board**
+post-fix Keras-fidelity (`wisig_cnn_paper`/`complex_cnn`/`resnet1d_sei` × closed_set/cross_receiver/
+cross_day, validées 9/9 contre le schéma). Les splits WiSig sont byte-identiques entre les deux
+branches (même `split_checksum`), donc les résultats attestent bien les splits d'intégration.
+
+### Added — J3b : piste open-set WiSig (held-out Tx, AUROC/EER) de bout en bout
+
+Le track `open_set` (jusque-là un stub non branché) est implémenté et scoré. **Design** (choisi
+avec l'utilisateur) : détection d'émetteurs inconnus — ~80% des Tx forment la galerie connue, 20%
+sont held-out comme impostors ; le modèle est fit en identifieur `|known|`-classes, le **score =
+max-softmax probability (MSP)**, et l'**AUROC (primary) / EER** séparent genuine (in-gallery) des
+probes novel. Split canonique `sei-wisig-openset-heldouttx-8010-seed42-v1` (511 515 records →
+326 180/40 779/144 556) ; genuine/impostor **dérivé** par le dataset (`tx ∈ train`), non stocké.
+Protocole normatif acté (`docs/EVALUATION_PROTOCOL.md` §SEI). **3 lignes de board** (from_scratch,
+seed 42, GPU) : `resnet1d_sei` **0.822** AUROC (meilleure), `complex_cnn` 0.658, `wisig_cnn_paper`
+**0.498** (~hasard, CI serré : bon en closed-set mais ne rejette pas les inconnus — un vrai constat).
+
+Trois bugs révélés par le run cluster et corrigés (invisibles aux tests pure-Python, désormais
+gardés en régression + un test end-to-end de l'éval open-set) : `match_score` appelait `.item()`
+sur une ligne 1-D (tensor multi-éléments → lève) ; `eer()` était O(n²) (→ `bisect`, O(n log n)) ;
+le bootstrap re-réduisait les 144 k lignes 1000× (→ hook `Metric.prepare_predictions`, réduction
+1×). Éval open-set : ~minutes au lieu d'heures.
+
+### Added — Phase 0 quality hardening: schema 1.2.0, protocol lock-in, bootstrap CI, repro ops
+
+Six-block Phase 0 of the 2026-07 quality audit follow-up. Priority is repo quality, not public
+launch (domain/governance/maintainers/paper work stays out of scope for now); no FM pretrain was
+relaunched — schema and protocol are locked in spec-only.
+
+- **Schema 1.2.0** (`schemas/result.schema.json`, `schemas/submission.schema.json`, additive,
+  non-breaking): new optional fields `metrics.uncertainty` (per-metric CI, `method` ∈
+  `{bootstrap_percentile, wilson_backfill, multi_seed_std}`), `pretraining`
+  (`pretrain_datasets`/`overlap_with_eval`/`disclosure_note`), `transfer` (`source_dataset`,
+  `source_domain`), `efficiency` (latency/throughput/FLOPs/memory/GPU-hours). Fixed both schemas'
+  `$id` to the real org (`crabedesneiges/rf-benchmark-hub`, was `rf-benchmark-hub/rf-benchmark-hub`).
+- **Protocol lock-in** (`docs/EVALUATION_PROTOCOL.md`): new normative "Statistical rigor &
+  uncertainty" section — bootstrap percentile CI default (n=1000, confidence=0.95), Wilson backfill
+  restricted to proportion metrics on non-`from_paper*` rows, few-shot k∈{1,10,100} with N≥10
+  episodes (seeds 42..51), scikit-learn logistic regression as the normative probe head
+  (nearest-centroid is a dependency-free fallback only, never for board numbers), COCO-style
+  IoU-averaged mAP for `wideband_detection` (existing `task.py` still single-IoU @ 0.5 — not yet
+  updated to match, tracked as follow-up), calibrated-on-val pd@pfa=0.1 for `spectrum_sensing` (no
+  implementation yet), per-task tolerance table, contamination-disclosure rules.
+- **Bootstrap CI + backfill** (`rfbench/core/evaluate.py`, `scripts/backfill_uncertainty.py`):
+  `evaluate()` now accumulates per-chunk predictions and computes a stdlib-only percentile bootstrap
+  CI (`compute_bootstrap_ci=True` by default, 1000 resamples, ~9.5s @ 22k samples) into
+  `metrics.uncertainty`; `SCHEMA_VERSION` bumped to `1.2.0`. New `backfill_uncertainty.py` computes
+  Wilson-interval CIs for 5 existing self_reported/verified board rows lacking raw predictions
+  (`amc/{cldnn,mcldnn,resnet_amc,iqfm-base-linear_probe}`, `interference_id/interf_cnn}`) —
+  `from_paper*` rows are structurally excluded (no `eval` block). Leaderboard site (`_sort_rows`)
+  keeps its existing strict ordering (primary DESC → verified-first → name) unchanged — CI overlap
+  is not transitive, so it is surfaced as a non-reordering `≈`-overlap annotation instead of
+  re-ranking on statistical noise.
+- **Regimes** (`rfbench/regimes/heads.py`, `few_shot.py`): new `LogisticRegressionHead` (lazy
+  sklearn import, matches the new normative probe spec) wired into linear-probe/few-shot
+  instantiation in `rfbench/models/foundation/base.py::run_regime` only (never for
+  from_scratch/full_finetune), falling back to `NearestCentroidHead` with a warning if sklearn is
+  absent. New `run_episodic()` helper for N≥10-episode few-shot runs (not yet wired into the CLI).
+- **Repro ops** (`rfbench/training.py`, `slurm/*.sh`, `uv.lock`): checkpoints are now actually
+  persisted to disk (`train_baseline(..., checkpoint_out=...)`, atomic write, `--out-checkpoint`
+  CLI flag) — previously best-checkpoint restore only logged and never called `torch.save`, making
+  bootstrap/re-scoring of `from_scratch` rows impossible without a full retrain. Added
+  `cudnn.deterministic=True`/`cudnn.benchmark=False`. Generated `uv.lock` (was missing). Audited all
+  14 `slurm/*.sh`: confirmed the audit report's suggested `--constraint=arm` is **wrong for this
+  cluster** (single partition `defq*`, feature `location=local`, no `arm` feature exists) — documented
+  instead of applied.
+- **Licenses & URLs** (`docs/LICENSES.md`, `pyproject.toml`, `README.md`): new 10-dataset license
+  matrix sourced from existing repo docs (RadDet's Kaggle-vs-GitHub CC BY-NC vs CC BY-NC-SA
+  divergence flagged rather than smoothed over; ORACLE/LoRa RFFI/DeepSense marked unconfirmed).
+  Fixed stray `rf-benchmark-hub/rf-benchmark-hub` GitHub URLs to `crabedesneiges/rf-benchmark-hub`.
+
+Open follow-ups tracked for later milestones: `verification.tolerance` shape still differs between
+`result.schema.json` (scalar) and `submission.schema.json` (structured object) — left as-is, not
+reconciled; `wideband_detection` mAP implementation vs. new normative spec; `spectrum_sensing` has
+no code yet; J1 (GPU multi-seed ×3 + real bootstrap on fresh runs + iqfm-base re-score under logreg
+probe) is next.
+
 ### Changed — FM in-repo reproduction PAUSED; `iqfm-base` / `wireless-jepa` documented as homemade
 
 Decision (2026-07): pause the in-repo *reproduction* of IQFM and WirelessJEPA. Both papers publish
@@ -195,6 +302,65 @@ was done in the main loop and is flagged as such.
   clean on all 15 generated pages; the homepage filter JS reads attributes the HTML actually
   renders (`data-status`/`data-filter` sets match); `docs/BIBLIOGRAPHY.md` "Our score" already
   current (61.71/58.05/56.61); no stale "no runtime JS/CDN" doc claims remain.
+
+### Added — SEI benchmark column: paper-faithful WiSig 2-D CNN, ORACLE + SOTA baselines, POWDER track
+
+The SEI task and WiSig loader existed but the board had **no SEI rows** (fabricated lines removed,
+`a689e86`) and the only model, `wisig_cnn`, was a compact 1-D CNN that does **not** reproduce the
+paper. This lands the real SEI column. Preceded by a verbatim-code Phase-0 audit (the official WiSig
+`master` branch, both FM papers, and the SOTA literature) — the REPO/primary source is authoritative,
+and several `docs/BIBLIOGRAPHY.md` claims were **corrected** (below).
+
+- **`wisig_cnn_paper` — byte-faithful WiSig ManyTx 2-D CNN** (`rfbench/models/baselines/wisig_cnn_paper.py`).
+  Reconstructs `create_net` in `py/d006_ManyTx_ntx.py` exactly: `(256,2)`→`Reshape(256,2,1)`→conv
+  8/16/16/32/16, kernels (3,2)×3 then (3,1)×2 `same`+ReLU, **only 4 max-pools** (the 5th conv is
+  **unpooled**) →Flatten(256)→Dense(100)→Dense(80)→Dropout(0.5)→Dense(N). Keras **`same`** padding
+  reproduced with the trailing-edge asymmetry (torch's `'same'` pads the leading edge); **L2 λ=1e-4 on
+  the three Dense kernels ONLY** (via `l2_penalty()`, added to the loss — Keras-exact, not coupled
+  `weight_decay`); per-signal **unit-average-power** normalisation folded into the model (scale-invariant
+  logits, unit-tested). The compact 1-D `wisig_cnn` stays as a documented board-seeding variant.
+- **`oracle_cnn`** (Sankhe et al. INFOCOM 2019, arXiv:1812.01124): Conv 50@(1×7) + Conv 50@(2×7) + FC
+  256/80 + softmax, `2×128` raw IQ, Adam 1e-4, dropout 0.5, L2 1e-4, patience 10. (Default per-signal
+  input norm on; the paper's exact scaling is under-specified — `input_norm=False` ablation provided.)
+- **SOTA-leaning baselines (screened, 2 retained):** **`complex_cnn`** — faithful
+  `network_20_modrelu_short` (Gopalakrishnan/Cekic/Madhow GLOBECOM 2019, arXiv:1905.09388; MIT repo
+  `metehancekic/wireless-fingerprinting`): complex-multiply `ComplexConv1d` + Trabelsi **modReLU** →
+  magnitude → GAP → Dense, the biggest inductive-bias contrast (phase-coupled) to the real-valued CNNs;
+  and **`resnet1d_sei`** — a ResNet-18-1D over raw IQ (Jian et al. IoT-Mag 2020; He et al. 2016), the
+  depth axis. Both raw-IQ, reproducible, registered + CLI-reachable. (Deferred with rationale:
+  Al-Shawabka 2020 is a channel *study* not a packaged model; triplet/contrastive works lack runnable
+  public code on WiSig/ORACLE — see `docs/BIBLIOGRAPHY.md` C.2.)
+- **`balanced_accuracy` secondary metric** (mean per-class recall, pure-stdlib) alongside primary
+  `rank1_accuracy` on the SEI closed-set tracks — the class-balanced accuracy the WiSig paper reports for
+  the imbalanced ManyTx set. Additive (does not change the ranking key); no schema bump.
+- **Dedicated SEI training loop** `rfbench/training_sei.py` (the shared AMC `rfbench/training.py` is
+  **UNTOUCHED**, per constraint): class-weighted CE reproducing Keras' `class_weight=max(count)/count`
+  semantics exactly (`Σ w·CE / N`), explicit L2 via the model's `l2_penalty()`, best checkpoint + early
+  stop on **val_loss** (WiSig recipe, not the AMC loop's val-accuracy), and the SEI `(window,2)`
+  time-major layout. A `rfbench sei-train --track {closed_set,cross_receiver,cross_day}` CLI subcommand
+  threads the track into `evaluate` so the three conditions are scored as **SEPARATE** rows; a fixed
+  `_InMemorySplit.__getitem__` makes the split map-style so the DataLoader works (also fixes the cluster
+  path). Baselines added to the CLI `_MODEL_MODULES` dispatch (eval-reachable).
+- **POWDER track (FM-comparable, download-blocked).** Identified the exact dataset both FM SEI evaluators
+  use — **POWDER RF Fingerprinting** (Reus-Muns et al., *IEEE GLOBECOM 2020*; 4-BS WiFi), NOT
+  Gaskin/Tractor. `rfbench/data/download/sei_powder.py` (+ `prepare`/loader/task wiring): the DRS record
+  is public **without** POWDER/Emulab credentials (Handle `2047/D20385049` → `neu:gm80mp276`) but the host
+  **anti-scrapes** programmatic clients (HTTP 403, not defeated by a browser UA), so the downloader raises
+  a precise **manual-download** procedure and the split (`closed_set`, 256-frame, stratified by device) is
+  built only once the SigMF captures are placed under `$RFBENCH_CACHE/powder/`. Indices/checksums only,
+  never raw IQ (D3). FM references kept regime-separated (linear-probe 90.5/83.4 vs LoRA 96.05).
+- **BIBLIOGRAPHY corrections (REPO is truth).** §A.3 WiSig: **L2 is on the 3 Dense layers only** (not
+  conv); there are **4 pools** (5th conv unpooled); best weights via `ModelCheckpoint`+`load_weights` (no
+  `restore_best_weights`); DOI is **10.1109/ACCESS.2022.3154790**; code repo is **BSD-3** (dataset CC
+  BY-NC-SA); and the **99%→<33% cross-rx headline is a ManyRx/equalized/single-day experiment, NOT
+  ManyTx** (which pools all rx/days for ~53%/~80%). §A.5 gains the POWDER FM SEI numbers; §B.4 rewritten as
+  a per-baseline reproduction audit; §C.2 items marked done.
+- **Tests** (all torch-gated tests SKIP cleanly in the dep-free venv; validated on CPU torch locally):
+  `test_wisig_cnn_paper.py` (flatten-dim=256, L2-on-Dense-only, scale invariance), `test_oracle_cnn.py`,
+  `test_complex_cnn.py` (ComplexConv1d complex-multiply + modReLU phase/threshold), `test_resnet1d_sei.py`,
+  `test_training_sei.py` (end-to-end learns + emits a schema-valid track-tagged result; class-weight math;
+  regime guard), plus POWDER prepare + `balanced_accuracy` dep-free tests. `ruff`/`black`/`mypy` green;
+  dep-free `pytest -q` green. **Cluster runs pending** (WiSig `ManyTx.pkl` present; `slurm/train_sei_arm.sh`).
 
 ### Fixed — LWM-Spectro FM wrapper made faithful to the real weights (WP-62 verification)
 

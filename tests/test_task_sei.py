@@ -22,8 +22,16 @@ from rfbench.core.evaluate import _resolve_schema_path, evaluate
 from rfbench.core.model import Model, Regime, RegimeSpec
 from rfbench.core.registry import TASKS, get_task
 from rfbench.core.types import Batch, SplitName, Tensor, Track
-from rfbench.tasks.sei import SEI_TRACKS, OpenSetMetric, Rank1Accuracy, SeiDataset, SeiTask
-from rfbench.tasks.sei.metrics import auroc, eer
+from rfbench.tasks.sei import (
+    SEI_TRACKS,
+    BalancedAccuracy,
+    OpenSetMetric,
+    Rank1Accuracy,
+    SeiDataset,
+    SeiTask,
+)
+from rfbench.tasks.sei.dataset import open_set_samples
+from rfbench.tasks.sei.metrics import auroc, eer, match_score
 
 
 # --------------------------------------------------------------------------------------------------
@@ -64,7 +72,7 @@ def test_default_track_canonical_split_id_is_closed_set() -> None:
         ("closed_set", "sei-wisig-closedset-strat-tx-8010-seed42-v1"),
         ("cross_receiver", "sei-wisig-crossrx-grouped-8010-seed42-v1"),
         ("cross_day", "sei-wisig-crossday-grouped-8010-seed42-v1"),
-        ("open_set", "sei-wisig-closedset-strat-tx-8010-seed42-v1"),
+        ("open_set", "sei-wisig-openset-heldouttx-8010-seed42-v1"),
     ],
 )
 def test_each_track_binds_its_canonical_split_id(track: Track, expected_split_id: str) -> None:
@@ -74,10 +82,12 @@ def test_each_track_binds_its_canonical_split_id(track: Track, expected_split_id
 
 
 def test_closed_and_open_set_metrics_are_separate() -> None:
-    """Closed-set tracks emit rank-1; the open-set track emits AUROC+EER -- never mixed."""
+    """Closed-set tracks emit rank-1 (primary) + balanced accuracy; open-set emits AUROC+EER."""
     closed_metrics = SeiTask("closed_set").metrics()
-    assert [m.primary_key for m in closed_metrics] == ["rank1_accuracy"]
+    # rank1_accuracy is the PRIMARY (first) ranking metric; balanced_accuracy is the secondary.
+    assert [m.primary_key for m in closed_metrics] == ["rank1_accuracy", "balanced_accuracy"]
     assert isinstance(closed_metrics[0], Rank1Accuracy)
+    assert isinstance(closed_metrics[1], BalancedAccuracy)
 
     open_metrics = SeiTask("open_set").metrics()
     assert [m.primary_key for m in open_metrics] == ["auroc"]
@@ -134,6 +144,19 @@ def test_rank1_accuracy_streams_across_batches() -> None:
 # --------------------------------------------------------------------------------------------------
 # AUROC + EER on synthetic score distributions with known expected values
 # --------------------------------------------------------------------------------------------------
+def test_eer_auroc_scale_to_large_inputs() -> None:
+    """EER/AUROC stay O(n log n): a 12k-probe separable set is exact and returns instantly.
+
+    Regression guard for the open-set hang: a per-threshold linear scan made ``eer`` O(n^2),
+    which stalled the SEI open-set eval (144k probes) for hours. With binary-search sweeps a
+    12k-point call is trivial, and perfect separation still gives AUROC 1.0 / EER 0.0.
+    """
+    negatives = [float(i) for i in range(6000)]  # 0 .. 5999
+    positives = [10000.0 + i for i in range(6000)]  # 10000 .. 15999, strictly above every negative
+    assert auroc(positives, negatives) == pytest.approx(1.0)
+    assert eer(positives, negatives) == pytest.approx(0.0)
+
+
 def test_auroc_eer_perfectly_separable() -> None:
     """Perfectly separable scores -> AUROC == 1.0 and EER == 0.0."""
     positives = [0.9, 0.8, 0.95, 0.7]
@@ -189,6 +212,168 @@ def test_open_set_metric_streams_scores() -> None:
     computed = metric.compute()
     assert computed["auroc"] == pytest.approx(1.0)
     assert computed["eer"] == pytest.approx(0.0)
+
+
+def test_match_score_is_max_softmax_probability() -> None:
+    """A per-class row reduces to max softmax prob; a scalar passes through verbatim."""
+    import math
+
+    row = [2.0, 1.0, 0.0]
+    denom = math.exp(0.0) + math.exp(-1.0) + math.exp(-2.0)  # shifted by the peak (2.0)
+    assert match_score(row) == pytest.approx(1.0 / denom)
+    # A confident (peaked) row scores higher than a flat one -> good genuine/impostor separation.
+    assert match_score([10.0, 0.0, 0.0]) > match_score([0.1, 0.0, -0.1])
+    # A flat row over C classes tends to 1/C (max softmax of a uniform row).
+    assert match_score([0.0, 0.0, 0.0, 0.0]) == pytest.approx(0.25)
+    # A scalar (already a match score) is returned unchanged.
+    assert match_score(0.73) == pytest.approx(0.73)
+
+
+def test_match_score_reduces_tensor_like_row_without_calling_item() -> None:
+    """A 1-D tensor-like row must be reduced by iterating, NOT via ``.item()``.
+
+    Regression: a torch 1-D tensor exposes ``.item()`` but it RAISES on a multi-element
+    tensor ("a Tensor with N elements cannot be converted to Scalar"). ``match_score`` must
+    iterate the row first and only fall back to ``.item()`` for a genuine 0-d scalar.
+    """
+
+    class _FakeTensor:
+        """Mimics a torch tensor: iterable, with an ``.item()`` that raises unless 0-d/1-elem."""
+
+        def __init__(self, values: list[float]) -> None:
+            self._values = list(values)
+
+        def __iter__(self) -> Iterator[float]:
+            return iter(self._values)
+
+        def item(self) -> float:
+            if len(self._values) != 1:
+                raise ValueError(
+                    f"a Tensor with {len(self._values)} elements cannot be converted to Scalar"
+                )
+            return self._values[0]
+
+    scored = match_score(_FakeTensor([8.0, 0.0, 0.0]))  # must NOT raise
+    assert 0.0 < scored <= 1.0
+    assert scored == pytest.approx(match_score([8.0, 0.0, 0.0]))  # same as the plain-list MSP
+
+
+def test_open_set_metric_reduces_per_class_rows() -> None:
+    """Fed raw forward rows, the metric reduces each to MSP: peaked=genuine, flat=impostor."""
+    metric = OpenSetMetric()
+    metric.reset()
+    # Genuine probes peak hard on one class (high MSP); impostors are near-uniform (low MSP).
+    metric.update([[8.0, 0.0, 0.0], [7.0, 0.5, 0.5]], [1, 1])
+    metric.update([[0.1, 0.0, -0.1], [0.0, 0.1, 0.0]], [0, 0])
+    computed = metric.compute()
+    assert computed["auroc"] == pytest.approx(1.0)  # perfectly separated by MSP
+    assert computed["eer"] == pytest.approx(0.0)
+
+
+def test_open_set_evaluate_end_to_end_emits_schema_valid_row() -> None:
+    """Full open-set chain: genuine flags -> forward rows -> MSP -> bootstrap -> result.json.
+
+    Exercises the exact path the cluster runs (evaluate over the open_set track), on a tiny
+    synthetic in-memory dataset with a dummy model. This is the coverage that was missing when
+    three GPU round-trips were needed to surface the ``.item()`` and bootstrap-reduction bugs:
+    it runs the real ``evaluate`` + ``OpenSetMetric`` + percentile bootstrap and validates the
+    emitted row against ``result.schema.json`` -- no torch, no GPU.
+    """
+    from rfbench.core.evaluate import evaluate
+
+    n_classes = 4
+
+    class _DummySei(Model):
+        name = "dummy_sei"
+        family = "baseline"
+
+        def forward(self, x: Tensor) -> Tensor:
+            # Genuine probe -> a sharp peak on its class (high MSP); impostor -> near-uniform (low).
+            rows = []
+            for genuine, cls in x["iq"]:
+                if genuine == 1:
+                    rows.append([9.0 if i == cls else 0.1 for i in range(n_classes)])
+                else:
+                    rows.append([0.4, 0.3, 0.2, 0.1])
+            return rows
+
+        def embed(self, x: Tensor) -> Tensor:  # pragma: no cover - not exercised
+            raise NotImplementedError
+
+        @property
+        def n_params(self) -> int:
+            return 0
+
+    def _s(genuine: int, cls: int) -> dict[str, Any]:
+        return {"iq": (genuine, cls), "genuine": genuine, "label": cls if genuine else -1}
+
+    test = [_s(1, c) for c in range(n_classes) for _ in range(2)] + [_s(0, -1) for _ in range(6)]
+    gallery = [_s(1, c) for c in range(n_classes)]
+    dataset = SeiDataset(
+        "wisig", track="open_set", samples={"train": gallery, "val": gallery, "test": test}
+    )
+    task = SeiTask("open_set")
+    task.datasets = lambda: [dataset]  # type: ignore[method-assign]
+
+    result = evaluate(
+        _DummySei(),
+        task,
+        "test",
+        RegimeSpec(Regime.FROM_SCRATCH),
+        dataset="wisig",
+        track="open_set",
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=100,
+    )
+
+    assert result["split"]["track"] == "open_set"
+    assert result["metrics"]["primary"] == "auroc"
+    values = result["metrics"]["values"]
+    assert values["auroc"] == pytest.approx(1.0)  # dummy model perfectly separates genuine/impostor
+    assert values["eer"] == pytest.approx(0.0)
+    assert set(result["metrics"].get("uncertainty", {})) == {"auroc", "eer"}  # bootstrap ran
+
+    schema = json.loads(_resolve_schema_path("result.schema.json").read_text(encoding="utf-8"))
+    from jsonschema import Draft202012Validator
+
+    Draft202012Validator(schema).validate(result)  # raises if the emitted open_set row is invalid
+
+
+def test_prepare_predictions_reduces_rows_once_for_bootstrap() -> None:
+    """``prepare_predictions`` maps per-class rows to scalar MSP scores that ``update`` accepts.
+
+    This is the hook that lets the bootstrap reduce each probe ONCE instead of recomputing the
+    softmax on every resample (the O(resamples x n x classes) stall on the 144k open-set test).
+    Feeding the pre-reduced scalars must yield the SAME AUROC/EER as feeding the raw rows.
+    """
+    rows = [[8.0, 0.0, 0.0], [7.0, 0.5, 0.5], [0.1, 0.0, -0.1], [0.0, 0.1, 0.0]]
+    labels = [1, 1, 0, 0]
+
+    scores = OpenSetMetric().prepare_predictions(rows)
+    assert scores == [match_score(r) for r in rows]  # one MSP scalar per row
+    assert all(isinstance(s, float) for s in scores)
+
+    from_rows = OpenSetMetric()
+    from_rows.update(rows, labels)
+    from_scalars = OpenSetMetric()
+    from_scalars.update(scores, labels)  # pre-reduced path (what the bootstrap resamples)
+    assert from_rows.compute() == from_scalars.compute()
+
+
+def test_open_set_samples_flags_genuine_and_impostor() -> None:
+    """``open_set_samples`` tags in-gallery probes genuine (1) and held-out tx impostor (0)."""
+    # records: (tx, rx, day); train defines the gallery = {tx 1, 2}. tx 3 is a held-out impostor.
+    records = [(1, 0, 0), (2, 0, 0), (1, 0, 0), (3, 0, 0), (2, 0, 0), (3, 0, 0)]
+    iq = [f"iq{i}" for i in range(len(records))]  # opaque per-sample payloads
+    train_indices = [0, 1]  # tx 1 and 2 -> the known gallery
+    test_indices = [2, 3, 4, 5]  # tx 1 (genuine), 3 (impostor), 2 (genuine), 3 (impostor)
+
+    samples = open_set_samples(iq, records, test_indices, train_indices)
+    assert [s["genuine"] for s in samples] == [1, 0, 1, 0]
+    # Known-tx probes carry a valid gallery-class index; impostors get the -1 sentinel.
+    assert samples[0]["label"] in (0, 1) and samples[2]["label"] in (0, 1)
+    assert samples[1]["label"] == -1 and samples[3]["label"] == -1
+    assert [s["iq"] for s in samples] == ["iq2", "iq3", "iq4", "iq5"]
 
 
 def test_open_set_metric_rejects_non_binary_label() -> None:
@@ -460,3 +645,42 @@ def test_wisig_flatten_labels_map_to_dense_class_indices() -> None:
     labels = [class_of[_tx_key(rec[0])] for rec in records]
     assert set(labels) == {0, 1}  # two transmitters -> dense {0, 1}
     assert class_of[_tx_key("tx-a")] == 0 and class_of[_tx_key("tx-b")] == 1
+
+
+# --------------------------------------------------------------------------------------------------
+# BalancedAccuracy (SEI closed-set SECONDARY metric) -- pure stdlib
+# --------------------------------------------------------------------------------------------------
+
+
+def test_balanced_accuracy_equals_mean_per_class_recall() -> None:
+    """balanced_accuracy is the unweighted mean of per-class recalls, not overall accuracy."""
+    metric = BalancedAccuracy()
+    # class 0: 3 samples, 2 correct (recall 2/3); class 1: 1 sample, 0 correct (recall 0).
+    metric.update(pred=[0, 0, 1, 2], target=[0, 0, 0, 1])
+    # overall accuracy would be 2/4 = 0.5; balanced = mean(2/3, 0) = 1/3.
+    assert metric.compute()["balanced_accuracy"] == pytest.approx(1 / 3)
+
+
+def test_balanced_accuracy_argmaxes_score_rows() -> None:
+    """Per-class score rows are argmaxed (like rank-1), then averaged per class."""
+    metric = BalancedAccuracy()
+    metric.update(pred=[[0.1, 0.9], [0.8, 0.2]], target=[1, 0])  # both correct, 2 classes
+    assert metric.compute()["balanced_accuracy"] == pytest.approx(1.0)
+
+
+def test_balanced_accuracy_empty_stream_is_zero() -> None:
+    """An empty stream degrades to 0.0 (never divides by zero)."""
+    assert BalancedAccuracy().compute()["balanced_accuracy"] == 0.0
+
+
+def test_balanced_and_rank1_diverge_on_imbalance() -> None:
+    """On an imbalanced stream, balanced accuracy down-weights the majority class vs rank-1."""
+    rank1 = Rank1Accuracy()
+    balanced = BalancedAccuracy()
+    # 8 majority-class samples all correct, 2 minority all wrong.
+    preds = [0] * 8 + [0, 0]
+    targets = [0] * 8 + [1, 1]
+    rank1.update(pred=preds, target=targets)
+    balanced.update(pred=preds, target=targets)
+    assert rank1.compute()["rank1_accuracy"] == pytest.approx(0.8)  # 8/10
+    assert balanced.compute()["balanced_accuracy"] == pytest.approx(0.5)  # mean(1.0, 0.0)

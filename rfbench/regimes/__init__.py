@@ -23,7 +23,13 @@ from __future__ import annotations
 
 from rfbench.core.model import Regime, RegimeSpec
 from rfbench.regimes.base import FittedState, RegimeAdapter, TrainSplit
-from rfbench.regimes.few_shot import DEFAULT_FEW_SHOT_SEED, FewShotAdapter
+from rfbench.regimes.few_shot import (
+    DEFAULT_FEW_SHOT_SEED,
+    MIN_EPISODES,
+    EpisodeResult,
+    FewShotAdapter,
+    run_episodic,
+)
 from rfbench.regimes.passthrough import FromScratchAdapter, FullFinetuneAdapter
 from rfbench.regimes.probe import (
     EmbeddingVector,
@@ -74,4 +80,8 @@ __all__ = [
     # Factory + constants
     "make_adapter",
     "DEFAULT_FEW_SHOT_SEED",
+    # Multi-episode few-shot orchestration
+    "run_episodic",
+    "EpisodeResult",
+    "MIN_EPISODES",
 ]

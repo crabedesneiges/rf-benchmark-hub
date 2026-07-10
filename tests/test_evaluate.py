@@ -144,6 +144,29 @@ class DummyModel(Model):
         return 12345
 
 
+class DummyImperfectModel(DummyModel):
+    """A deterministic-but-imperfect classifier so bootstrap resamples actually vary.
+
+    Predicts each sample's true label EXCEPT for the ``wrong`` positions (0-indexed over
+    the whole split), which are shifted to ``label + 1``. The mistakes are fixed, so the
+    point estimate is reproducible, but resampling with replacement produces a spread of
+    accuracies -> a non-degenerate CI.
+    """
+
+    name = "dummy-imperfect"
+
+    def __init__(self, wrong: frozenset[int]) -> None:
+        self._wrong = wrong
+        self._cursor = 0
+
+    def forward(self, x: Tensor) -> Tensor:
+        preds: list[int] = []
+        for label in x["label"]:
+            preds.append(label + 1 if self._cursor in self._wrong else label)
+            self._cursor += 1
+        return preds
+
+
 # --------------------------------------------------------------------------------------------------
 # Fixtures
 # --------------------------------------------------------------------------------------------------
@@ -175,7 +198,12 @@ def _run(
     seed: int = 42,
     batch_size: int = 2,
     out_path: Path | None = None,
+    compute_bootstrap_ci: bool = False,
+    bootstrap_n_resamples: int = 32,
+    bootstrap_confidence: float = 0.95,
 ) -> dict[str, Any]:
+    # Bootstrap is OFF by default here so the existing invariant tests stay fast/stable; the
+    # dedicated CI tests below flip it on (with a small n_resamples) explicitly.
     return evaluate(
         model if model is not None else DummyModel(),
         task if task is not None else DummyTask(_make_samples()),
@@ -186,6 +214,9 @@ def _run(
         seed=seed,
         batch_size=batch_size,
         out_path=out_path,
+        compute_bootstrap_ci=compute_bootstrap_ci,
+        bootstrap_n_resamples=bootstrap_n_resamples,
+        bootstrap_confidence=bootstrap_confidence,
     )
 
 
@@ -298,3 +329,141 @@ def test_unknown_dataset_raises() -> None:
     """Passing a dataset name the task does not declare raises ``ValueError``."""
     with pytest.raises(ValueError, match="unknown dataset"):
         _run(dataset="sig53")
+
+
+# --------------------------------------------------------------------------------------------------
+# Bootstrap confidence intervals (schema 1.2.0 metrics.uncertainty)
+# --------------------------------------------------------------------------------------------------
+def _bigger_task(n: int = 40, wrong_every: int = 3) -> tuple[Task, Model]:
+    """Build a >=40-sample AMC task and an imperfect model with fixed mistakes.
+
+    Enough samples that a bootstrap CI is non-degenerate, and a reproducible set of wrong
+    predictions (every ``wrong_every``-th sample) so the point estimate is stable.
+    """
+    samples: list[Batch] = [
+        {"iq": [0.0, 0.0], "label": i % 3, "snr_db": (i % 20) - 20 * 0} for i in range(n)
+    ]
+    wrong = frozenset(i for i in range(n) if i % wrong_every == 0)
+    return DummyTask(samples), DummyImperfectModel(wrong)
+
+
+def test_schema_version_is_1_2_0() -> None:
+    """The writer targets schema 1.2.0 (the version that added metrics.uncertainty)."""
+    from rfbench.core.evaluate import SCHEMA_VERSION
+
+    assert SCHEMA_VERSION == "1.2.0"
+    assert _run()["schema_version"] == "1.2.0"
+
+
+def test_bootstrap_ci_absent_when_disabled() -> None:
+    """No ``metrics.uncertainty`` block is emitted when bootstrap is turned off."""
+    result = _run(compute_bootstrap_ci=False)
+    assert "uncertainty" not in result["metrics"]
+
+
+def test_bootstrap_ci_present_and_ordered() -> None:
+    """With bootstrap on, the primary metric carries a well-formed percentile CI."""
+    from jsonschema import Draft202012Validator
+
+    task, model = _bigger_task()
+    result = _run(
+        model=model,
+        task=task,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=64,
+    )
+    Draft202012Validator(_load_schema()).validate(result)
+
+    uncertainty = result["metrics"]["uncertainty"]
+    assert "accuracy_overall" in uncertainty
+    entry = uncertainty["accuracy_overall"]
+    assert entry["method"] == "bootstrap_percentile"
+    assert entry["confidence"] == 0.95
+    assert entry["n_resamples"] == 64
+    assert entry["ci_low"] <= entry["ci_high"]
+    # The point estimate lies inside its own bootstrap interval (percentile bracket).
+    point = result["metrics"]["values"]["accuracy_overall"]
+    assert entry["ci_low"] <= point <= entry["ci_high"]
+
+
+def test_bootstrap_ci_covers_every_scalar_metric() -> None:
+    """Every reported scalar (accuracy_overall AND macro_f1) gets its own interval."""
+    task, model = _bigger_task()
+    result = _run(
+        model=model,
+        task=task,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=48,
+    )
+    uncertainty = result["metrics"]["uncertainty"]
+    # Curves never get a CI; only scalar values do.
+    assert set(uncertainty) == set(result["metrics"]["values"])
+    assert "accuracy_vs_snr" not in uncertainty
+
+
+def test_bootstrap_ci_is_reproducible() -> None:
+    """A fixed ``seed`` makes the whole CI byte-reproducible across runs."""
+    task_a, model_a = _bigger_task()
+    task_b, model_b = _bigger_task()
+    first = _run(
+        model=model_a,
+        task=task_a,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=40,
+    )
+    second = _run(
+        model=model_b,
+        task=task_b,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=40,
+    )
+    assert first["metrics"]["uncertainty"] == second["metrics"]["uncertainty"]
+
+
+def test_bootstrap_ci_writes_and_revalidates(tmp_path: Path) -> None:
+    """The uncertainty block survives the atomic write and re-validates from disk."""
+    from jsonschema import Draft202012Validator
+
+    task, model = _bigger_task()
+    out_path = tmp_path / "result.json"
+    result = _run(
+        model=model,
+        task=task,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=40,
+        out_path=out_path,
+    )
+    on_disk = json.loads(out_path.read_text(encoding="utf-8"))
+    assert on_disk == result
+    Draft202012Validator(_load_schema()).validate(on_disk)
+    assert "uncertainty" in on_disk["metrics"]
+
+
+def test_index_select_type_preserving() -> None:
+    """``_index_select`` gathers lists and dict-of-lists (meta) by index, preserving type."""
+    from rfbench.core.evaluate import _index_select
+
+    assert _index_select([10, 20, 30], [2, 0, 0]) == [30, 10, 10]
+    meta = {"snr_db": [-20, 0, 18], "label": [0, 1, 2]}
+    assert _index_select(meta, [1, 1]) == {"snr_db": [0, 0], "label": [1, 1]}
+
+
+def test_percentile_matches_linear_interpolation() -> None:
+    """``_percentile`` uses the type-7 (linear) rule and clamps the ends."""
+    from rfbench.core.evaluate import _percentile
+
+    data = [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert _percentile(data, 0.0) == 0.0
+    assert _percentile(data, 1.0) == 4.0
+    assert _percentile(data, 0.5) == 2.0
+    assert _percentile(data, 0.25) == 1.0

@@ -122,14 +122,20 @@ LWM-Spectro 2, 6G-MSM 2, RIS-MAE 1, TorchSig-XCiT 1.
 - **FM evaluators & data/metrics**:
   - WirelessJEPA — POWDER 4-device WiFi hardware, 500-shot linear probe 90.5% (vs IQFM 83.4%).
   - IQFM — POWDER RF Fingerprinting (4 devices), LoRA 96.05% @ 500/class.
-- **Status in rfbench**: **EXISTS.** `rfbench/tasks/sei/` is implemented; `EVALUATION_PROTOCOL.md`
-  §SEI defines WiSig / ORACLE / LoRa RFFI with `closed_set` / `cross_receiver` / `cross_day`.
+- **Status in rfbench**: **EXISTS + built out (2026-07, feat/sei-complete).** `rfbench/tasks/sei/`
+  implements WiSig / ORACLE / LoRa RFFI with `closed_set` / `cross_receiver` / `cross_day`. Added:
+  the paper-exact **`wisig_cnn_paper`** 2-D CNN, **`oracle_cnn`** (Sankhe 2019), SOTA-leaning
+  **`complex_cnn`** and **`resnet1d_sei`**, a **`balanced_accuracy`** secondary metric, a dedicated
+  **`training_sei.py`** loop (shared AMC `training.py` untouched), and a **POWDER** dataset/track.
+  WiSig board rows pending the cluster run.
 - **Recommended canonical dataset + protocol + metric**: keep the board's WiSig (ManyTx) as
-  primary, `sei-wisig-closed-8010-seed42-v1` (+ `cross_receiver`, `cross_day` tracks), primary
-  `rank1_accuracy` (open-set -> `auroc`, `eer`). **Data mismatch to fix**: both FM SEI evals are on
-  **POWDER**, not the board's WiSig/ORACLE/LoRa — a POWDER track would be needed for a
-  like-for-like FM comparison. The fabricated `iqfm` WiSig rank1=0.7734 row was **removed from the
-  board** (commit `a689e86`; BIBLIOGRAPHY A.3/A.5) — IQFM never evaluates WiSig.
+  primary, `sei-wisig-closedset-strat-tx-8010-seed42-v1` (+ `cross_receiver`, `cross_day` tracks),
+  primary `rank1_accuracy` + secondary `balanced_accuracy` (open-set -> `auroc`, `eer`). **FM
+  data-parity — ADDRESSED**: both FM SEI evals are on **POWDER** (Reus-Muns GLOBECOM 2020, the 4-BS
+  WiFi set), so a **POWDER `closed_set` track** is now scaffolded for a like-for-like comparison
+  (download blocked — manual, DRS anti-scrape). FM references are regime-separated: linear-probe
+  (WirelessJEPA 90.5 / IQFM 83.4) vs LoRA (IQFM 96.05) — never one column. The fabricated `iqfm`
+  WiSig rank1=0.7734 row was **removed** (`a689e86`) — IQFM never evaluates WiSig.
 - **Scope-fit**: core terrestrial-RF signal task; in scope.
 
 ### `direction_finding` — angle-of-arrival estimation (2 papers)

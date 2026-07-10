@@ -1,0 +1,63 @@
+{
+  "dataset": {
+    "name": "wisig"
+  },
+  "environment": {
+    "framework": "torch 2.12.1+cu130",
+    "hardware": "1x NVIDIA GB200",
+    "python_version": "3.11.15",
+    "rfbench_version": "0.1.0",
+    "seed": 42
+  },
+  "eval": {
+    "batch_size": 256,
+    "conditions": {},
+    "n_samples": 144556
+  },
+  "metrics": {
+    "primary": "auroc",
+    "uncertainty": {
+      "auroc": {
+        "ci_high": 0.661103427546636,
+        "ci_low": 0.655036837584758,
+        "confidence": 0.95,
+        "method": "bootstrap_percentile",
+        "n_resamples": 1000
+      },
+      "eer": {
+        "ci_high": 0.3651659112602506,
+        "ci_low": 0.359481429055092,
+        "confidence": 0.95,
+        "method": "bootstrap_percentile",
+        "n_resamples": 1000
+      }
+    },
+    "values": {
+      "auroc": 0.658027686263945,
+      "eer": 0.3621958398744113
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "n_params": 226420,
+    "name": "complex_cnn"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.2.0",
+  "split": {
+    "canonical_split_id": "sei-wisig-openset-heldouttx-8010-seed42-v1",
+    "checksum": "sha256:afdb341cde704944f963791c613fe47c06bd0f1bd80bf610e47836caccffab13",
+    "name": "test",
+    "seed": 42,
+    "track": "open_set"
+  },
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "verification": {
+    "status": "self_reported"
+  }
+}

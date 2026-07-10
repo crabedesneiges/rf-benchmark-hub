@@ -29,8 +29,11 @@ from rfbench.core.types import SplitName
 from rfbench.data.prepare.sei import (
     CANONICAL_SPLIT_IDS,
     SeiRecord,
+    _powder_ids,
     extract_lora_records,
+    extract_powder_records,
     extract_wisig_records,
+    partition_known_unknown_tx,
     prepare_sei,
 )
 
@@ -103,6 +106,54 @@ def test_prepare_sei_closed_set_stratified_by_tx(
     assert manifest.dataset == "wisig"
     assert manifest.n_items == len(records)
     assert manifest.seed == 42
+
+
+# --- open_set: whole transmitters held out as impostors -----------------------------
+
+
+def test_partition_known_unknown_tx_deterministic() -> None:
+    """~80/20 known/unknown transmitter split; deterministic, non-empty on both sides."""
+    tx_ids = list(range(10)) * 3  # 10 distinct tx, repeated
+    known, unknown = partition_known_unknown_tx(tx_ids, seed=42)
+    assert len(known) == 8 and len(unknown) == 2  # round(0.8 * 10) known
+    assert not (known & unknown) and (known | unknown)  # a clean partition of the 10 tx
+    assert (known, unknown) == partition_known_unknown_tx(tx_ids, seed=42)  # deterministic
+    # A different seed generally yields a different held-out set.
+    assert partition_known_unknown_tx(tx_ids, seed=7)[1] != unknown
+    # Fewer than 2 transmitters cannot hold one out.
+    with pytest.raises(ValueError, match="2 distinct transmitters"):
+        partition_known_unknown_tx([5, 5, 5], seed=42)
+
+
+def test_prepare_sei_open_set_holds_out_transmitters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """open_set -> train/val are known-tx only; test adds every held-out (impostor) tx."""
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    txs = (1, 2, 3, 4, 5)  # 5 tx -> round(0.8*5)=4 known, 1 unknown
+    records = _wisig_records(txs, rxs=(10, 11), days=(0,), per_cell=5)  # 5 tx x 10 = 50 items
+
+    split, manifest = prepare_sei("wisig", "open_set", out_dir=str(tmp_path), records=records)
+
+    tx_of = {i: records[i][0] for i in range(len(records))}
+    train_tx = {tx_of[i] for i in split.indices["train"]}
+    val_tx = {tx_of[i] for i in split.indices["val"]}
+    test_tx = {tx_of[i] for i in split.indices["test"]}
+
+    known, unknown = partition_known_unknown_tx([r[0] for r in records], seed=42)
+    assert len(train_tx) == len(known) == 4  # 4 known transmitters form the gallery
+    assert val_tx <= train_tx  # val is known-only
+    # The impostor transmitters appear ONLY in test (never in train/val), fully included.
+    impostor_tx = test_tx - train_tx
+    assert len(impostor_tx) == 1
+    impostor_count = sum(1 for i in range(len(records)) if tx_of[i] in impostor_tx)
+    assert sum(1 for i in split.indices["test"] if tx_of[i] in impostor_tx) == impostor_count == 10
+    # test also carries the known transmitters' held-out (genuine) samples.
+    assert test_tx & train_tx
+
+    _assert_partition(split.indices, len(records))
+    assert split.canonical_split_id == CANONICAL_SPLIT_IDS["wisig"]["open_set"]
+    assert manifest.n_items == len(records)
 
 
 # --- cross_receiver: grouped by receiver --------------------------------------------
@@ -550,4 +601,129 @@ def test_load_lora_records_reads_real_hdf5(tmp_path: Path, monkeypatch: pytest.M
     records = load_lora_records(cache=str(tmp_path))
     assert len(records) == 6
     assert [r[0] for r in records] == [1, 1, 2, 2, 3, 3]
+    assert all(r[1] is None and r[2] is None for r in records)
+
+
+# --- POWDER (4-BS WiFi) closed-set prepare + record extraction (pure stdlib) ----------
+
+
+def test_powder_ids_parses_device_and_day() -> None:
+    """_powder_ids extracts (device, day) from [Waveform]_[Day]_[TransmitterBS]_[Set] names."""
+    assert _powder_ids("WiFi_Day1_MEB_1.sigmf-data") == ("MEB", "Day1")
+    assert _powder_ids("WiFi_Day2_Browning_3.sigmf-data") == ("Browning", "Day2")
+    # A deviating name falls back to (stem, unknown_day) rather than raising.
+    assert _powder_ids("weird.sigmf-data") == ("weird", "unknown_day")
+
+
+def test_extract_powder_records_one_per_frame() -> None:
+    """extract_powder_records emits one (device, None, day) record per frame, in file order."""
+    frame_counts = [("MEB", "Day1", 2), ("Honors", "Day1", 3), ("MEB", "Day2", 1)]
+    records = extract_powder_records(frame_counts)
+    assert len(records) == 6
+    assert [r[0] for r in records] == ["MEB", "MEB", "Honors", "Honors", "Honors", "MEB"]
+    assert all(r[1] is None for r in records)  # single fixed receiver
+    assert [r[2] for r in records] == ["Day1", "Day1", "Day1", "Day1", "Day1", "Day2"]
+
+
+def test_powder_closed_set_prepare(tmp_path: Path) -> None:
+    """POWDER closed_set: 80/10/10 stratified by device, its own canonical split id + sidecars."""
+    # 4 devices x 30 frames each (day-pooled closed set, like the FM evaluators).
+    records: list[SeiRecord] = [
+        (dev, None, day)
+        for dev in ("MEB", "Browning", "Behavioral", "Honors")
+        for day in ("Day1", "Day2")
+        for _ in range(15)
+    ]
+    split, manifest = prepare_sei(
+        "powder", "closed_set", out_dir=tmp_path, records=records, seed=42
+    )
+    assert split.canonical_split_id == CANONICAL_SPLIT_IDS["powder"]["closed_set"]
+    assert manifest.dataset == "powder"
+    total = sum(len(split.indices[s]) for s in _SPLITS)
+    assert total == len(records)  # every frame covered exactly once
+    # Each device appears in every partition (closed-set identity, stratified by device).
+    idx_file = tmp_path / "splits" / "powder" / f"{split.canonical_split_id}.idx.json"
+    assert idx_file.is_file()
+    for partition in _SPLITS:
+        devices = {records[i][0] for i in split.indices[partition]}
+        assert devices == {"MEB", "Browning", "Behavioral", "Honors"}
+
+
+def test_powder_supports_only_closed_set(tmp_path: Path) -> None:
+    """POWDER (single receiver) rejects the cross_receiver / cross_day conditions."""
+    records: list[SeiRecord] = [("MEB", None, "Day1"), ("Honors", None, "Day1")]
+    with pytest.raises(ValueError, match="does not support condition"):
+        prepare_sei("powder", "cross_receiver", out_dir=tmp_path, records=records)
+
+
+# --- SigMF byte-reading loaders (POWDER / ORACLE): numpy-gated, real .sigmf-data on disk --------
+
+
+def _write_sigmf(path: Path, n_windows: int, window: int) -> None:
+    """Write a synthetic interleaved-f32 .sigmf-data (+ cf32 .sigmf-meta) of n_windows frames."""
+    import numpy as np
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    iq = np.arange(n_windows * window * 2, dtype=np.float32)
+    path.write_bytes(iq.tobytes())
+    path.with_suffix(".sigmf-meta").write_text(
+        json.dumps({"global": {"core:datatype": "cf32_le"}}), encoding="utf-8"
+    )
+
+
+def test_powder_sigmf_loader_and_array_alignment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """load_powder_records + _load_powder_arrays read real SigMF bytes in the SAME frame order."""
+    np = pytest.importorskip("numpy")
+    from rfbench.data.prepare.sei import load_powder_records
+    from rfbench.tasks.sei.dataset import _load_powder_arrays
+
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    powder = tmp_path / "powder"
+    for stem, n in (("WiFi_Day1_MEB_1", 3), ("WiFi_Day1_Honors_1", 2), ("WiFi_Day2_MEB_1", 1)):
+        _write_sigmf(powder / f"{stem}.sigmf-data", n, 256)
+
+    records = load_powder_records(cache=str(tmp_path), window=256)
+    iq_all, arr_records = _load_powder_arrays("powder")
+    assert len(records) == len(iq_all) == 6
+    assert np.asarray(iq_all[0]).shape == (256, 2)
+    # sorted-file order: Day1_Honors (2), Day1_MEB (3), Day2_MEB (1)
+    assert [r[0] for r in records] == ["Honors", "Honors", "MEB", "MEB", "MEB", "MEB"]
+    assert [r[0] for r in arr_records] == [r[0] for r in records]  # array loader == record order
+    assert all(r[1] is None for r in records)  # single fixed receiver
+    assert [r[2] for r in records] == ["Day1", "Day1", "Day1", "Day1", "Day1", "Day2"]
+
+
+def test_oracle_sigmf_loader_and_array_alignment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """load_oracle_records + _load_oracle_arrays read real SigMF bytes (window 128), file order."""
+    np = pytest.importorskip("numpy")
+    from rfbench.data.prepare.sei import load_oracle_records
+    from rfbench.tasks.sei.dataset import _load_oracle_arrays
+
+    monkeypatch.setenv("RFBENCH_CACHE", str(tmp_path))
+    oracle = tmp_path / "oracle"
+    for stem, n in (
+        ("2ft/WiFi_air_X310_3123D7B_2ft_run1", 2),
+        ("8ft/WiFi_air_X310_3123D7B_8ft_run1", 3),
+        ("2ft/WiFi_air_X310_3123EF0_2ft_run1", 1),
+    ):
+        _write_sigmf(oracle / f"{stem}.sigmf-data", n, 128)
+
+    records = load_oracle_records(cache=str(tmp_path))
+    iq_all, arr_records = _load_oracle_arrays("oracle")
+    assert len(records) == len(iq_all) == 6
+    assert np.asarray(iq_all[0]).shape == (128, 2)
+    # tx serial parsed from WiFi_air_X310_<serial>_...; sorted-file order (2ft before 8ft)
+    assert [r[0] for r in records] == [
+        "3123D7B",
+        "3123D7B",
+        "3123EF0",
+        "3123D7B",
+        "3123D7B",
+        "3123D7B",
+    ]
+    assert [r[0] for r in arr_records] == [r[0] for r in records]
     assert all(r[1] is None and r[2] is None for r in records)

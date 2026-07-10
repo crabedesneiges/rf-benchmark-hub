@@ -8,14 +8,18 @@ assert that:
 * ``few_shot`` honours ``k`` (per-class support size) and writes ``k_shot``, while
   ``from_scratch`` / ``full_finetune`` reject a stray ``k``;
 * ``few_shot`` subsampling is deterministic (seed-stable) and honours ``k``;
-* ``import rfbench.regimes`` stays dependency-free (no torch/numpy/sklearn/jsonschema).
+* ``import rfbench.regimes`` stays dependency-free (no torch/numpy/sklearn/jsonschema);
+* :class:`~rfbench.regimes.heads.LogisticRegressionHead` fits/predicts through the ``Head``
+  protocol (skipped if ``sklearn`` is not installed in this venv);
+* :func:`~rfbench.regimes.few_shot.run_episodic` draws ``n_episodes`` distinct seeded
+  support sets and returns exactly one result per episode.
 
 Must pass with only ``pytest`` (no torch/numpy/sklearn) installed.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 import pytest
@@ -23,14 +27,16 @@ import pytest
 from rfbench.core.model import Model, Regime, RegimeSpec
 from rfbench.core.types import Batch, Tensor
 from rfbench.regimes import (
+    EpisodeResult,
     FewShotAdapter,
     FromScratchAdapter,
     FullFinetuneAdapter,
     LinearProbeAdapter,
     NearestCentroidHead,
     make_adapter,
+    run_episodic,
 )
-from rfbench.regimes.base import RegimeAdapter
+from rfbench.regimes.base import FittedState, RegimeAdapter
 
 
 # --------------------------------------------------------------------------------------------------
@@ -263,3 +269,117 @@ def test_import_is_dependency_free() -> None:
     importlib.import_module("rfbench.regimes")
     for mod in ("torch", "numpy", "sklearn"):
         assert mod not in sys.modules, f"rfbench.regimes must not import {mod}"
+
+
+# --------------------------------------------------------------------------------------------------
+# LogisticRegressionHead (normative board head; requires sklearn)
+# --------------------------------------------------------------------------------------------------
+def test_logistic_regression_head_fits_and_predicts() -> None:
+    """LogisticRegressionHead recovers labels through the Head protocol (needs sklearn)."""
+    pytest.importorskip("sklearn")
+    from rfbench.regimes.heads import LogisticRegressionHead
+
+    head = LogisticRegressionHead()
+    embeddings = [[0.0, 1.0], [0.1, 0.9], [5.0, 0.0], [5.1, 0.1]]
+    labels = [0, 0, 1, 1]
+    head.fit(embeddings, labels)
+    assert head.predict([[0.05, 0.95], [5.05, 0.05]]) == [0, 1]
+
+
+def test_logistic_regression_head_rejects_predict_before_fit() -> None:
+    """predict before fit fails loudly, mirroring NearestCentroidHead's guard."""
+    pytest.importorskip("sklearn")
+    from rfbench.regimes.heads import LogisticRegressionHead
+
+    with pytest.raises(RuntimeError, match="before fit"):
+        LogisticRegressionHead().predict([[0.0, 0.0]])
+
+
+def test_logistic_regression_head_runs_through_linear_probe_adapter() -> None:
+    """LogisticRegressionHead drops into LinearProbeAdapter unchanged (Head protocol)."""
+    pytest.importorskip("sklearn")
+    from rfbench.regimes.heads import LogisticRegressionHead
+
+    adapter = LinearProbeAdapter(LogisticRegressionHead())
+    preds = _run_adapter(adapter)
+    assert len(preds) == 3
+
+
+# --------------------------------------------------------------------------------------------------
+# run_episodic (multi-episode few-shot orchestration)
+# --------------------------------------------------------------------------------------------------
+def test_run_episodic_returns_one_result_per_episode() -> None:
+    """run_episodic returns exactly n_episodes results, seeds base_seed..base_seed+n-1."""
+    model = DummyModel()
+
+    def predict_fn(model: Model, adapter: FewShotAdapter, state: FittedState) -> float:
+        preds = adapter.predict(model, _eval_batch(), state)
+        labels = _eval_batch()["label"]
+        correct = sum(1 for p, y in zip(preds, labels, strict=True) if p == y)
+        return correct / len(labels)
+
+    results = run_episodic(
+        lambda seed: FewShotAdapter(k=1, seed=seed),
+        model,
+        _train_split(),
+        predict_fn,
+        n_episodes=10,
+        base_seed=42,
+    )
+
+    assert len(results) == 10
+    assert [r.seed for r in results] == list(range(42, 52))
+    assert all(isinstance(r, EpisodeResult) for r in results)
+    # The perfectly-separable dummy model/head recovers all labels every episode.
+    assert all(r.primary_metric == 1.0 for r in results)
+
+
+def test_run_episodic_draws_distinct_supports_across_seeds() -> None:
+    """Different seeds select different k-shot supports when the split allows it."""
+    captured_supports: list[list[Batch]] = []
+
+    class _RecordingAdapter(FewShotAdapter):
+        def _select_train_samples(self, train_split: Iterable[Batch]) -> list[Batch]:
+            support = super()._select_train_samples(train_split)
+            captured_supports.append(support)
+            return support
+
+    model = DummyModel()
+
+    def predict_fn(model: Model, adapter: FewShotAdapter, state: FittedState) -> float:
+        return 0.0
+
+    run_episodic(
+        lambda seed: _RecordingAdapter(k=1, seed=seed),
+        model,
+        _train_split(),
+        predict_fn,
+        n_episodes=10,
+        base_seed=42,
+    )
+
+    assert len(captured_supports) == 10
+    # At least two distinct supports across 10 differently-seeded draws from a 4-per-class
+    # split -- seeds actually vary the selection (mirrors test_few_shot_seed_changes_selection).
+    distinct = {
+        tuple(s["label"] for s in support) + tuple(s["iq"][0] for s in support)
+        for support in captured_supports
+    }
+    assert len(distinct) > 1
+
+
+def test_run_episodic_rejects_non_positive_n_episodes() -> None:
+    """n_episodes must be >= 1."""
+    model = DummyModel()
+
+    def predict_fn(model: Model, adapter: FewShotAdapter, state: FittedState) -> float:
+        return 0.0
+
+    with pytest.raises(ValueError, match="n_episodes must be >= 1"):
+        run_episodic(
+            lambda seed: FewShotAdapter(k=1, seed=seed),
+            model,
+            _train_split(),
+            predict_fn,
+            n_episodes=0,
+        )

@@ -93,6 +93,7 @@ TASK_TITLES: dict[str, str] = {
     "spectrum_sensing": "Spectrum sensing",
     "interference_id": "Interference identification",
     "protocol_tech_id": "Protocol / technology identification",
+    "snr_estimation": "SNR estimation",
 }
 
 #: Sensible fixed order for the known tasks; unknown tasks sort alphabetically AFTER these.
@@ -103,6 +104,7 @@ TASK_ORDER: tuple[str, ...] = (
     "spectrum_sensing",
     "interference_id",
     "protocol_tech_id",
+    "snr_estimation",
     "snr_mobility_recognition",
     "beam_prediction",
     "direction_finding",
@@ -200,6 +202,31 @@ _FAMILY_CHIP: dict[str, tuple[str, str]] = {
     "baseline": ("baseline", "chip-baseline"),
     "foundation": ("foundation", "chip-foundation"),
 }
+
+#: Metric keys where a LOWER value is better (regression error metrics), keyed by the primary
+#: metric name. Every classification metric on the board is higher-is-better, so this set is
+#: empty for them and the default DESC ranking is unchanged; ``snr_estimation``'s ``rmse_db`` /
+#: ``mae_db`` (dB error, 0 == perfect) rank ASCENDING and their score bar fills inversely.
+#: Direction is a property of the METRIC name, not the task, so a shared metric ranks the same
+#: way wherever it appears.
+LOWER_IS_BETTER_METRICS: frozenset[str] = frozenset({"rmse_db", "mae_db"})
+
+#: Contamination-badge text/CSS-class per ``pretraining.overlap_with_eval`` value (schema
+#: 1.2.0). Rendered only for rows that DECLARE a ``pretraining`` block (foundation models with
+#: disclosed provenance); rows without it render no contamination badge and are byte-identical
+#: to before. ``none`` = disjoint by construction (green), ``unknown`` = not audited (amber),
+#: ``confirmed`` = known overlap (red).
+_OVERLAP_BADGE: dict[str, tuple[str, str]] = {
+    "none": ("clean", "badge-overlap-none"),
+    "unknown": ("overlap unknown", "badge-overlap-unknown"),
+    "confirmed": ("contaminated", "badge-overlap-confirmed"),
+}
+
+
+def _is_lower_better(metric_key: str) -> bool:
+    """Whether ``metric_key`` ranks ascending (lower == better), e.g. a regression error."""
+    return metric_key in LOWER_IS_BETTER_METRICS
+
 
 #: Shared educational content for the Guide page (guide.html). Embedded as a module constant
 #: (not read from a file) so the generator stays a single self-contained, stdlib-only module.
@@ -339,6 +366,33 @@ _GUIDE: dict[str, Any] = {
             "(Wave B) track.",
             False,
         ),
+        (
+            "rmse_db",
+            "Root-mean-square error in dB for SNR estimation (regression): the square root of "
+            "the mean squared gap between the predicted and true SNR over the full SNR range. "
+            "Primary snr_estimation metric; lower is better (0 dB is perfect), and it penalises "
+            "large errors (e.g. failures at low SNR) more than MAE.",
+            False,
+        ),
+        (
+            "mae_db",
+            "Mean absolute error in dB for SNR estimation: the average absolute gap between the "
+            "predicted and true SNR. Secondary snr_estimation metric; lower is better.",
+            False,
+        ),
+    ),
+    "contamination": (
+        "Foundation-model rows may disclose what their backbone was pretrained on and whether "
+        "that data overlaps the evaluation split (schema field pretraining.overlap_with_eval). "
+        "The board surfaces this as a contamination badge next to the model name: clean means "
+        "the pretraining data is disjoint from the eval split by construction; overlap unknown "
+        "means the overlap was not audited; contaminated means a known overlap, so the score "
+        "may be inflated by having seen (some of) the test signals during pretraining. Rows "
+        "with no pretraining disclosure (every specialized baseline, which is trained from "
+        "scratch on the task split) carry no badge at all. The badge never changes the ranking; "
+        "it is a disclosure the reader weighs, especially for an FM evaluated on a dataset it "
+        "was pretrained on (e.g. an RF FM pretrained on RadioML then probed on our RadioML "
+        "SNR-estimation split)."
     ),
 }
 
@@ -674,6 +728,53 @@ def _scalar_values(row: dict[str, Any]) -> dict[str, float]:
     return {str(k): float(v) for k, v in values.items()}
 
 
+def _primary_ci(row: dict[str, Any]) -> tuple[float, float] | None:
+    """Return the ``(ci_low, ci_high)`` confidence interval on the PRIMARY metric, or ``None``.
+
+    Reads ``metrics.uncertainty[<primary>]`` (schema 1.2.0); absent on pre-1.2.0 rows and on
+    literature rows that never got a bootstrap/backfill, in which case there is simply no
+    interval to draw or compare.
+    """
+    uncertainty = row["metrics"].get("uncertainty")
+    if not isinstance(uncertainty, dict):
+        return None
+    entry = uncertainty.get(_primary_key(row))
+    if not isinstance(entry, dict):
+        return None
+    lo, hi = entry.get("ci_low"), entry.get("ci_high")
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)):
+        return None
+    lo_f, hi_f = float(lo), float(hi)
+    return (lo_f, hi_f) if lo_f <= hi_f else (hi_f, lo_f)
+
+
+def _cis_overlap(a: tuple[float, float] | None, b: tuple[float, float] | None) -> bool:
+    """Whether two closed intervals overlap. Missing either interval -> no overlap claim.
+
+    Two intervals ``[a_lo, a_hi]`` and ``[b_lo, b_hi]`` overlap iff ``a_lo <= b_hi`` and
+    ``b_lo <= a_hi``. When either row lacks a CI we cannot assert a statistical tie, so we
+    conservatively return ``False`` (the strict ranking stands, unannotated).
+    """
+    if a is None or b is None:
+        return False
+    return a[0] <= b[1] and b[0] <= a[1]
+
+
+def _overlap_with_above(ordered: list[dict[str, Any]]) -> list[bool]:
+    """Per-row flag: does this row's PRIMARY CI overlap the row directly above it?
+
+    ``ordered`` is the already-ranked group (see :func:`_sort_rows`). The first row is never
+    flagged (nothing above it). A flagged row is statistically indistinguishable from its
+    predecessor on the primary metric -- the rank gap is within confidence-interval noise.
+    The ordering is NOT changed: overlap only annotates, never reranks (ranking on noise
+    would be dishonest), so the deterministic primary/trust/name order is preserved.
+    """
+    flags: list[bool] = [False] * len(ordered)
+    for i in range(1, len(ordered)):
+        flags[i] = _cis_overlap(_primary_ci(ordered[i]), _primary_ci(ordered[i - 1]))
+    return flags
+
+
 def _curves(row: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Return this row's curve map (``metrics.curves``) as name -> list of points.
 
@@ -771,17 +872,39 @@ def _family(row: dict[str, Any]) -> str | None:
 # --------------------------------------------------------------------------------------------------
 # Ordering helpers
 # --------------------------------------------------------------------------------------------------
-def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sort rows by primary metric DESC, then verified-first, then model name.
+def _rank_value(row: dict[str, Any]) -> float:
+    """Signed primary value for a DESCENDING sort: negate higher-is-better, keep lower-is-better.
 
-    All v1 primary metrics are 'higher is better', so descending primary gives the board
-    ranking; verified rows break ties ahead of self-reported ones, and the model name is a
-    final deterministic tiebreak.
+    Most metrics are higher-is-better, so ``-value`` puts the best first; a regression error
+    metric (``rmse_db``/``mae_db``) is lower-is-better, so ``+value`` puts the smallest error
+    first. All rows in a ranked group share one task/primary metric, so the direction is
+    consistent within a table. Keeps the board's single ``sorted(...)`` call and its total
+    order intact.
+    """
+    value = _primary_value(row)
+    return value if _is_lower_better(_primary_key(row)) else -value
+
+
+def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort rows by primary metric (best first), then verified-first, then model name.
+
+    'Best first' is DESC for the classification metrics (all higher-is-better) and ASC for the
+    regression error metrics (``rmse_db``/``mae_db``, lower-is-better) -- both expressed through
+    :func:`_rank_value`. Verified rows break ties ahead of self-reported ones, and the model
+    name is a final deterministic tiebreak.
+
+    Confidence intervals (schema 1.2.0 ``metrics.uncertainty``) DELIBERATELY do not enter
+    this key. Reranking two rows because their CIs overlap would let statistical noise
+    reshuffle the board (and would not even be a total order -- overlap is not transitive),
+    so the strict primary/trust/name order stands. Overlap is surfaced instead as a
+    non-reordering annotation on the rendered row (see :func:`_overlap_with_above` and
+    :func:`_render_group_table`): the reader sees "within CI of the row above" without the
+    rank silently changing on noise.
     """
     return sorted(
         rows,
         key=lambda r: (
-            -_primary_value(r),
+            _rank_value(r),
             _STATUS_TRUST_RANK.get(_status(r), len(_STATUS_TRUST_RANK)),
             str(r["model"]["name"]),
         ),
@@ -863,9 +986,19 @@ def _fmt_axis(value: float) -> str:
 # --------------------------------------------------------------------------------------------------
 # Inline-SVG line plot (stdlib only -- polylines computed from the curve points)
 # --------------------------------------------------------------------------------------------------
-def _render_bar(value: float, vmax: float) -> str:
-    """Render a tiny horizontal bar (0..vmax) visualising a primary score."""
-    frac = 0.0 if vmax <= 0 else max(0.0, min(1.0, value / vmax))
+def _render_bar(value: float, vmax: float, *, lower_is_better: bool = False) -> str:
+    """Render a tiny horizontal bar (0..vmax) visualising a primary score.
+
+    For a higher-is-better metric the bar fills ``value / vmax`` (bigger score = fuller bar).
+    For a lower-is-better metric (a regression error) the fill is inverted to ``1 - value/vmax``
+    so the BEST row (smallest error) still shows the fullest bar -- the visual "more is better"
+    reading holds for both metric directions.
+    """
+    if vmax <= 0:
+        frac = 0.0
+    else:
+        ratio = max(0.0, min(1.0, value / vmax))
+        frac = (1.0 - ratio) if lower_is_better else ratio
     pct = f"{frac * 100:.1f}"
     return (
         '<span class="bar" role="img" '
@@ -1008,18 +1141,78 @@ def _render_badge(status: str) -> str:
     return f'<span class="badge {css_class}">{_esc(text)}</span>'
 
 
+def _overlap_status(row: dict[str, Any]) -> str | None:
+    """Return the row's ``pretraining.overlap_with_eval`` value, or ``None`` if undeclared.
+
+    Only foundation-model rows that disclose a ``pretraining`` block (schema 1.2.0) carry this;
+    a baseline ``from_scratch`` row -- or any row without the block -- returns ``None`` so no
+    contamination badge is rendered and its markup stays byte-identical to before.
+    """
+    pretraining = row.get("pretraining")
+    if not isinstance(pretraining, dict):
+        return None
+    overlap = pretraining.get("overlap_with_eval")
+    return overlap if isinstance(overlap, str) else None
+
+
+def _render_overlap_badge(row: dict[str, Any]) -> str:
+    """Render the contamination badge for a row's pretraining/eval overlap (empty if undeclared).
+
+    Reads ``pretraining.overlap_with_eval`` (schema 1.2.0): ``none`` -> a neutral/green "clean"
+    badge, ``unknown`` -> an amber "overlap unknown" badge, ``confirmed`` -> a red "contaminated"
+    badge. Rows without a ``pretraining`` block (every current baseline row) render nothing, so
+    the contamination surface is purely additive and never alters existing rows. The
+    ``disclosure_note`` becomes the badge tooltip when present.
+    """
+    overlap = _overlap_status(row)
+    if overlap is None:
+        return ""
+    text, css_class = _OVERLAP_BADGE.get(overlap, (overlap, "badge-overlap-unknown"))
+    pretraining = row.get("pretraining")
+    note = pretraining.get("disclosure_note") if isinstance(pretraining, dict) else None
+    title = f' title="{_esc(str(note))}"' if isinstance(note, str) and note else ""
+    return f'<span class="badge {css_class}"{title}>{_esc(text)}</span>'
+
+
+def _render_ci_note(row: dict[str, Any], overlaps_above: bool) -> str:
+    """Render the sub-value CI annotation for the primary cell (empty when no CI).
+
+    Shows the primary metric's ``[ci_low, ci_high]`` interval (schema 1.2.0) under the
+    point estimate. When the interval overlaps the row directly above, an ``≈`` marker is
+    added with a tooltip: the two rows are statistically indistinguishable on the primary
+    metric, so the rank gap between them is within confidence-interval noise. The ordering
+    itself is unchanged (see :func:`_sort_rows`).
+    """
+    ci = _primary_ci(row)
+    if ci is None:
+        return ""
+    lo, hi = ci
+    ci_text = f"[{_fmt_metric(lo)}, {_fmt_metric(hi)}]"
+    if overlaps_above:
+        marker = (
+            '<span class="ci-tie" title="Within the confidence interval of the row above'
+            ' &mdash; statistically indistinguishable on the primary metric.">&asymp;</span>'
+        )
+        return f'<span class="metric-ci overlap">{marker}{_esc(ci_text)}</span>'
+    return f'<span class="metric-ci">{_esc(ci_text)}</span>'
+
+
 def _render_row(
     rank: int,
     row: dict[str, Any],
     scalar_keys: list[str],
     primary_key: str,
     primary_max: float,
+    *,
+    overlaps_above: bool = False,
 ) -> str:
     """Render one ``<tr>``: rank, model (+family chip, +params), each scalar, status.
 
     A cell is rendered for EVERY discovered scalar metric so no metric is left out; a metric
     absent from this particular row shows an en-dash. The primary column carries the score
-    bar and is visually emphasised.
+    bar and is visually emphasised, plus its confidence interval (schema 1.2.0) when known;
+    ``overlaps_above`` flags a CI overlap with the preceding row (annotation only, never a
+    reorder -- see :func:`_sort_rows`).
     """
     model = row["model"]
     name = _esc(model["name"])
@@ -1027,7 +1220,9 @@ def _render_row(
     if isinstance(url, str) and url:
         name = f'<a href="{_esc(url)}">{name}</a>'
     chip = _render_family_chip(_family(row))
+    overlap_badge = _render_overlap_badge(row)
     params = _fmt_params(model.get("n_params"))
+    lower_is_better = _is_lower_better(primary_key)
 
     values = _scalar_values(row)
     metric_cells: list[str] = []
@@ -1037,9 +1232,12 @@ def _render_row(
             continue
         formatted = _fmt_metric(values[key])
         if key == primary_key:
-            bar = _render_bar(values[key], primary_max)
+            bar = _render_bar(values[key], primary_max, lower_is_better=lower_is_better)
+            ci_note = _render_ci_note(row, overlaps_above)
+            cell_class = "num primary overlap" if overlaps_above else "num primary"
             metric_cells.append(
-                f'<td class="num primary"><span class="metric-val">{formatted}</span>{bar}</td>'
+                f'<td class="{cell_class}"><span class="metric-val">{formatted}</span>'
+                f"{ci_note}{bar}</td>"
             )
         else:
             metric_cells.append(f'<td class="num">{formatted}</td>')
@@ -1049,7 +1247,7 @@ def _render_row(
     return (
         "<tr>"
         f'<td class="rank num">{rank_html}</td>'
-        f'<td class="model"><span class="model-name">{name}</span>{chip}'
+        f'<td class="model"><span class="model-name">{name}</span>{chip}{overlap_badge}'
         f'<span class="params">{params}</span></td>'
         f"{''.join(metric_cells)}"
         f'<td class="status">{badge}</td>'
@@ -1073,6 +1271,7 @@ def _render_group_table(
     """
     ordered = _sort_rows(rows)
     primary_max = max((_primary_value(r) for r in ordered), default=1.0)
+    overlap_flags = _overlap_with_above(ordered)
 
     head_metric_cells = "".join(
         (
@@ -1090,7 +1289,14 @@ def _render_group_table(
         "</tr></thead>"
     )
     body_rows = "\n".join(
-        _render_row(i, row, scalar_keys, primary_key, primary_max)
+        _render_row(
+            i,
+            row,
+            scalar_keys,
+            primary_key,
+            primary_max,
+            overlaps_above=overlap_flags[i - 1],
+        )
         for i, row in enumerate(ordered, start=1)
     )
     return (
@@ -1812,6 +2018,15 @@ def render_guide() -> str:
         "<h2>Split policy</h2>"
         f'<p>{_esc(_GUIDE["split_policy"])}</p>'
         "</section>"
+        '<section class="guide-section" id="contamination">'
+        "<h2>Contamination badge</h2>"
+        f'<p>{_esc(_GUIDE["contamination"])}</p>'
+        '<p class="note">'
+        '<span class="badge badge-overlap-none">clean</span> disjoint by construction &middot; '
+        '<span class="badge badge-overlap-unknown">overlap unknown</span> not audited &middot; '
+        '<span class="badge badge-overlap-confirmed">contaminated</span> known overlap'
+        "</p>"
+        "</section>"
         f"{_render_glossary_section()}"
         "</section>"
     )
@@ -1935,6 +2150,12 @@ _CSS = """
   --badge-paper-bg: #eaf1fb; --badge-paper-fg: #2158a0; --badge-paper-bd: #b9d2f0;
   --badge-paper-uncertain-bg: #f2eefb; --badge-paper-uncertain-fg: #6b4fa0;
   --badge-paper-uncertain-bd: #d6c8f0;
+  --badge-overlap-none-bg: #e6f6ea; --badge-overlap-none-fg: #137333;
+  --badge-overlap-none-bd: #9fd8ae;
+  --badge-overlap-unknown-bg: #fff4e5; --badge-overlap-unknown-fg: #a15c00;
+  --badge-overlap-unknown-bd: #f0c891;
+  --badge-overlap-confirmed-bg: #fce8e8; --badge-overlap-confirmed-fg: #b3261e;
+  --badge-overlap-confirmed-bd: #f0b3ae;
   --chip-baseline-bg: #eef0f3; --chip-baseline-fg: #444b56; --chip-baseline-bd: #d6dae1;
   --chip-foundation-bg: #f1e9fb; --chip-foundation-fg: #6b31c9; --chip-foundation-bd: #d9c4f4;
   --status-impl-bg: #e6f6ea; --status-impl-fg: #137333; --status-impl-bd: #9fd8ae;
@@ -1960,6 +2181,12 @@ _CSS = """
     --badge-paper-bg: #16233a; --badge-paper-fg: #7fb0ea; --badge-paper-bd: #2c4a70;
     --badge-paper-uncertain-bg: #241c38; --badge-paper-uncertain-fg: #b79ce6;
     --badge-paper-uncertain-bd: #3f2f5c;
+    --badge-overlap-none-bg: #12281a; --badge-overlap-none-fg: #57cc7f;
+    --badge-overlap-none-bd: #2c5b3b;
+    --badge-overlap-unknown-bg: #2e2410; --badge-overlap-unknown-fg: #e0a94b;
+    --badge-overlap-unknown-bd: #5c4a1f;
+    --badge-overlap-confirmed-bg: #33191a; --badge-overlap-confirmed-fg: #f28b82;
+    --badge-overlap-confirmed-bd: #5f2b2b;
     --chip-baseline-bg: #20262e; --chip-baseline-fg: #b6bdc8; --chip-baseline-bd: #333b46;
     --chip-foundation-bg: #241a35; --chip-foundation-fg: #b892ec; --chip-foundation-bd: #4a3670;
     --status-impl-bg: #12281a; --status-impl-fg: #57cc7f; --status-impl-bd: #2c5b3b;
@@ -2030,6 +2257,12 @@ th.rank, td.rank { width: 2rem; text-align: right; color: var(--muted); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 th.primary, td.primary { color: var(--fg); }
 td.num.primary .metric-val { font-weight: 700; }
+.metric-ci {
+  display: block; font-size: 0.66rem; font-weight: 500; color: var(--muted);
+  font-variant-numeric: tabular-nums; margin-top: 0.1rem;
+}
+.metric-ci.overlap { color: var(--accent); }
+.ci-tie { margin-right: 0.2rem; font-weight: 700; cursor: help; }
 .col-note {
   display: block; font-size: 0.66rem; font-weight: 500; color: var(--accent);
   text-transform: uppercase; letter-spacing: 0.04em;
@@ -2065,6 +2298,21 @@ td.num.primary .metric-val { font-weight: 700; }
 .badge-paper-uncertain {
   background: var(--badge-paper-uncertain-bg); color: var(--badge-paper-uncertain-fg);
   border-color: var(--badge-paper-uncertain-bd);
+}
+.badge-overlap-none {
+  margin-left: 0.4rem;
+  background: var(--badge-overlap-none-bg); color: var(--badge-overlap-none-fg);
+  border-color: var(--badge-overlap-none-bd);
+}
+.badge-overlap-unknown {
+  margin-left: 0.4rem;
+  background: var(--badge-overlap-unknown-bg); color: var(--badge-overlap-unknown-fg);
+  border-color: var(--badge-overlap-unknown-bd);
+}
+.badge-overlap-confirmed {
+  margin-left: 0.4rem;
+  background: var(--badge-overlap-confirmed-bg); color: var(--badge-overlap-confirmed-fg);
+  border-color: var(--badge-overlap-confirmed-bd);
 }
 .chip { margin-left: 0.4rem; font-size: 0.68rem; padding: 0.02rem 0.45rem; }
 .chip-baseline {

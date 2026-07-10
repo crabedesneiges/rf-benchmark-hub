@@ -11,9 +11,59 @@ Any change here that alters a metric or split is a **breaking change** → bump 
   `accuracy_vs_snr` curve, `macro_f1`.
 
 ## SEI — RF fingerprinting
-- **Datasets**: WiSig (ManyTx), ORACLE (16-tx), LoRa RFFI.
-- **Splits**: `closed_set`, **`cross_receiver`**, **`cross_day`** (WiSig) — reported separately.
-- **Metrics**: closed-set → `rank1_accuracy` (**primary**); open-set → `auroc`, `eer`.
+- **Datasets**: WiSig (ManyTx, 150 tx / 18 rx / 4 days, non-equalized), ORACLE (16-tx), LoRa RFFI,
+  and **POWDER** (4-BS WiFi; the dataset the two FM SEI evaluators use — see the POWDER track below).
+- **Splits**: `closed_set`, **`cross_receiver`**, **`cross_day`**, **`open_set`** (WiSig) — reported
+  separately, never blended. ORACLE / POWDER are `closed_set` only (single receiver). The closed-set
+  conditions are deterministic 80/10/10 seed 42: `closed_set` stratified by transmitter;
+  `cross_receiver` / `cross_day` **grouped** by receiver / day (whole receivers/days held out → no
+  leakage across the boundary the condition guards). The **key WiSig result is the cross-receiver
+  drop** vs closed_set; the full SNR-free protocol runs every transmitter (no cherry-picking).
+- **Open-set split** (`sei-wisig-openset-heldouttx-8010-seed42-v1`): whole **transmitters** are held
+  out as *novel/impostor* identities. A deterministic seed-42 shuffle keeps **80% of the transmitters
+  as the known gallery** and holds out the remaining **20% as unknown**; the known transmitters'
+  captures are split 80/10/10 stratified-by-transmitter into `train`/`val`/`test`, and the scored
+  `test` partition is the known-tx **test** samples (**genuine**, in-gallery) plus **every** held-out
+  transmitter's samples (**impostor**, novel). The model is fit as a `|known|`-class identifier that
+  never sees an impostor. Genuine vs impostor is **not** stored in the split file — it is derived as
+  `transmitter ∈ {transmitters present in train}` — so the split stays a plain `{train,val,test}`
+  index partition. **Open-set score = maximum softmax probability (MSP)** over the gallery classes
+  (`rfbench.tasks.sei.metrics.match_score`); AUROC/EER separate genuine from impostor. Changing the
+  known fraction or the seed is a breaking change → bump the task version.
+- **Metrics**: closed-set → `rank1_accuracy` (**primary**, top-1 identification over the full test
+  split) + `balanced_accuracy` (**secondary**, the unweighted mean of per-class recalls — the
+  class-balanced accuracy the WiSig paper reports for the imbalanced ManyTx set, `p=0.9`; additive,
+  does not change the ranking key); open-set → `auroc` (**primary**), `eer`.
+- **Regimes**: `from_scratch` (the specialised baselines: `wisig_cnn_paper` — the paper-exact 2-D
+  CNN; `oracle_cnn` — Sankhe 2019; `complex_cnn` and `resnet1d_sei` — SOTA-leaning baselines) +
+  `linear_probe` / `full_finetune` via the standard adapters. `wisig_cnn` (compact 1-D) is retained
+  as a board-seeding variant, not the paper reproduction.
+- **WiSig recipe (baselines, `wisig_cnn_paper`, verbatim `d006_ManyTx_ntx.py`)**: input = first 256
+  IQ samples → `(256, 2)`, **unit-average-power normalized** per signal, non-equalized; Adam
+  `lr=5e-4`, categorical CE, **class_weight = max(count)/count**, batch 32, ≤100 epochs, early stop
+  patience 5 on **val_loss**, best weights restored; **L2 λ=1e-4 on the three Dense layers only**.
+
+### POWDER track (FM-comparable)
+- **Dataset**: **POWDER RF Fingerprinting** (Reus-Muns, Jaisinghani, Sankhe, Chowdhury, "Trust in 5G
+  Open RANs through Machine Learning: RF Fingerprinting on the POWDER PAWR Platform", *IEEE GLOBECOM
+  2020*, pp. 1–6; GENESYS Lab, Northeastern) — 4 WiFi base stations (Tx, USRP X310) → 1 fixed
+  receiver (USRP B210), SigMF captures, 5 MS/s @ 2.685 GHz, two capture days. Both public FM SEI
+  evaluators use exactly this set. Split id base `sei-powder-wifi4-closedset-strat-dev-8010-seed42-v1`,
+  `closed_set` (day-pooled), 256-sample frames (the FM convention; the origin paper used 512).
+- **Availability (BLOCKED — manual download)**: publicly reachable **without** POWDER/Emulab
+  credentials via the DRS Handle `hdl.handle.net/2047/D20385049` → record `neu:gm80mp276`
+  ("POWDER-4BS-IQsample"), BUT the DRS host anti-scrapes programmatic clients (HTTP 403, not
+  defeated by a browser User-Agent). So `rfbench data prepare --dataset powder` requires the SigMF
+  captures to be placed under `$RFBENCH_CACHE/powder/` **by hand first** (see
+  `rfbench.data.download.sei_powder` for the exact procedure). License: unspecified — cite the
+  GLOBECOM 2020 paper; do not assert a CC license. We ship only split indices + checksums (never raw
+  IQ, D3).
+- **FM reference (comparability, separate regime columns — the board never mixes regimes)**: on this
+  dataset WirelessJEPA (arXiv:2601.20190) reports **90.5%** and IQFM (arXiv:2506.06718, JEPA's
+  reproduction) **83.4%** under a **500-shot linear probe**; IQFM's own paper reports **96.05% @ 500
+  samples/class** under a **LoRA fine-tune** (vs 96.64% fully supervised). The 500-shot linear-probe
+  column (90.5 / 83.4) and the LoRA column (96.05) are DIFFERENT regimes and must not share a column.
+  Our from-scratch `*_cnn` baseline is a third, regime-separated reference on the same dataset.
 
 ## Wideband detection
 - **Dataset**: **RadDet** (ICASSP 2025 — real published spectrogram images + YOLO time-frequency box
@@ -80,3 +130,71 @@ Any change here that alters a metric or split is a **breaking change** → bump 
   `canonical_split_id`; changing either is a breaking change → bump the task `version`.
 - Full protocol conditions are recorded in `result.json.eval.conditions`.
 - The primary metric ranks the board; regimes are never mixed in one column.
+
+## Statistical rigor & uncertainty (normative)
+
+### Confidence intervals
+- **Default**: percentile bootstrap over the accumulated per-sample predictions
+  (`n_resamples=1000`, `confidence=0.95`), whenever raw predictions are available — i.e. any run
+  produced going forward via `evaluate()`.
+- **Backfill for already-committed rows** whose raw predictions no longer exist: a **Wilson
+  (binomial) interval** on `(accuracy, n_samples)` is acceptable, but **only** for metrics that are
+  true accuracy proportions — `accuracy_overall`, `rank1_accuracy`. It is **not** valid for `mAP` /
+  `pd@pfa=0.1`, which are not simple binomial proportions. A backfilled row MUST carry
+  `method: "wilson_backfill"` plus a `note` stating explicitly that it is an approximation derived
+  from `n` alone, not a resampling of the original predictions.
+
+### Few-shot: episodes, not single draws
+- `k ∈ {1, 10, 100}`. Each `k` is measured over **N≥10 episodes** (distinct support-set draws), with
+  episode seeds derived sequentially from the base seed 42 (e.g. seeds `42..51` for 10 episodes).
+- The reported number is the **mean across episodes** with its interval, tagged
+  `method: "multi_seed_std"`, `n_episodes: N`. A single support draw is **no longer** an acceptable
+  few-shot board measurement.
+
+### Normative probe for linear_probe / few_shot
+- The default head is **multinomial logistic regression** (scikit-learn, L2 penalty), deterministic
+  given a deterministic input embedding. Nearest-centroid remains a stdlib fallback for
+  tests/implementations only — **never** used to produce a real board number.
+
+### Wideband detection: mAP definition
+- **`mAP`** (primary) = COCO-style mAP, averaged over IoU thresholds `0.5:0.05:0.95`.
+- **`mAP@0.5`** (IoU=0.5 only) is reported as a secondary/curve value, kept for comparability with
+  older literature that only reports single-IoU AP.
+
+### Spectrum sensing: threshold calibration
+- The decision threshold for `pd@pfa=0.1` MUST be calibrated on the **val** split (pick the
+  threshold achieving `pfa=0.1` on val), then that **same, frozen** threshold is applied as-is to
+  the **test** split to measure `pd`. Calibrating the threshold directly on test is contamination
+  and is rejected in review.
+
+### Per-task tolerance for a Tier-2 ("verified") re-run
+
+| Task | Metric | Tolerance |
+|---|---|---|
+| `amc` | `accuracy_overall` | ±0.005 absolute |
+| `sei` | `rank1_accuracy` | ±0.01 absolute |
+| `wideband_detection` | `mAP` | ±0.02 absolute |
+| `spectrum_sensing` | `pd@pfa=0.1` | ±0.02 absolute |
+| `interference_id` | `accuracy_overall` | ±0.005 absolute |
+| `protocol_tech_id` | `accuracy_overall` | ±0.005 absolute |
+
+### Test/contamination integrity
+- **Split checksums are the sole source of truth.** A split whose underlying samples change
+  without bumping `canonical_split_id` + `checksum` is rejected in review.
+- A foundation model's **pretraining corpus must be disclosed** (`pretraining` field, schema
+  1.2.0, added in a sibling PR) and checked for overlap with the eval splits before a row can
+  exceed `self_reported`.
+- **No hyperparameter or threshold tuning on the test split, ever** — `val` only.
+
+### Regression metric (`snr_estimation`)
+- **Primary**: `rmse_db` (RMSE in dB). **Secondary**: `mae_db` (MAE in dB). RMSE is chosen as
+  primary because it is the standard for this class of benchmark and is more sensitive to outliers
+  — relevant for catching estimation failures at low SNR. **Both are lower-is-better** (0 dB is a
+  perfect estimate); the leaderboard ranks `snr_estimation` ascending and inverts the score bar.
+- **Track**: a single canonical track **`all_snr`** — scored over the full RadioML 2016.10a SNR
+  range (−20…+18 dB) with **no cherry-picking**, never blending tracks in one board column (the
+  same "full SNR range" invariant as AMC).
+- **Canonical split**: `snr-radioml2016-strat-snr-8010-seed42-v1` — byte-identical indices to the
+  AMC split `amc-radioml2016-strat-snr-8010-seed42-v1` (derived from it, own id), so the SNR and
+  AMC boards are scored on the exact same held-out signals. The supervision target is the
+  per-window `snr_db` field (the same field AMC carries as metadata).

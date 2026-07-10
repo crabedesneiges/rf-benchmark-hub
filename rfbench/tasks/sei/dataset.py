@@ -35,13 +35,14 @@ from rfbench.data.prepare.sei import CANONICAL_SPLIT_IDS, SeiRecord
 if TYPE_CHECKING:  # pragma: no cover - typing-only import, never executed at runtime
     import torch.utils.data
 
-#: The SEI conditions/tracks this adapter serves. ``open_set`` reuses the ``closed_set``
-#: canonical split id (same emitters/captures) but is scored with the open-set metrics.
+#: The SEI conditions/tracks this adapter serves. ``open_set`` has its OWN canonical split
+#: (whole transmitters held out as novel/impostor identities) and is scored with the open-set
+#: metrics; the closed-set conditions map to their own stratified/grouped split ids.
 _TRACK_TO_CONDITION: dict[Track, str] = {
     "closed_set": "closed_set",
     "cross_receiver": "cross_receiver",
     "cross_day": "cross_day",
-    "open_set": "closed_set",
+    "open_set": "open_set",
 }
 
 #: Placeholder checksum for the in-memory synthetic adapter (schema pattern
@@ -60,6 +61,15 @@ class _InMemorySplit:
     def __len__(self) -> int:
         """Return the number of samples in the split."""
         return len(self._samples)
+
+    def __getitem__(self, index: int) -> Batch:
+        """Return the ``index``-th per-sample batch (map-style access for a ``DataLoader``).
+
+        Needed so the SEI training loop (:mod:`rfbench.training_sei`) can wrap this split in a
+        ``torch.utils.data.DataLoader`` (which requires ``__getitem__``); the eval loop only
+        iterates, but map-style access is the more general contract.
+        """
+        return self._samples[index]
 
     def __iter__(self) -> Iterator[Batch]:
         """Iterate the per-sample batches in order (deterministic)."""
@@ -156,8 +166,15 @@ class SeiDataset(Dataset):
         index via a deterministic (sorted-id) map, consistent across train/val/test loads
         exactly like the AMC on-disk adapter.
         """
+        iq_all, records = _load_sei_arrays(self.name)
+        if self._track == "open_set":
+            # Open-set: derive the gallery (KNOWN tx = those in the train partition) and tag
+            # each probe genuine (in-gallery) vs impostor (novel/held-out) -- see
+            # rfbench.data.prepare.sei._prepare_open_set. The class map spans known tx only.
+            train_indices = self._read_split_indices("train")
+            split_indices = self._read_split_indices(split)
+            return _InMemorySplit(open_set_samples(iq_all, records, split_indices, train_indices))
         indices = self._read_split_indices(split)
-        iq_all, records = _load_wisig_arrays(self.name)
         tx_ids = sorted({_tx_key(rec[0]) for rec in records})
         class_of = {tx: i for i, tx in enumerate(tx_ids)}
         samples: list[Batch] = [
@@ -209,6 +226,164 @@ def _tx_key(tx_id: object) -> tuple[int, str]:
     if isinstance(tx_id, str):
         return (0, tx_id)
     return (1, f"{tx_id!r}")
+
+
+def open_set_samples(
+    iq_all: Sequence[Any],
+    records: Sequence[SeiRecord],
+    split_indices: Sequence[int],
+    train_indices: Sequence[int],
+) -> list[Batch]:
+    """Materialise open-set probes with a genuine/impostor flag (pure Python, unit-tested).
+
+    The gallery is the set of KNOWN transmitters -- those present in the open-set split's
+    ``train`` partition. Each probe in ``split_indices`` becomes a canonical batch carrying
+    ``genuine == 1`` if its transmitter is in the gallery (in-gallery probe) or ``0`` if it
+    is a held-out novel identity (impostor). ``label`` is the dense gallery-class index for a
+    known tx (over the sorted known set, consistent with what the model was trained on) and
+    ``-1`` for an impostor (unused by :class:`~rfbench.tasks.sei.metrics.OpenSetMetric`, which
+    reads only the score and the genuine flag). No numpy: ``iq_all`` rows are passed through
+    verbatim, so this runs on stdlib fixtures.
+    """
+    known = {_tx_key(records[i][0]) for i in train_indices}
+    class_of = {tx: index for index, tx in enumerate(sorted(known))}
+    samples: list[Batch] = []
+    for i in split_indices:
+        tx = _tx_key(records[i][0])
+        samples.append(
+            {
+                "iq": iq_all[i],
+                "label": class_of.get(tx, -1),
+                "genuine": 1 if tx in known else 0,
+                "meta": {"rx": records[i][1], "day": records[i][2]},
+            }
+        )
+    return samples
+
+
+def _load_sei_arrays(
+    name: str,
+) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
+    """Dispatch to the per-dataset flat ``(iq_rows, records)`` loader (WiSig / ORACLE / POWDER).
+
+    Each loader returns per-signal ``(window, 2)`` IQ rows + ``(tx, rx, day)`` records in the
+    EXACT order the matching :mod:`rfbench.data.prepare.sei` extractor used, so the committed
+    split indices line up element-for-element. Cluster-only (needs the real data + numpy).
+    """
+    if name == "wisig":
+        return _load_wisig_arrays(name)
+    if name == "powder":
+        return _load_powder_arrays(name)
+    if name == "oracle":
+        return _load_oracle_arrays(name)
+    raise NotImplementedError(
+        f"on-disk IQ loading is wired for WiSig / ORACLE / POWDER only; {name!r} has no loader."
+    )
+
+
+def _load_oracle_arrays(
+    name: str,
+) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
+    """Load flat ``(iq_rows, records)`` from the cached ORACLE SigMF captures (lazy numpy).
+
+    Mirrors :func:`rfbench.data.prepare.sei.load_oracle_records` EXACTLY (same
+    ``sorted(rglob('*.sigmf-data'))`` file order, same ``_ORACLE_WINDOW`` framing, same
+    ``_oracle_tx_id`` identity), emitting one ``(window, 2)`` row + one ``(tx_id, None, None)``
+    record per capture window -- so ``iq[k]`` corresponds to ``records[k]`` and both align with
+    the committed ORACLE split indices. ORACLE has a single fixed receiver, so ``rx``/``day`` are
+    ``None`` (closed-set identity only).
+    """
+    import json  # stdlib
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Loading SEI IQ needs numpy; install it with `pip install rfbench[tasks]`."
+        ) from exc
+
+    from rfbench.data.prepare._common import resolve_cache_dir
+    from rfbench.data.prepare.sei import _ORACLE_WINDOW, _oracle_tx_id, _sigmf_np_dtype
+
+    cache_dir = resolve_cache_dir(None)
+    root = cache_dir / name
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"ORACLE not found at {root}; run the download step first "
+            "(rfbench.data.download.sei_oracle)."
+        )
+    window = _ORACLE_WINDOW
+    iq: list[Any] = []
+    records: list[SeiRecord] = []
+    for data_path in sorted(root.rglob("*.sigmf-data")):
+        tx_id = _oracle_tx_id(data_path.name)
+        meta_path = data_path.with_suffix(".sigmf-meta")
+        dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
+        raw = np.fromfile(data_path, dtype=dtype).astype(np.float32)
+        n_complex = int(raw.size // 2)
+        n_windows = n_complex // window
+        if n_windows == 0:
+            continue
+        frames = raw[: n_windows * window * 2].reshape(n_windows, window, 2)
+        for row in frames:  # (window, 2) per capture window
+            iq.append(row)
+            records.append((tx_id, None, None))
+    if not records:
+        raise FileNotFoundError(f"no ORACLE .sigmf-data captures found under {root}.")
+    return iq, records
+
+
+def _load_powder_arrays(
+    name: str,
+) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
+    """Load flat ``(iq_rows, records)`` from the cached POWDER SigMF captures (lazy numpy).
+
+    Walks ``$RFBENCH_CACHE/powder/*.sigmf-data`` in sorted file order (the SAME order
+    :func:`rfbench.data.prepare.sei.load_powder_records` uses), reading each recording's
+    interleaved I/Q, slicing it into non-overlapping ``_POWDER_WINDOW``-sample frames and emitting
+    one ``(window, 2)`` row + one ``(device_id, None, day_id)`` record per frame -- so ``iq[k]``
+    corresponds to ``records[k]`` and both align with the committed split indices.
+    """
+    import json  # stdlib
+
+    try:
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Loading SEI IQ needs numpy; install it with `pip install rfbench[tasks]`."
+        ) from exc
+
+    from rfbench.data.prepare._common import resolve_cache_dir
+    from rfbench.data.prepare.sei import _powder_ids, _sigmf_np_dtype
+
+    cache_dir = resolve_cache_dir(None)
+    root = cache_dir / name
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"POWDER not found at {root}; place the SigMF captures there first "
+            "(see rfbench.data.download.sei_powder for the manual-download procedure)."
+        )
+    window = _POWDER_WINDOW
+    iq: list[Any] = []
+    records: list[SeiRecord] = []
+    for data_path in sorted(root.rglob("*.sigmf-data")):
+        device_id, day_id = _powder_ids(data_path.name)
+        meta_path = data_path.with_suffix(".sigmf-meta")
+        dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
+        raw = np.fromfile(data_path, dtype=dtype).astype(np.float32)
+        n_complex = int(raw.size // 2)
+        n_frames = n_complex // window
+        if n_frames == 0:
+            continue
+        frames = raw[: n_frames * window * 2].reshape(n_frames, window, 2)
+        for row in frames:  # (window, 2) per frame
+            iq.append(row)
+            records.append((device_id, None, day_id))
+    return iq, records
+
+
+#: POWDER slice length (samples per frame); the FM convention (256), fed to the (window, 2) models.
+_POWDER_WINDOW = 256
 
 
 def _load_wisig_arrays(
@@ -298,4 +473,4 @@ def _require_seq(dataset: Mapping[str, Any], key: str) -> Sequence[Any]:  # prag
     return value
 
 
-__all__ = ["SeiDataset"]
+__all__ = ["SeiDataset", "open_set_samples"]

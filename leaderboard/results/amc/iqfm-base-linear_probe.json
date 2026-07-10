@@ -104,6 +104,15 @@
       ]
     },
     "primary": "accuracy_overall",
+    "uncertainty": {
+      "accuracy_overall": {
+        "ci_high": 0.49528856209799355,
+        "ci_low": 0.4820790261509952,
+        "confidence": 0.95,
+        "method": "wilson_backfill",
+        "note": "backfill a posteriori, pas de resampling sur predictions brutes (Wilson score reconstruit depuis accuracy et n)"
+      }
+    },
     "values": {
       "accuracy_overall": 0.48868181818181816,
       "macro_f1": 0.4967577734755739
@@ -117,7 +126,7 @@
   "regime": {
     "name": "linear_probe"
   },
-  "schema_version": "1.0.0",
+  "schema_version": "1.2.0",
   "split": {
     "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
     "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",

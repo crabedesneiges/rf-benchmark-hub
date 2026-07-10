@@ -4,7 +4,10 @@
 #
 # ONLY the frozen-embedding regimes produce a meaningful FM row here:
 #   * linear_probe (default) — fit a head on the frozen encoder embeddings (validated chain).
-#   * few_shot K             — same, on a K-per-class support set (K is the 3rd arg).
+#   * few_shot K             — EPISODIC (EVALUATION_PROTOCOL.md: N=10 episodes, seeds 42..51):
+#                              10 K-per-class draws, each evaluated on the full test split, then
+#                              ONE aggregated row (mean + descriptive ±1 stdev, multi_seed_std).
+#                              Delegated to slurm/eval_fm_episodic.py; K is the 3rd arg.
 # from_scratch / full_finetune are REFUSED: they read model.forward(), which for lwm-spectro is a
 # FRESH UNTRAINED head over the frozen encoder (~chance). A real full_finetune needs a separate
 # training loop (not yet implemented) that fits + saves the head/encoder the wrapper then loads.
@@ -24,7 +27,8 @@
 #
 # Usage: sbatch slurm/eval_fm_arm.sh [MODEL] [REGIME] [K_SHOT]
 #   sbatch slurm/eval_fm_arm.sh                       # lwm-spectro linear_probe
-#   sbatch slurm/eval_fm_arm.sh lwm-spectro few_shot 5
+#   sbatch slurm/eval_fm_arm.sh iqfm-base linear_probe   # rescore iqfm-base row (logreg head)
+#   sbatch slurm/eval_fm_arm.sh iqfm-base few_shot 10    # episodic k=10 (seeds 42..51)
 #SBATCH --job-name=rfbench_eval_fm
 #SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/rfbench_eval_fm_%j.out
 #SBATCH --error=/lustre/work/pdl16831/udl79f933/logs/rfbench_eval_fm_%j.err
@@ -33,10 +37,16 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=03:00:00
+# cluster mono-partition (defq*, GB200/ARM uniquement) -- pas de contrainte d'architecture requise
+# (confirmé via `sinfo -o "%P %f %c %G"`, seule feature reportée: location=local)
 
 set -uo pipefail
 WORK=/lustre/work/pdl16831/udl79f933
-REPO="$WORK/projets/rf-benchmark-hub"
+# Derive REPO from the SLURM submit dir so the job ALWAYS imports the code of the worktree it
+# was submitted from -- NOT whatever the ARM venv's editable .pth happens to point at (that
+# .pth targets the canonical worktree, a pre-Phase-0 checkout). Falls back to $PWD when run
+# outside SLURM (e.g. a manual `bash eval_fm_arm.sh` smoke test).
+REPO="${SLURM_SUBMIT_DIR:-$PWD}"
 VENV="$WORK/envs/rfbench-arm-gpu"
 export RFBENCH_CACHE="$WORK/data/rfbench_cache"
 export RFBENCH_HARDWARE="1x NVIDIA GB200"
@@ -48,11 +58,38 @@ if [ "$REGIME" = "few_shot" ] && [ -n "$K_SHOT" ]; then
 else
   OUT="$REPO/leaderboard/results/amc/${MODEL}-${REGIME}.json"
 fi
+# Per-episode few-shot staging (conventions): $WORK/logs/multiseed/<task>/k<K>/<model>-seed<seed>.json.
+# Each k value gets its own sub-directory to avoid collisions when k=1/10/100 jobs run in parallel.
+STAGING_BASE="$WORK/logs/multiseed/amc"
 
 echo "=== node=$(hostname) arch=$(uname -m) model=$MODEL regime=$REGIME k_shot=${K_SHOT:-n/a} date=$(date -Is) ==="
 cd "$REPO" || { echo "REPO NOT FOUND"; exit 2; }
+# PYTHONPATH must precede site-packages so `import rfbench` resolves to THIS repo, short-
+# circuiting the editable-install .pth that points at the canonical (pre-Phase-0) worktree.
+export PYTHONPATH="$REPO:${PYTHONPATH:-}"
 
-MODEL="$MODEL" REGIME="$REGIME" K_SHOT="$K_SHOT" OUT="$OUT" "$VENV/bin/python" - <<'PY'
+if [ "$REGIME" = "few_shot" ]; then
+  # Episodic few-shot (EVALUATION_PROTOCOL.md: N>=10 episodes, seeds 42..51): delegate to the
+  # dedicated aggregator, which fits one FewShotAdapter per seed, evaluates each episode on the
+  # FULL test split via evaluate() (the canonical result.json writer), stages a per-seed row
+  # under $STAGING_DIR, then writes ONE aggregated board row (mean + descriptive +/-1 stdev,
+  # method=multi_seed_std, n_episodes=10). linear_probe stays on the legacy heredoc path below.
+  if [ -z "$K_SHOT" ]; then
+    echo "[eval-fm] few_shot requires K_SHOT (3rd arg), e.g. \`sbatch ... few_shot 10\`"
+    exit 2
+  fi
+  # Isolate staging files by k to prevent collisions when k=1/10/100 jobs run concurrently.
+  STAGING_DIR="$STAGING_BASE/k${K_SHOT}"
+  echo "[eval-fm] few_shot k=$K_SHOT: 10 episodes (seeds 42..51) -> aggregated row $OUT"
+  echo "[eval-fm] staging dir: $STAGING_DIR"
+  "$VENV/bin/python" "$REPO/slurm/eval_fm_episodic.py" \
+    --model "$MODEL" \
+    --k-shot "$K_SHOT" \
+    --out "$OUT" \
+    --staging-dir "$STAGING_DIR"
+  rc=$?
+else
+  MODEL="$MODEL" REGIME="$REGIME" OUT="$OUT" "$VENV/bin/python" - <<'PY'
 import os
 import sys
 
@@ -66,7 +103,6 @@ from rfbench.core.evaluate import evaluate
 
 model_name = os.environ["MODEL"]
 regime = Regime(os.environ["REGIME"])
-k_shot = os.environ.get("K_SHOT", "").strip()
 out = os.environ["OUT"]
 
 if regime in (Regime.FROM_SCRATCH, Regime.FULL_FINETUNE):
@@ -76,12 +112,9 @@ if regime in (Regime.FROM_SCRATCH, Regime.FULL_FINETUNE):
         "produces meaningful rows for linear_probe / few_shot (frozen embeddings + fitted head). "
         "A real full_finetune needs a separate training loop that fits + saves the head/encoder."
     )
-if regime is Regime.FEW_SHOT:
-    if not k_shot:
-        sys.exit("[eval-fm] few_shot requires K_SHOT (3rd arg), e.g. `sbatch ... few_shot 5`")
-    spec = RegimeSpec(regime, k_shot=int(k_shot))
-else:
-    spec = RegimeSpec(regime)
+# few_shot is handled by slurm/eval_fm_episodic.py (episodic, N>=10) and never reaches here;
+# this heredoc is the linear_probe path (single frozen-embedding head fit + evaluate).
+spec = RegimeSpec(regime)
 
 task = get_task("amc")
 fm = MODELS.get(model_name)()
@@ -97,7 +130,8 @@ if model_name == "lwm-spectro":
     # Only lwm-spectro reconstructs an UNVERIFIED IQ->STFT front-end; iqfm/wireless-jepa are raw-IQ.
     print("[eval-fm] REMINDER: score is PROVISIONAL — IQ->STFT preprocessing is UNVERIFIED.")
 PY
-rc=$?
+  rc=$?
+fi
 echo "=================================================="
 [ "$rc" -eq 0 ] && echo "RESULT: SUCCESS — $MODEL $REGIME evaluated -> $OUT" || echo "RESULT: EVAL FAILED (rc=$rc)"
 exit "$rc"

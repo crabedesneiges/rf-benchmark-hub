@@ -1608,6 +1608,7 @@ def test_scalar_metric_gets_bar_chart_with_ci_whiskers(tmp_path: Path) -> None:
 
     amc = (out / "amc.html").read_text(encoding="utf-8")
     assert 'class="plot barplot"' in amc  # a bar chart is rendered for the scalar metric
+    assert 'class="barplot-bar"' in amc  # rect uses a scoped class (not the table .bar)
     assert "accuracy_overall by model" in amc
     assert 'class="errbar"' in amc  # the CI on r1 draws whisker error bars
     assert "whiskers = confidence interval" in amc

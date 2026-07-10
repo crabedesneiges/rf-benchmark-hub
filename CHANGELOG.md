@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — board AMC deep réconcilié en tout-multi-seed (+ enveloppes d'IC)
+
+`mcldnn` et `resnet_amc` re-runés à 3 seeds (42/43/44) et ré-agrégés (`multi_seed_std` +
+enveloppe `y_low/y_high` sur `accuracy_vs_snr`), pour un board deep AMC homogène avec `cldnn` :
+- **`mcldnn` : 0.6171 → 0.5728** (moyenne 3-seeds honnête, reproductible depuis HEAD ; l'ancienne
+  valeur venait d'un run « final recipe » non reproduit par la recette committée). Passe sous cldnn.
+- **`resnet_amc` : 0.5661 → 0.5680** (quasi inchangé).
+Nouveau classement deep AMC : `cldnn` 0.5801 > `mcldnn` 0.5728 > `resnet_amc` 0.5680, chacun avec
+son IC ±1σ multi-seed et sa bande d'incertitude sur la courbe.
+
 ### Added — enveloppes d'incertitude sur les courbes `accuracy_vs_snr`
 
 Les courbes `accuracy_vs_snr` peuvent désormais porter une **bande d'incertitude ombrée** par bin

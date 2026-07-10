@@ -1,0 +1,67 @@
+{
+  "dataset": {
+    "name": "radioml_2016_10a"
+  },
+  "environment": {
+    "framework": "torch 2.12.1+cu130",
+    "hardware": "CPU (DSP/regression baseline)",
+    "python_version": "3.11.15",
+    "rfbench_version": "0.1.0",
+    "seed": 42
+  },
+  "eval": {
+    "batch_size": 256,
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 18,
+      "snr_db_min": -20
+    },
+    "n_samples": 22000
+  },
+  "metrics": {
+    "primary": "rmse_db",
+    "uncertainty": {
+      "mae_db": {
+        "ci_high": 5.892951264739393,
+        "ci_low": 5.7646628658052,
+        "confidence": 0.95,
+        "method": "bootstrap_percentile",
+        "n_resamples": 1000
+      },
+      "rmse_db": {
+        "ci_high": 7.734602379148642,
+        "ci_low": 7.553289931111009,
+        "confidence": 0.95,
+        "method": "bootstrap_percentile",
+        "n_resamples": 1000
+      }
+    },
+    "values": {
+      "mae_db": 5.825841818031866,
+      "rmse_db": 7.642190401082233
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "n_params": 7,
+    "name": "snr_moment_ridge"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.2.0",
+  "split": {
+    "canonical_split_id": "snr-radioml2016-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",
+    "name": "test",
+    "seed": 42,
+    "track": "all_snr"
+  },
+  "task": {
+    "name": "snr_estimation",
+    "version": "v1"
+  },
+  "verification": {
+    "status": "self_reported"
+  }
+}

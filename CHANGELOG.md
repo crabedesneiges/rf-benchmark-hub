@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — J4 complété : premières lignes de board `snr_estimation` (baselines de régression)
+
+La tâche `snr_estimation` (livrée sans score) a désormais ses baselines seed et sa page de
+leaderboard. Deux modèles (`rfbench/models/baselines/snr_regressors.py`), sur le split test
+RadioML 2016.10a (plage SNR complète −20…+18 dB, from_scratch, seed 42, CPU) :
+- **`mean_snr`** — plancher "zero-rule" (prédit la moyenne SNR du train, pure stdlib) :
+  **rmse_db 11.53 / mae_db 10.00** (le RMSE = l'écart-type de la distribution SNR).
+- **`snr_moment_ridge`** — réf DSP : 6 features d'enveloppe scale-invariantes (kurtosis M4/M2²,
+  M6/M2³, PAPR, cov d'enveloppe, |C20|/M2, |C42|/M2²) + Ridge standardisé (analog de `hoc_lr`) :
+  **rmse_db 7.64 / mae_db 5.83** — bat le plancher de ~3.9 dB RMSE.
+
+lower-is-better ; déterministes single-seed. Job SLURM CPU `slurm/train_snr_baselines.sh`. Tests
+pure-Python dont un **end-to-end `evaluate()` du plancher** (RMSE == std, `result.json` schéma-valide),
+la couverture qui manquait aux baselines SEI. La page `snr_estimation` du site est enfin peuplée.
+
 ### Added — J2 baselines DSP AMC + J4 tâche régression `snr_estimation` (reprise 2026-07-09)
 
 Reprise d'un WIP de session interrompue (jalons J2 + J4), câblé, vérifié (ruff/black/pytest verts)

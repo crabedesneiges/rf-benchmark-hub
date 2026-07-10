@@ -281,10 +281,49 @@ def _aggregate(
     result["metrics"]["values"] = mean_values
     result["metrics"]["uncertainty"] = uncertainty
 
+    # Curves: replace the single-seed curve with a per-bin mean + a ±1 sigma (across seeds)
+    # y_low/y_high envelope, so the site can shade the uncertainty band along accuracy_vs_snr.
+    if isinstance(result["metrics"].get("curves"), dict) and result["metrics"]["curves"]:
+        result["metrics"]["curves"] = _aggregate_curves(docs, ref_idx)
+
     # Ensure schema_version is 1.2.0 (uncertainty block requires it)
     result["schema_version"] = "1.2.0"
 
     return result
+
+
+def _aggregate_curves(docs: list[dict[str, Any]], ref_idx: int) -> dict[str, Any]:
+    """Per-bin curve aggregation: mean y + a ±1 sigma (across seeds) ``y_low``/``y_high`` band.
+
+    For every curve on the reference doc, the per-seed points are grouped by ``x`` and, at each
+    ``x`` of the reference curve, the mean ``y`` over the seeds carrying it is reported with a
+    ±1 sample-stdev envelope clamped to ``[0, 1]`` (current curves are rates). ``label`` is kept
+    from the reference. A single seed gives a zero-width band (``y_low == y == y_high``).
+    """
+    ref_curves = docs[ref_idx]["metrics"].get("curves", {})
+    out: dict[str, list[dict[str, Any]]] = {}
+    for name, ref_points in ref_curves.items():
+        by_x: dict[float, list[float]] = {}
+        for doc in docs:
+            for point in doc["metrics"].get("curves", {}).get(name, []):
+                by_x.setdefault(float(point["x"]), []).append(float(point["y"]))
+        points: list[dict[str, Any]] = []
+        for ref_point in ref_points:
+            x = float(ref_point["x"])
+            ys = by_x.get(x, [float(ref_point["y"])])
+            m = mean(ys)
+            sd = stdev(ys) if len(ys) >= 2 else 0.0
+            point = {
+                "x": x,
+                "y": m,
+                "y_low": max(0.0, min(1.0, m - sd)),
+                "y_high": max(0.0, min(1.0, m + sd)),
+            }
+            if "label" in ref_point:
+                point["label"] = ref_point["label"]
+            points.append(point)
+        out[name] = points
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -398,44 +398,32 @@ def test_idempotent(staging_dir: Path, out_dir: Path) -> None:
 
 
 def test_reference_seed_is_42_when_present(staging_dir: Path, out_dir: Path) -> None:
-    """When seed 42 is in the list, curves come from seed 42 (reference)."""
+    """When seed 42 is in the list, the base structure comes from seed 42 (reference)."""
     seeds = [42, 43, 44]
     for seed in seeds:
-        doc = _make_staging_doc(
-            seed=seed,
-            accuracy=0.58 + (seed - 42) * 0.01,
-            macro_f1=0.57,
-        )
-        # Give seed 42 a distinctive curve y value
-        doc["metrics"]["curves"] = {"accuracy_vs_snr": [{"x": 0.0, "y": float(seed)}]}
+        doc = _make_staging_doc(seed=seed, accuracy=0.58 + (seed - 42) * 0.01, macro_f1=0.57)
         _write_staging(staging_dir, "amc", "cldnn", seed, doc)
 
     out = out_dir / "amc" / "cldnn.json"
     result = agg.aggregate(staging_dir, "amc", "cldnn", seeds, out)
 
-    # Curves should come from seed 42 (y=42.0)
-    curve_y = result["metrics"]["curves"]["accuracy_vs_snr"][0]["y"]
-    assert curve_y == pytest.approx(42.0)
+    # The base doc (environment/split) comes from the reference seed 42; the curve is now
+    # aggregated per bin (mean over the 3 seeds), not copied from a single seed.
+    assert result["environment"]["seed"] == 42
 
 
 def test_reference_seed_fallback_to_first_when_42_absent(staging_dir: Path, out_dir: Path) -> None:
-    """When seed 42 is not in the list, the first seed is used as reference."""
+    """When seed 42 is not in the list, the first seed is used as the reference base doc."""
     seeds = [43, 44, 45]
     for seed in seeds:
-        doc = _make_staging_doc(
-            seed=seed,
-            accuracy=0.58 + (seed - 43) * 0.01,
-            macro_f1=0.57,
-        )
-        doc["metrics"]["curves"] = {"accuracy_vs_snr": [{"x": 0.0, "y": float(seed)}]}
+        doc = _make_staging_doc(seed=seed, accuracy=0.58 + (seed - 43) * 0.01, macro_f1=0.57)
         _write_staging(staging_dir, "amc", "cldnn", seed, doc)
 
     out = out_dir / "amc" / "cldnn.json"
     result = agg.aggregate(staging_dir, "amc", "cldnn", seeds, out)
 
-    # Curves should come from seed 43 (first in list)
-    curve_y = result["metrics"]["curves"]["accuracy_vs_snr"][0]["y"]
-    assert curve_y == pytest.approx(43.0)
+    # The base doc comes from the first seed (43) when 42 is absent.
+    assert result["environment"]["seed"] == 43
 
 
 # ---------------------------------------------------------------------------
@@ -510,3 +498,26 @@ def test_proportion_ci_clamped_to_unit_interval(staging_dir: Path, out_dir: Path
     assert 0.0 <= unc["ci_low"] <= 1.0
     # ci_low is untouched by the clamp (it is inside [0, 1] already)
     assert unc["ci_low"] == pytest.approx(mean(accuracies) - stdev(accuracies), abs=1e-9)
+
+
+def test_aggregated_curve_has_per_bin_ci(staging_dir: Path, out_dir: Path) -> None:
+    """The aggregated curve carries a per-bin y_low/y_high band (mean +/- 1 stdev across seeds)."""
+    import statistics
+
+    accuracies = [0.58, 0.59, 0.60]  # the fixture mirrors the curve y at x=0 to the accuracy
+    seeds = [42, 43, 44]
+    for seed, acc in zip(seeds, accuracies, strict=True):
+        _write_staging(
+            staging_dir,
+            "amc",
+            "cldnn",
+            seed,
+            _make_staging_doc(seed=seed, accuracy=acc, macro_f1=acc - 0.01),
+        )
+    result = agg.aggregate(staging_dir, "amc", "cldnn", seeds, out_dir / "amc" / "cldnn.json")
+    point = result["metrics"]["curves"]["accuracy_vs_snr"][0]
+    mean_y = statistics.mean(accuracies)
+    std_y = statistics.stdev(accuracies)
+    assert point["y"] == pytest.approx(mean_y)
+    assert point["y_low"] == pytest.approx(mean_y - std_y)
+    assert point["y_high"] == pytest.approx(mean_y + std_y)

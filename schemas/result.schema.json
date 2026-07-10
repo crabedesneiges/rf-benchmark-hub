@@ -248,6 +248,8 @@
               "properties": {
                 "x": {"type": "number"},
                 "y": {"type": "number"},
+                "y_low": {"type": "number", "description": "Optional lower bound of a per-point uncertainty band (e.g. multi-seed y-std or a per-bin bootstrap CI). Additive; rendered as a shaded envelope."},
+                "y_high": {"type": "number", "description": "Optional upper bound of a per-point uncertainty band (paired with y_low)."},
                 "label": {"type": "string"}
               }
             }

@@ -1618,3 +1618,21 @@ def test_render_bar_chart_empty_without_metric() -> None:
     """A metric absent from every row yields no chart (no broken SVG)."""
     rows = [_amc_row("z", "m", "from_scratch", 0.5, "self_reported")]
     assert generate._render_bar_chart("does_not_exist", rows) == ""
+
+
+def test_curve_with_ci_renders_shaded_band(tmp_path: Path) -> None:
+    """A curve whose points carry y_low/y_high renders a shaded uncertainty band (ci-band)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    curve = [
+        {"x": -10.0, "y": 0.30, "y_low": 0.25, "y_high": 0.35},
+        {"x": 10.0, "y": 0.80, "y_low": 0.77, "y_high": 0.83},
+    ]
+    _write(
+        results / "sei" / "c.json",
+        _sei_row("curve-row", "net", "closed_set", 0.6, curves={"accuracy_vs_snr": curve}),
+    )
+    generate.build_site(results, out)
+    sei_html = (out / "sei.html").read_text(encoding="utf-8")
+    assert 'class="ci-band"' in sei_html  # the shaded uncertainty envelope
+    assert 'aria-label="accuracy_vs_snr line plot"' in sei_html  # the line is still drawn

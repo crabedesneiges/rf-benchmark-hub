@@ -1020,9 +1020,16 @@ def _render_curve_plot(
     (cycled from ``_PLOT_SERIES_STYLES``) so lines stay distinguishable without color alone.
     Every x/y is computed here -- there is no JS and no external chart library.
     """
-    # Collect the global x/y ranges across all series.
+    # Collect the global x/y ranges across all series (including any uncertainty band bounds).
     xs = [float(p["x"]) for _, pts in series for p in pts]
-    ys = [float(p["y"]) for _, pts in series for p in pts]
+    ys: list[float] = []
+    for _, pts in series:
+        for p in pts:
+            ys.append(float(p["y"]))
+            if "y_low" in p:
+                ys.append(float(p["y_low"]))
+            if "y_high" in p:
+                ys.append(float(p["y_high"]))
     if not xs or not ys:
         return ""
     xmin, xmax = min(xs), max(xs)
@@ -1096,6 +1103,17 @@ def _render_curve_plot(
     for idx, (model_name, pts) in enumerate(series):
         color, dash = _PLOT_SERIES_STYLES[idx % len(_PLOT_SERIES_STYLES)]
         ordered = sorted(pts, key=lambda p: float(p["x"]))
+        # Uncertainty band: a shaded envelope from y_high (left->right) back along y_low
+        # (right->left), drawn BEHIND the line, when every point carries a per-point CI.
+        if ordered and all("y_low" in p and "y_high" in p for p in ordered):
+            up = " ".join(f"{sx(float(p['x'])):.1f},{sy(float(p['y_high'])):.1f}" for p in ordered)
+            down = " ".join(
+                f"{sx(float(p['x'])):.1f},{sy(float(p['y_low'])):.1f}" for p in reversed(ordered)
+            )
+            parts.append(
+                f'<polygon class="ci-band" fill="{color}" fill-opacity="0.14" '
+                f'stroke="none" points="{up} {down}"/>'
+            )
         coords = " ".join(f"{sx(float(p['x'])):.1f},{sy(float(p['y'])):.1f}" for p in ordered)
         dash_attr = "" if dash == "none" else f' stroke-dasharray="{dash}"'
         parts.append(

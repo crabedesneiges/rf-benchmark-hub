@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — enveloppes d'incertitude sur les courbes `accuracy_vs_snr`
+
+Les courbes `accuracy_vs_snr` peuvent désormais porter une **bande d'incertitude ombrée** par bin
+de SNR :
+- `schemas/result.schema.json` : les points de courbe acceptent deux champs optionnels `y_low`/
+  `y_high` (additif, non-breaking — les courbes sans eux valident inchangées).
+- `scripts/aggregate_multiseed.py` : l'agrégation multi-seed calcule, **par bin**, la moyenne des
+  `y` et une enveloppe **±1 σ entre seeds** (`y_low`/`y_high`, clampée à [0,1]), au lieu de copier
+  la courbe du seed de référence.
+- `leaderboard/site/generate.py` : `_render_curve_plot` trace un `<polygon class="ci-band">`
+  translucide entre `y_high` et `y_low`, sous la ligne, quand les points portent la bande.
+- **`cldnn`** ré-agrégé depuis ses fichiers per-seed (42/43/44) : accuracy inchangée (0.5801, la
+  valeur committée EST déjà la moyenne multi-seed) + sa courbe gagne l'enveloppe. `mcldnn`/
+  `resnet_amc` NON touchés : leur valeur board vient d'un run « final recipe » distinct (`d4af7df`)
+  dont les per-seed ne sont pas dans le staging multi-seed — ils nécessiteraient un re-run 3-seed
+  dédié pour une enveloppe honnête.
+
+Tests : agrégation de courbe avec CI par bin, rendu de la bande, points sans bande inchangés.
+
 ### Added — bar charts par métrique + intervalles de confiance sur les plots
 
 Chaque **métrique scalaire** (celles sans plot 2-D — `accuracy_overall`, `macro_f1`, `rmse_db`,

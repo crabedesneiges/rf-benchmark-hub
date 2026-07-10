@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — tier `verified` : débloquer snr_estimation + doctrine de tolérance (§1/§2)
+
+- **submission.schema.json** : `snr_estimation` ajouté à l'enum `task.name` ET au pattern
+  `result_path` (aligné sur result.schema.json) — un manifest SNR peut désormais viser le tier
+  `verified` (LOT 2). Additif, enum reste fermé (test de non-régression).
+- **EVALUATION_PROTOCOL.md** : table de tolérance Tier-2 étendue (`snr_estimation` rmse_db ±0.10 dB,
+  `sei` open-set auroc ±0.01) + **doctrine déterministe vs stochastique** :
+  `tolerance.absolute = max(plancher, 2·σ_multiseed)` pour les baselines NN entraînées (la re-run
+  rejoue le même protocole de seeds ; le bruit CUDA est couvert par 2σ). Note : la `tolerance` du
+  manifest est un *objet* (règle), `verification.tolerance` du result est le *scalaire résolu* — par
+  design, pas une divergence de schéma.
+- **Manifests** : `leaderboard/manifests/snr_estimation/{mean_snr,snr_moment_ridge}.json`
+  (source_only, déterministes, ±0.10 dB) — prêts pour la re-run defq CPU.
+- Tests : schéma accepte snr_estimation + rejette une tâche inconnue ; verify vérifie la doctrine
+  2σ (une re-run à 1.5σ passe sous 2σ, échoue sous le plancher 0.005).
+
 ### Changed — board AMC deep réconcilié en tout-multi-seed (+ enveloppes d'IC)
 
 `mcldnn` et `resnet_amc` re-runés à 3 seeds (42/43/44) et ré-agrégés (`multi_seed_std` +

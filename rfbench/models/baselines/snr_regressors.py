@@ -60,7 +60,7 @@ def _batch_size(iq_batch: object) -> int:
     shape = getattr(iq_batch, "shape", None)
     if shape is not None:  # numpy-like: (B, 2, L) -> B ; (2, L) -> 1 unbatched window
         return int(shape[0]) if len(shape) == 3 else 1
-    return len(iq_batch)  # a plain list of per-sample windows
+    return len(iq_batch)  # type: ignore[arg-type]  # a plain list of per-sample windows
 
 
 def _snr_features(window: Window) -> list[float]:

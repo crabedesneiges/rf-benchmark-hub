@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — tier `verified` (D4) : premières lignes officiellement re-vérifiées
+
+Le board a ses **3 premières lignes `verified`** (jusqu'ici 25/25 `self_reported`). Le mainteneur a
+re-joué les 3 baselines AMC déterministes et flippé leur statut via la machinerie `rfbench verify`
+(WP-53), avec provenance estampillée :
+- `hoc_lr`, `majority_class`, `chance` (amc, `from_scratch`) → **`verified`**,
+  `verified_by=rf-bench-maintainers`, `method=full_retrain`, re-run **bit-identique** aux valeurs
+  committées (|Δ|=0 ≤ tolérance amc ±0.005).
+
+Pré-requis livrés :
+- **`submission.schema.json` 1.1.0** (additif, 1.0.0 toujours valide) : nouvelle forme d'artefact
+  `artifacts.source_only: true` — une baseline déterministe `from_scratch` est reproductible depuis
+  les sources (`code_commit` + `command` + splits committés + `uv.lock`) sans poids ni image
+  externes, la forme honnête pour un projet from-source (D3). `docs/SUBMISSION.md` documenté.
+- **Manifests de vérification** `leaderboard/manifests/amc/{hoc_lr,majority_class,chance}.json`
+  (`expected_metrics` = valeurs committées, `tolerance.absolute=0.005`, `rerun_mode=full_retrain`).
+- Re-run officiel via `slurm/train_hoc_amc.sh` (CPU/defq), flip `rfbench verify --rerun --out`.
+
+Le site affiche le badge `verified` sur ces 3 lignes. Les baselines déterministes SNR
+(`mean_snr`/`snr_moment_ridge`) sont le lot suivant, bloqué par l'absence de `snr_estimation` dans
+les enums de `submission.schema.json` (PR séparée) + une tolérance à fixer au protocole.
+
 ### Added — page « Methods » : explication cliquable et fidèle à l'implémentation par méthode
 
 Chaque méthode **sans papier** du board a désormais un nom **cliquable** qui pointe vers une page

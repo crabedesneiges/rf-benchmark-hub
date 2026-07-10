@@ -1554,3 +1554,37 @@ def test_no_paper_methods_link_to_methods_page(tmp_path: Path) -> None:
     assert (
         '<a href="https://doi.org/10.1109/LWC.2020.2999453">mcldnn</a>' in amc
     )  # paper -> external
+
+
+def test_render_docstring_linkifies_arxiv_and_doi() -> None:
+    """arXiv ids and DOIs in a docstring become clickable paper links."""
+    html = generate._render_docstring(
+        "See arXiv:1905.09388 and DOI 10.1109/ACCESS.2022.3154790 for the architecture."
+    )
+    assert 'href="https://arxiv.org/abs/1905.09388"' in html
+    assert 'href="https://doi.org/10.1109/ACCESS.2022.3154790"' in html
+
+
+def test_methods_page_shows_paper_refs_and_no_paper_note(tmp_path: Path) -> None:
+    """The Methods page surfaces a paper method's references and marks a no-paper method as such."""
+    import re
+
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "hoc.json",
+        _amc_row("hoc-row", "hoc_lr", "from_scratch", 0.3, "self_reported"),
+    )
+    generate.build_site(results, out)
+    methods = (out / "methods.html").read_text(encoding="utf-8")
+
+    # A paper method (complex_cnn cites arXiv in its module docstring) gets a clickable reference.
+    assert "Paper / references:" in methods
+    assert 'href="https://arxiv.org/abs/1905.09388"' in methods
+    # A no-paper method (mean_snr) carries the no-paper note instead.
+    section = re.search(
+        r'id="mean_snr">.*?(?=<section class="guide-section method"|</section></section>)',
+        methods,
+        re.S,
+    )
+    assert section is not None and "No published paper" in section.group(0)

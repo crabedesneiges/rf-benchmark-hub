@@ -2087,16 +2087,28 @@ def _extract_method_docs() -> dict[str, _MethodDoc]:
             continue
         consts = _const_strings(module)
         rel = str(path.relative_to(repo_root))
+        module_doc = (ast.get_docstring(module) or "").strip()
+        # Collect the registered model classes in this file.
+        registered: list[tuple[str, ast.ClassDef]] = []
         for node in module.body:
-            if not isinstance(node, ast.ClassDef):
-                continue
-            doc = ast.get_docstring(node)
-            if not doc:
+            if not isinstance(node, ast.ClassDef) or not ast.get_docstring(node):
                 continue
             for decorator in node.decorator_list:
                 name = _register_model_name(decorator, consts)
                 if name:
-                    docs[name] = _MethodDoc(name, _class_family(node), doc, rel)
+                    registered.append((name, node))
+                    break
+        # For a single-model file the module docstring is *about that model* (it holds the paper
+        # citation + architecture rationale), so prepend it to the class docstring for a fuller,
+        # still-faithful description. Multi-model files (e.g. the trivial floors) keep class docs
+        # only, to avoid duplicating a shared module preamble across their sections.
+        for name, node in registered:
+            class_doc = (ast.get_docstring(node) or "").strip()
+            if len(registered) == 1 and module_doc:
+                full = f"{module_doc}\n\n{class_doc}"
+            else:
+                full = class_doc
+            docs[name] = _MethodDoc(name, _class_family(node), full, rel)
     return dict(sorted(docs.items()))
 
 
@@ -2111,13 +2123,73 @@ def _method_anchor(name: str) -> str | None:
 
 _RST_ROLE = re.compile(r":[a-z:]+:`~?([^`]+)`")  # :class:`~a.b.C` / :meth:`foo` -> the referent
 _CODE_SPAN = re.compile(r"``([^`]+)``")
+_ARXIV_RE = re.compile(r"arxiv:\s*(\d{4}\.\d{4,5})(v\d+)?", re.IGNORECASE)
+_DOI_RE = re.compile(r"\b(10\.\d{4,}/[^\s\"'<>)\]]+)")
+
+#: model.name -> paper URL (result.json ``model.url``); populated at the start of build_site so the
+#: Methods page can surface each method's paper reference alongside the parsed arXiv/DOI citations.
+_MODEL_PAPER_URLS: dict[str, str] = {}
+
+
+def _arxiv_link(match: re.Match[str]) -> str:
+    """Turn an ``arXiv:<id>[vN]`` citation into a clickable abstract link."""
+    ident = match.group(1) + (match.group(2) or "")
+    return (
+        f'<a target="_blank" rel="noopener" href="https://arxiv.org/abs/{ident}">'
+        f"arXiv:{ident}</a>"
+    )
+
+
+def _doi_link(match: re.Match[str]) -> str:
+    """Turn a bare ``10.xxxx/...`` DOI into a clickable doi.org link (trailing punctuation cut)."""
+    doi = match.group(1).rstrip(".,;)")
+    return f'<a target="_blank" rel="noopener" href="https://doi.org/{doi}">{doi}</a>'
+
+
+def _paper_label(url: str) -> str:
+    """A short human label for a paper URL (arXiv id / DOI / bare URL)."""
+    arxiv = re.search(r"arxiv\.org/abs/([\w.]+)", url)
+    if arxiv:
+        return f"arXiv:{arxiv.group(1)}"
+    doi = re.search(r"doi\.org/(10\.\S+)", url)
+    if doi:
+        return f"DOI {doi.group(1)}"
+    return url
+
+
+def _paper_links_for(md: _MethodDoc, model_url: str | None) -> list[tuple[str, str]]:
+    """Collect a method's paper links: arXiv/DOI cited in its docstring + the result.json url."""
+    links: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(label: str, url: str) -> None:
+        if url not in seen:
+            seen.add(url)
+            links.append((label, url))
+
+    for hit in _ARXIV_RE.finditer(md.doc):
+        ident = hit.group(1) + (hit.group(2) or "")
+        _add(f"arXiv:{ident}", f"https://arxiv.org/abs/{ident}")
+    for hit in _DOI_RE.finditer(md.doc):
+        doi = hit.group(1).rstrip(".,;)")
+        _add(f"DOI {doi}", f"https://doi.org/{doi}")
+    if model_url:
+        _add(_paper_label(model_url), model_url)
+    return links
 
 
 def _inline_doc(text: str) -> str:
-    """Inline-format one paragraph of (already-joined) docstring text -> escaped HTML."""
+    """Inline-format one paragraph of (already-joined) docstring text -> escaped HTML.
+
+    Code spans / cross-reference roles become ``<code>``, ``**bold**``/``*emph*`` their tags, and
+    **arXiv ids / DOIs become clickable paper links** so a method's architecture references are
+    reachable straight from its description.
+    """
     out = _esc(text)
     out = _RST_ROLE.sub(lambda m: f"<code>{_esc(m.group(1).split('.')[-1])}</code>", out)
     out = _CODE_SPAN.sub(lambda m: f"<code>{m.group(1)}</code>", out)
+    out = _ARXIV_RE.sub(_arxiv_link, out)
+    out = _DOI_RE.sub(_doi_link, out)
     out = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", out)
     out = re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"<em>\1</em>", out)
     return out
@@ -2168,9 +2240,23 @@ def render_methods_page() -> str:
     sections: list[str] = []
     for name, md in docs.items():
         src_url = f"{_REPO_URL}/blob/main/{md.source}"
+        links = _paper_links_for(md, _MODEL_PAPER_URLS.get(name))
+        if links:
+            refs = " &middot; ".join(
+                f'<a target="_blank" rel="noopener" href="{_esc(url)}">{_esc(label)}</a>'
+                for label, url in links
+            )
+            refs_html = f'<p class="note">Paper / references: {refs}</p>'
+        else:
+            refs_html = (
+                '<p class="note">No published paper &mdash; the description below is the full, '
+                "implementation-faithful reference (a from-source method, reproducible from the "
+                "code alone).</p>"
+            )
         sections.append(
             f'<section class="guide-section method" id="{_esc(name)}">'
             f"<h2><code>{_esc(name)}</code> {_render_family_chip(md.family)}</h2>"
+            f"{refs_html}"
             f'<p class="note">Source: <a target="_blank" rel="noopener" '
             f'href="{_esc(src_url)}">{_esc(md.source)}</a></p>'
             f"{_render_docstring(md.doc)}"
@@ -2179,9 +2265,10 @@ def render_methods_page() -> str:
     body = (
         '<section class="task guide">'
         '<h1 class="task-title">Methods</h1>'
-        '<p class="note">How each model on the board actually works -- extracted verbatim from '
-        "the implementation docstrings (faithful by construction). Methods with a published paper "
-        "link to it directly from the leaderboard; the rest link here.</p>"
+        '<p class="note">The architecture and algorithm of every model on the board -- extracted '
+        "verbatim from the implementation docstrings (faithful by construction). Each entry links "
+        "its paper(s) when one exists (arXiv / DOI, also clickable inline); a method with no paper "
+        "(e.g. the non-deep DSP baselines) carries its full description here instead.</p>"
         + "".join(sections)
         + "</section>"
     )
@@ -2878,10 +2965,17 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
 
     # Extract the per-method explanations ONCE (ast over the model sources, no torch import) so the
     # leaderboard can link every no-paper method to its docstring on the Methods page.
-    global _METHOD_DOCS
+    global _METHOD_DOCS, _MODEL_PAPER_URLS
     _METHOD_DOCS = _extract_method_docs()
 
     rows = load_results(results_path)
+    # Map each model to its result.json paper URL (if any) so the Methods page can surface it next
+    # to the arXiv/DOI citations parsed from the docstring.
+    _MODEL_PAPER_URLS = {
+        row["model"]["name"]: row["model"]["url"]
+        for row in rows
+        if isinstance(row.get("model"), dict) and row["model"].get("url")
+    }
     grouped = group_by_task(rows)
     declared = load_manifest()
     nav_ids = _all_task_ids(grouped, declared)

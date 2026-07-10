@@ -1126,6 +1126,117 @@ def _render_curve_plot(
     )
 
 
+def _svg_line(cls: str, x1: float, y1: float, x2: float, y2: float) -> str:
+    """One ``<line>`` SVG element (helper to keep the plot builders short)."""
+    return f'<line class="{cls}" x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}"/>'
+
+
+def _metric_uncertainty(row: dict[str, Any], key: str) -> tuple[float, float] | None:
+    """Return ``(ci_low, ci_high)`` for ``key`` from ``metrics.uncertainty`` (1.2.0), else None."""
+    unc = row["metrics"].get("uncertainty")
+    if not isinstance(unc, dict):
+        return None
+    entry = unc.get(key)
+    if isinstance(entry, dict) and "ci_low" in entry and "ci_high" in entry:
+        return float(entry["ci_low"]), float(entry["ci_high"])
+    return None
+
+
+def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
+    """Render an inline-SVG bar chart for one scalar metric: X = model, Y = performance.
+
+    The per-model view a scalar metric has no 2-D curve for. Bars are ordered best-first
+    (ascending for lower-is-better metrics, else descending); when a row carries
+    ``metrics.uncertainty[metric_key]`` (schema 1.2.0) a capped **error bar** spans its
+    ``[ci_low, ci_high]``, so the confidence interval is shown right on the plot. Pure-stdlib
+    SVG -- no JS, no chart library (mirrors :func:`_render_curve_plot`).
+    """
+    lower = _is_lower_better(metric_key)
+    entries: list[tuple[str, float, tuple[float, float] | None]] = []
+    for row in rows:
+        values = _scalar_values(row)
+        if metric_key not in values:
+            continue
+        entries.append(
+            (
+                str(row["model"]["name"]),
+                float(values[metric_key]),
+                _metric_uncertainty(row, metric_key),
+            )
+        )
+    if not entries:
+        return ""
+    entries.sort(key=lambda e: e[1], reverse=not lower)  # best model first
+
+    hi_vals = [e[1] for e in entries] + [ci[1] for e in entries if (ci := e[2]) is not None]
+    lo_vals = [e[1] for e in entries] + [ci[0] for e in entries if (ci := e[2]) is not None]
+    ymax = max(hi_vals) * 1.08
+    ymin = min(0.0, min(lo_vals))
+    if ymax <= ymin:
+        ymax = ymin + 1.0
+
+    width, height = 720, 320
+    pad_l, pad_r, pad_t, pad_b = 56, 16, 20, 80  # extra bottom room for rotated model labels
+    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+    slot = plot_w / len(entries)
+    bar_w = min(52.0, slot * 0.62)
+
+    def sy(y: float) -> float:
+        return pad_t + (ymax - y) / (ymax - ymin) * plot_h
+
+    parts: list[str] = [
+        f'<svg class="plot barplot" viewBox="0 0 {width} {height}" role="img" '
+        f'aria-label="{_esc(metric_key)} by model bar chart" '
+        f'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
+    ]
+    for i in range(6):
+        yval = ymin + (ymax - ymin) * i / 5
+        y = sy(yval)
+        parts.append(_svg_line("grid", pad_l, y, pad_l + plot_w, y))
+        parts.append(
+            f'<text class="tick" x="{pad_l - 6:.1f}" y="{y + 3:.1f}" '
+            f'text-anchor="end">{_esc(_fmt_axis(yval))}</text>'
+        )
+    baseline = sy(max(ymin, 0.0))
+    for idx, (name, val, ci) in enumerate(entries):
+        cx = pad_l + slot * (idx + 0.5)
+        top = sy(val)
+        parts.append(
+            f'<rect class="bar" x="{cx - bar_w / 2:.1f}" y="{min(top, baseline):.1f}" '
+            f'width="{bar_w:.1f}" height="{abs(baseline - top):.1f}" rx="2"/>'
+        )
+        parts.append(
+            f'<text class="bar-val" x="{cx:.1f}" y="{top - 5:.1f}" '
+            f'text-anchor="middle">{_esc(_fmt_metric(val))}</text>'
+        )
+        if ci is not None and ci[1] > ci[0]:
+            ytop, ybot = sy(ci[1]), sy(ci[0])
+            cap = min(6.0, bar_w / 3)
+            parts.append(_svg_line("errbar", cx, ytop, cx, ybot))
+            parts.append(_svg_line("errbar", cx - cap, ytop, cx + cap, ytop))
+            parts.append(_svg_line("errbar", cx - cap, ybot, cx + cap, ybot))
+        label_y = pad_t + plot_h + 14
+        parts.append(
+            f'<text class="bar-label" x="{cx:.1f}" y="{label_y:.1f}" text-anchor="end" '
+            f'transform="rotate(-30 {cx:.1f} {label_y:.1f})">{_esc(name)}</text>'
+        )
+    parts.append(_svg_line("axis", pad_l, pad_t + plot_h, pad_l + plot_w, pad_t + plot_h))
+    parts.append(_svg_line("axis", pad_l, pad_t, pad_l, pad_t + plot_h))
+    parts.append("</svg>")
+    arrow = "&darr; lower is better" if lower else "&uarr; higher is better"
+    has_ci = any(e[2] is not None for e in entries)
+    ci_hint = (
+        ' <span class="plot-dir">&middot; whiskers = confidence interval</span>' if has_ci else ""
+    )
+    return (
+        '<figure class="plot-figure">'
+        f'<figcaption class="plot-title">{_esc(metric_key)} by model '
+        f'<span class="plot-dir">{arrow}</span>{ci_hint}</figcaption>'
+        f'{"".join(parts)}'
+        "</figure>"
+    )
+
+
 # --------------------------------------------------------------------------------------------------
 # Table rendering (a column per discovered scalar metric)
 # --------------------------------------------------------------------------------------------------
@@ -1339,6 +1450,12 @@ def _render_group(
         plot = _render_curve_plot(curve_name, series)
         if plot:
             plots.append(plot)
+    # A bar chart per scalar metric (X = model, Y = performance, with CI whiskers) -- the
+    # per-model comparison every scalar metric (which has no 2-D curve of its own) otherwise lacks.
+    for scalar_key in scalar_keys:
+        bar = _render_bar_chart(scalar_key, rows)
+        if bar:
+            plots.append(bar)
     plots_html = f'<div class="plots">{"".join(plots)}</div>' if plots else ""
 
     # A clear label for the group. A single-track task (everything in the default 'all'
@@ -2627,6 +2744,11 @@ td.num.primary .metric-val { font-weight: 700; }
 .plot .axis { stroke: var(--line-strong); stroke-width: 1; }
 .plot .tick { fill: var(--muted); font-size: 11px;
   font-family: var(--font-mono); }
+.plot .bar { fill: var(--accent); }
+.plot .errbar { stroke: var(--fg); stroke-width: 1.4; }
+.plot .bar-val { fill: var(--fg); font-size: 10px; font-family: var(--font-mono); }
+.plot .bar-label { fill: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+.plot-dir { color: var(--muted); font-weight: 400; font-size: 0.78rem; }
 .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin-top: 0.5rem; }
 .legend-item {
   display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--muted);

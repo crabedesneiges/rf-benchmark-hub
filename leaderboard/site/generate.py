@@ -1202,7 +1202,7 @@ def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
         cx = pad_l + slot * (idx + 0.5)
         top = sy(val)
         parts.append(
-            f'<rect class="bar" x="{cx - bar_w / 2:.1f}" y="{min(top, baseline):.1f}" '
+            f'<rect class="barplot-bar" x="{cx - bar_w / 2:.1f}" y="{min(top, baseline):.1f}" '
             f'width="{bar_w:.1f}" height="{abs(baseline - top):.1f}" rx="2"/>'
         )
         parts.append(
@@ -2744,7 +2744,7 @@ td.num.primary .metric-val { font-weight: 700; }
 .plot .axis { stroke: var(--line-strong); stroke-width: 1; }
 .plot .tick { fill: var(--muted); font-size: 11px;
   font-family: var(--font-mono); }
-.plot .bar { fill: var(--accent); }
+.plot .barplot-bar { fill: var(--accent); }
 .plot .errbar { stroke: var(--fg); stroke-width: 1.4; }
 .plot .bar-val { fill: var(--fg); font-size: 10px; font-family: var(--font-mono); }
 .plot .bar-label { fill: var(--muted); font-size: 11px; font-family: var(--font-mono); }

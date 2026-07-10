@@ -1490,3 +1490,67 @@ def test_snr_estimation_page_renders_end_to_end(tmp_path: Path) -> None:
     assert "big-error" in html and "small-error" in html
     # Ascending: the smaller-error model appears before the larger-error one in the table.
     assert html.index("small-error") < html.index("big-error")
+
+
+# --------------------------------------------------------------------------------------------------
+# Methods page: per-method explanations extracted from docstrings + no-paper name linking
+# --------------------------------------------------------------------------------------------------
+def test_extract_method_docs_covers_no_paper_baselines() -> None:
+    """_extract_method_docs pulls each registered model's docstring from source (no torch)."""
+    docs = generate._extract_method_docs()
+    for name in (
+        "mean_snr",
+        "snr_moment_ridge",
+        "hoc_lr",
+        "majority_class",
+        "chance",
+        "cldnn",
+        "complex_cnn",
+        "resnet1d_sei",
+        "wisig_cnn_paper",
+    ):
+        assert name in docs, name
+        assert docs[name].doc.strip()  # a non-empty explanation
+        assert docs[name].source.startswith("rfbench/models/")
+    # The explanation is faithful to the implementation (hoc_lr really is a logistic regression).
+    assert "logistic regression" in docs["hoc_lr"].doc.lower()
+
+
+def test_render_docstring_bullets_code_and_roles() -> None:
+    """_render_docstring: bullets -> <ul>, code/roles -> <code>, wrapped lines folded, no rst."""
+    text = (
+        "A short intro paragraph with ``code`` and a :meth:`fit` role.\n\n"
+        "* first bullet with a continuation\n"
+        "  line folded in\n"
+        "* second bullet with :class:`~a.b.Thing`\n"
+    )
+    html = generate._render_docstring(text)
+    assert "<ul>" in html and html.count("<li>") == 2
+    assert "<code>code</code>" in html
+    assert "<code>fit</code>" in html and "<code>Thing</code>" in html  # role -> referent tail
+    assert ":meth:" not in html and ":class:" not in html and "``" not in html  # no rst leak
+    assert "continuation line folded in" in html  # wrapped bullet line absorbed
+
+
+def test_no_paper_methods_link_to_methods_page(tmp_path: Path) -> None:
+    """A no-paper method links to methods.html#<name>; a paper method keeps its external url."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "hoc.json",
+        _amc_row("hoc-row", "hoc_lr", "from_scratch", 0.30, "self_reported"),
+    )
+    paper = _amc_row("mcldnn-row", "mcldnn", "from_scratch", 0.60, "self_reported")
+    paper["model"]["url"] = "https://doi.org/10.1109/LWC.2020.2999453"
+    _write(results / "amc" / "mcldnn.json", paper)
+    generate.build_site(results, out)
+
+    methods = (out / "methods.html").read_text(encoding="utf-8")
+    assert 'id="hoc_lr"' in methods and "logistic regression" in methods.lower()
+    assert 'href="methods.html">Methods' in (out / "index.html").read_text(encoding="utf-8")
+
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+    assert '<a href="methods.html#hoc_lr">hoc_lr</a>' in amc  # no-paper -> internal explanation
+    assert (
+        '<a href="https://doi.org/10.1109/LWC.2020.2999453">mcldnn</a>' in amc
+    )  # paper -> external

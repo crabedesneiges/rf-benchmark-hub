@@ -71,8 +71,10 @@ Importable::
 from __future__ import annotations
 
 import argparse
+import ast
 import html
 import json
+import re
 import sys
 from importlib import resources
 from pathlib import Path
@@ -1216,7 +1218,9 @@ def _render_row(
     """
     model = row["model"]
     name = _esc(model["name"])
-    url = model.get("url")
+    # A published-paper method links to its paper (model.url); a no-paper method links to its
+    # implementation-faithful explanation on the Methods page (methods.html#<name>).
+    url = model.get("url") or _method_anchor(model["name"])
     if isinstance(url, str) and url:
         name = f'<a href="{_esc(url)}">{name}</a>'
     chip = _render_family_chip(_family(row))
@@ -1987,6 +1991,203 @@ def _render_glossary_section() -> str:
     )
 
 
+# --------------------------------------------------------------------------------------------------
+# Methods page -- per-method explanations extracted (faithfully) from the model docstrings
+# --------------------------------------------------------------------------------------------------
+_METHODS_SLUG: str = "methods"
+
+
+class _MethodDoc(NamedTuple):
+    """One registered model's explanation, read from its source WITHOUT importing torch/numpy."""
+
+    name: str  # the @register_model id (== result.json model.name)
+    family: str  # "baseline" | "foundation" | ...
+    doc: str  # the class docstring, verbatim (the implementation-faithful explanation)
+    source: str  # repo-relative source path (e.g. rfbench/models/baselines/hoc_amc.py)
+
+
+def _models_root() -> Path | None:
+    """Locate ``rfbench/models`` by walking up from this file (source checkout)."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "rfbench" / "models"
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _const_strings(module: ast.Module) -> dict[str, str]:
+    """Map module-level ``NAME = "literal"`` assignments, to resolve ``@register_model(NAME)``."""
+    consts: dict[str, str] = {}
+    for node in module.body:
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    consts[target.id] = node.value.value
+    return consts
+
+
+def _register_model_name(decorator: ast.expr, consts: dict[str, str]) -> str | None:
+    """Return the id passed to ``@register_model(...)`` (literal or module const), else ``None``."""
+    if not (
+        isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Name)
+        and decorator.func.id == "register_model"
+        and decorator.args
+    ):
+        return None
+    arg = decorator.args[0]
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        return arg.value
+    if isinstance(arg, ast.Name):
+        return consts.get(arg.id)
+    return None
+
+
+def _class_family(cls: ast.ClassDef) -> str:
+    """Read the class-body ``family = "..."`` (annotated or plain); default ``"baseline"``."""
+    for node in cls.body:
+        target = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target.id
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target = node.targets[0].id
+        value = getattr(node, "value", None)
+        if target == "family" and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+    return "baseline"
+
+
+def _extract_method_docs() -> dict[str, _MethodDoc]:
+    """Extract ``{registered_name: _MethodDoc}`` for every ``@register_model`` class via ``ast``.
+
+    Parses the model source files (``rfbench/models/**/*.py``) WITHOUT importing them, so the
+    dependency-free site build never pulls in torch/numpy. The explanation is each class's own
+    docstring -- authored alongside the implementation, so it is faithful by construction.
+    """
+    root = _models_root()
+    if root is None:
+        return {}
+    repo_root = root.parents[1]  # .../rfbench/models -> repo root
+    docs: dict[str, _MethodDoc] = {}
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        try:
+            module = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        consts = _const_strings(module)
+        rel = str(path.relative_to(repo_root))
+        for node in module.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            doc = ast.get_docstring(node)
+            if not doc:
+                continue
+            for decorator in node.decorator_list:
+                name = _register_model_name(decorator, consts)
+                if name:
+                    docs[name] = _MethodDoc(name, _class_family(node), doc, rel)
+    return dict(sorted(docs.items()))
+
+
+#: Populated once at the start of :func:`build_site` (the source tree is stable mid-run).
+_METHOD_DOCS: dict[str, _MethodDoc] = {}
+
+
+def _method_anchor(name: str) -> str | None:
+    """Return the in-site Methods anchor (``methods.html#name``) for ``name`` if one exists."""
+    return f"{_METHODS_SLUG}.html#{name}" if name in _METHOD_DOCS else None
+
+
+_RST_ROLE = re.compile(r":[a-z:]+:`~?([^`]+)`")  # :class:`~a.b.C` / :meth:`foo` -> the referent
+_CODE_SPAN = re.compile(r"``([^`]+)``")
+
+
+def _inline_doc(text: str) -> str:
+    """Inline-format one paragraph of (already-joined) docstring text -> escaped HTML."""
+    out = _esc(text)
+    out = _RST_ROLE.sub(lambda m: f"<code>{_esc(m.group(1).split('.')[-1])}</code>", out)
+    out = _CODE_SPAN.sub(lambda m: f"<code>{m.group(1)}</code>", out)
+    out = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", out)
+    out = re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"<em>\1</em>", out)
+    return out
+
+
+def _render_docstring(text: str) -> str:
+    """Render a Python docstring as readable HTML (a small, SAFE reStructuredText subset).
+
+    Faithful passthrough of the authored text: paragraphs split on blank lines, ``*``/``-``
+    bullet blocks become lists, ````code```` spans, ``**bold**``/``*emph*``, and cross-reference
+    roles (``:class:`~mod.Name```) reduced to a ``<code>`` of the referent. Everything is
+    HTML-escaped before any markup is added, so no docstring can inject HTML.
+    """
+    out: list[str] = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        # A block is a bullet list iff its FIRST line is a bullet; wrapped continuation lines
+        # (indented, not starting with a bullet) are folded into the current item.
+        if lines[0].lstrip().startswith(("* ", "- ")):
+            items: list[str] = []
+            current: str | None = None
+            for line in lines:
+                stripped = line.lstrip()
+                if stripped.startswith(("* ", "- ")):
+                    if current is not None:
+                        items.append(current)
+                    current = stripped[2:].strip()
+                elif current is not None:
+                    current = f"{current} {stripped.strip()}"
+            if current is not None:
+                items.append(current)
+            out.append("<ul>" + "".join(f"<li>{_inline_doc(it)}</li>" for it in items) + "</ul>")
+        else:
+            out.append(f"<p>{_inline_doc(' '.join(ln.strip() for ln in lines))}</p>")
+    return "".join(out)
+
+
+def render_methods_page() -> str:
+    """Render ``methods.html``: one anchored section per registered model, from its docstring.
+
+    The internal explanation every no-paper method on the board links to (``methods.html#name``).
+    Faithful to the implementation by construction (the text IS the class docstring), with a
+    link to the source file so a reader can jump straight to the code.
+    """
+    docs = _METHOD_DOCS or _extract_method_docs()
+    sections: list[str] = []
+    for name, md in docs.items():
+        src_url = f"{_REPO_URL}/blob/main/{md.source}"
+        sections.append(
+            f'<section class="guide-section method" id="{_esc(name)}">'
+            f"<h2><code>{_esc(name)}</code> {_render_family_chip(md.family)}</h2>"
+            f'<p class="note">Source: <a target="_blank" rel="noopener" '
+            f'href="{_esc(src_url)}">{_esc(md.source)}</a></p>'
+            f"{_render_docstring(md.doc)}"
+            "</section>"
+        )
+    body = (
+        '<section class="task guide">'
+        '<h1 class="task-title">Methods</h1>'
+        '<p class="note">How each model on the board actually works -- extracted verbatim from '
+        "the implementation docstrings (faithful by construction). Methods with a published paper "
+        "link to it directly from the leaderboard; the rest link here.</p>"
+        + "".join(sections)
+        + "</section>"
+    )
+    return _page("Methods — RF-Benchmark-Hub", body, current=_METHODS_SLUG)
+
+
 def render_guide() -> str:
     """Render the standalone Guide page (``guide.html``) from the shared ``_GUIDE`` content.
 
@@ -2044,13 +2245,17 @@ def _top_nav(current: str | None) -> str:
     (a task id, or ``None`` for the index) everywhere else -- "Tasks" is active whenever
     "Guide" isn't, since every task/WIP page lives under the Tasks section.
     """
+    methods_active = current == _METHODS_SLUG
     guide_active = current == _GUIDE_SLUG
-    tasks_class = "top-tab" if guide_active else "top-tab top-tab-active"
-    guide_class = "top-tab top-tab-active" if guide_active else "top-tab"
+    active = "top-tab top-tab-active"
+    tasks_class = "top-tab" if (guide_active or methods_active) else active
+    guide_class = active if guide_active else "top-tab"
+    methods_class = active if methods_active else "top-tab"
     return (
         '<div class="top-tabs">'
         f'<a class="{tasks_class}" href="index.html">Tasks</a>'
         f'<a class="{guide_class}" href="{_GUIDE_SLUG}.html">Guide</a>'
+        f'<a class="{methods_class}" href="{_METHODS_SLUG}.html">Methods</a>'
         '<a class="top-tab" target="_blank" rel="noopener" '
         f'href="{_esc(_SUBMISSION_GUIDE_URL)}">Submit</a>'
         "</div>"
@@ -2671,6 +2876,11 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
     if not results_path.exists():
         raise FileNotFoundError(f"results directory does not exist: {results_path}")
 
+    # Extract the per-method explanations ONCE (ast over the model sources, no torch import) so the
+    # leaderboard can link every no-paper method to its docstring on the Methods page.
+    global _METHOD_DOCS
+    _METHOD_DOCS = _extract_method_docs()
+
     rows = load_results(results_path)
     grouped = group_by_task(rows)
     declared = load_manifest()
@@ -2688,8 +2898,9 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
         page = render_wip_page(entry, nav_task_ids=nav_ids, declared=declared)
         (out_path / f"{task_id}.html").write_text(page, encoding="utf-8")
 
-    # Shared educational Guide page (linked from the nav on every page).
+    # Shared educational Guide + Methods pages (linked from the nav on every page).
     (out_path / f"{_GUIDE_SLUG}.html").write_text(render_guide(), encoding="utf-8")
+    (out_path / f"{_METHODS_SLUG}.html").write_text(render_methods_page(), encoding="utf-8")
 
     index_path = out_path / "index.html"
     index_path.write_text(render_index(grouped, declared), encoding="utf-8")

@@ -16,9 +16,25 @@
   },
   "metrics": {
     "primary": "rank1_accuracy",
+    "uncertainty": {
+      "balanced_accuracy": {
+        "ci_high": 0.36517010849016873,
+        "ci_low": 0.3297157588043811,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
+      },
+      "rank1_accuracy": {
+        "ci_high": 0.37440270778493323,
+        "ci_low": 0.33803849610791903,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
+      }
+    },
     "values": {
-      "balanced_accuracy": 0.006666666666666667,
-      "rank1_accuracy": 0.006678399698293472
+      "balanced_accuracy": 0.3474429336472749,
+      "rank1_accuracy": 0.35622060194642613
     }
   },
   "model": {
@@ -29,7 +45,7 @@
   "regime": {
     "name": "from_scratch"
   },
-  "schema_version": "1.0.0",
+  "schema_version": "1.2.0",
   "split": {
     "canonical_split_id": "sei-wisig-crossday-grouped-8010-seed42-v1",
     "checksum": "sha256:933a7cb8a29d7818fedbac81ee35394e76ae9bb1bf36bec1487679e2674ae3d1",

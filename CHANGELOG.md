@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — board SEI passé en multi-seed (barres d'erreur) + fixes éval (LOT 3)
+
+Upgrade des 3 baselines SEI (complex_cnn/resnet1d_sei/wisig_cnn_paper) sur les 3 pistes rank1
+(closed_set/cross_receiver/cross_day) en `multi_seed_std` (seeds 42/43/44) — le board SEI gagne
+enfin ses bandes ±1σ, cohérent avec AMC/interf. Débloqué par deux fixes d'éval :
+- conversion IQ `np.asarray` avant `torch.as_tensor` (3 modèles) — supprimait un hang de 75 min ;
+- flag `sei-train --no-bootstrap` (bootstrap inutile par-seed, σ vient de l'across-seed).
+Corrige au passage une **valeur board cassée** : `wisig_cnn_paper` cross_day 0.0067 (run collapsé)
+→ 0.356 (multi-seed). **Instabilité flaggée** : `wisig_cnn_paper` closed_set est bimodal (collapse
+au hasard sur 2 seeds/3) → moyenne 0.1465 avec note explicite, **reste self_reported** (non
+reproductible). Manifests SEI (8) prêts pour le flip verified via re-run seed-45.
+
 ### Verified — LOT 3 : deep AMC vérifiés par re-run seed-fraîche à 2σ (tier `verified`)
 
 Vérification stochastique **non circulaire** : re-run GPU d'**une seed fraîche (45)** hors du jeu

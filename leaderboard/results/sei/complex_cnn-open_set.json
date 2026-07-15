@@ -18,23 +18,23 @@
     "primary": "auroc",
     "uncertainty": {
       "auroc": {
-        "ci_high": 0.661103427546636,
-        "ci_low": 0.655036837584758,
-        "confidence": 0.95,
-        "method": "bootstrap_percentile",
-        "n_resamples": 1000
+        "ci_high": 0.6662276988653433,
+        "ci_low": 0.625074569593076,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
       },
       "eer": {
-        "ci_high": 0.3651659112602506,
-        "ci_low": 0.359481429055092,
-        "confidence": 0.95,
-        "method": "bootstrap_percentile",
-        "n_resamples": 1000
+        "ci_high": 0.3886688419243031,
+        "ci_low": 0.35519364699541783,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
       }
     },
     "values": {
-      "auroc": 0.658027686263945,
-      "eer": 0.3621958398744113
+      "auroc": 0.6456511342292096,
+      "eer": 0.3719312444598605
     }
   },
   "model": {

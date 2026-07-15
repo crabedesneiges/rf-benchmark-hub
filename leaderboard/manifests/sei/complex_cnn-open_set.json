@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.1.0",
+  "result_path": "leaderboard/results/sei/complex_cnn-open_set.json",
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "code_commit": "git@6e3c8ff8f9097e64d806950d9258e7e0a552a04b",
+  "command": "sbatch slurm/train_sei_multiseed_arm.sh complex_cnn 100 'open_set' 45  # WiSig held-out-Tx ; board=moyenne 42/43/44, re-run=seed45 <=2\u03c3",
+  "artifacts": {
+    "source_only": true
+  },
+  "hardware": "1x Dalia GB200 (ARM aarch64, CUDA)",
+  "expected_metrics": {
+    "auroc": 0.6456511342292096,
+    "eer": 0.3719312444598605
+  },
+  "tolerance": {
+    "absolute": 0.01,
+    "per_metric": {
+      "auroc": 0.0412,
+      "eer": 0.0335
+    }
+  },
+  "rerun_mode": "full_retrain"
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.1.0",
+  "result_path": "leaderboard/results/sei/wisig_cnn_paper-open_set.json",
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "code_commit": "git@6e3c8ff8f9097e64d806950d9258e7e0a552a04b",
+  "command": "sbatch slurm/train_sei_multiseed_arm.sh wisig_cnn_paper 100 'open_set' 45  # WiSig held-out-Tx ; board=moyenne 42/43/44, re-run=seed45 <=2\u03c3",
+  "artifacts": {
+    "source_only": true
+  },
+  "hardware": "1x Dalia GB200 (ARM aarch64, CUDA)",
+  "expected_metrics": {
+    "auroc": 0.49320327110254053,
+    "eer": 0.5099868952564557
+  },
+  "tolerance": {
+    "absolute": 0.01,
+    "per_metric": {
+      "auroc": 0.0211,
+      "eer": 0.0177
+    }
+  },
+  "rerun_mode": "full_retrain"
+}

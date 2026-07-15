@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.1.0",
+  "result_path": "leaderboard/results/interference_id/interf_cnn.json",
+  "task": {
+    "name": "interference_id",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "code_commit": "git@d1660b7ccb16564fd369c0e43b3deb51dc6901ec",
+  "command": "sbatch slurm/interference_id_e2e_arm.sh 100 45  # interf_gnss6, from_scratch, 100 epochs ; board = moyenne 42/43/44, re-run = seed 45 fra\u00eeche <=2\u03c3",
+  "artifacts": {
+    "source_only": true
+  },
+  "hardware": "1x Dalia GB200 (ARM aarch64, CUDA)",
+  "expected_metrics": {
+    "accuracy_overall": 0.9995555555555555,
+    "macro_f1": 0.9995555484443307
+  },
+  "tolerance": {
+    "absolute": 0.005
+  },
+  "rerun_mode": "full_retrain"
+}

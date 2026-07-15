@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified — LOT 3 SEI : complex_cnn + resnet1d_sei vérifiés (6 lignes)
+
+Re-run GPU seed-45 (hors jeu 42/43/44), tolérance per-métrique 2σ :
+- `complex_cnn` : closed_set 0.813 vs 0.805 ✓, cross_receiver 0.384 vs 0.380 ✓, cross_day 0.463 vs 0.477 ✓
+- `resnet1d_sei` : closed_set 0.893 vs 0.894 ✓, cross_receiver 0.380 vs 0.338 ✓, cross_day 0.539 vs 0.538 ✓
+`wisig_cnn_paper` reste **entièrement self_reported** : instabilité confirmée par la seed-45 sur
+les 3 pistes rank1 (closed_set bimodal ; cross_day collapse au hasard 0.007 vs 0.356 ; cross_receiver
+outlier 0.397 vs 0.296, hors 2σ). Baseline fragile, non reproductible — chaque piste porte une note.
+Board verified total : amc 6/9, snr 2/2, interference_id 1/1, sei 6/12.
+
 ### Changed — board SEI passé en multi-seed (barres d'erreur) + fixes éval (LOT 3)
 
 Upgrade des 3 baselines SEI (complex_cnn/resnet1d_sei/wisig_cnn_paper) sur les 3 pistes rank1

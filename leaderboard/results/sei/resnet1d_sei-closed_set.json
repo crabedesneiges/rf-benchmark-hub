@@ -16,9 +16,25 @@
   },
   "metrics": {
     "primary": "rank1_accuracy",
+    "uncertainty": {
+      "balanced_accuracy": {
+        "ci_high": 0.8891976215611916,
+        "ci_low": 0.8875719518156004,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
+      },
+      "rank1_accuracy": {
+        "ci_high": 0.8947942928501863,
+        "ci_low": 0.8927118172290004,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "Moyenne \u00b11 \u00e9cart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance \u00e0 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de r\u00e9f\u00e9rence (42)."
+      }
+    },
     "values": {
-      "balanced_accuracy": 0.8849766256075736,
-      "rank1_accuracy": 0.8900576791475218
+      "balanced_accuracy": 0.888384786688396,
+      "rank1_accuracy": 0.8937530550395933
     }
   },
   "model": {
@@ -29,7 +45,7 @@
   "regime": {
     "name": "from_scratch"
   },
-  "schema_version": "1.0.0",
+  "schema_version": "1.2.0",
   "split": {
     "canonical_split_id": "sei-wisig-closedset-strat-tx-8010-seed42-v1",
     "checksum": "sha256:26981a0bc303c4c53ad03b3f7a84d290b799f40b2a96718efc2233f35e010d01",
@@ -42,6 +58,12 @@
     "version": "v1"
   },
   "verification": {
-    "status": "self_reported"
+    "status": "verified",
+    "verified_by": "rf-bench-maintainers",
+    "verified_date": "2026-07-15",
+    "verified_hardware": "1x Dalia GB200 (ARM aarch64, CUDA)",
+    "method": "full_retrain",
+    "tolerance": 0.01,
+    "observed_primary": 0.893244696451266
   }
 }

@@ -16,9 +16,25 @@
   },
   "metrics": {
     "primary": "rank1_accuracy",
+    "uncertainty": {
+      "balanced_accuracy": {
+        "ci_high": 0.38382367924868155,
+        "ci_low": -0.094392250274419,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "INSTABILITÉ : entraînement bimodal — 2 seeds/3 (42,44) collapsent au niveau du hasard (rank1≈0.007 sur ~140 Tx), seed 43 converge (0.4255). La moyenne 0.1465 n'est PAS une performance centrale représentative ; la bande couvre le collapse. NON reproductible → reste self_reported (pas de flip verified). Moyenne ±1 écart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance à 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de référence (42)."
+      },
+      "rank1_accuracy": {
+        "ci_high": 0.3880836800872115,
+        "ci_low": 0.0,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "INSTABILITÉ : entraînement bimodal — 2 seeds/3 (42,44) collapsent au niveau du hasard (rank1≈0.007 sur ~140 Tx), seed 43 converge (0.4255). La moyenne 0.1465 n'est PAS une performance centrale représentative ; la bande couvre le collapse. NON reproductible → reste self_reported (pas de flip verified). Moyenne ±1 écart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance à 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de référence (42)."
+      }
+    },
     "values": {
-      "balanced_accuracy": 0.3927039633320465,
-      "rank1_accuracy": 0.3957376087594095
+      "balanced_accuracy": 0.14471571448713128,
+      "rank1_accuracy": 0.14649851728745072
     }
   },
   "model": {
@@ -29,7 +45,7 @@
   "regime": {
     "name": "from_scratch"
   },
-  "schema_version": "1.0.0",
+  "schema_version": "1.2.0",
   "split": {
     "canonical_split_id": "sei-wisig-closedset-strat-tx-8010-seed42-v1",
     "checksum": "sha256:26981a0bc303c4c53ad03b3f7a84d290b799f40b2a96718efc2233f35e010d01",

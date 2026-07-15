@@ -48,6 +48,7 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
+import numpy as np
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -227,6 +228,11 @@ def _iq_to_bt2_tensor(iq_batch: object, device: torch.device, window: int) -> Te
     (numpy on the cluster, nested lists in a fixture). A single unbatched ``(window, 2)`` sample
     is promoted to a batch of one. A mis-shaped batch (IQ axis != 2) fails loudly.
     """
+    # Collate the per-sample list into ONE ndarray first: torch.as_tensor on a list of ndarrays
+    # copies element-by-element ("extremely slow" per torch) and dominated SEI eval wall-time.
+    # np.asarray stacks in one shot; the resulting tensor is numerically identical.
+    if isinstance(iq_batch, (list, tuple)):
+        iq_batch = np.asarray(iq_batch)
     tensor = torch.as_tensor(iq_batch, dtype=torch.float32, device=device)
     if tensor.ndim == 2:  # a single (window, 2) sample -> add the batch axis
         tensor = tensor.unsqueeze(0)

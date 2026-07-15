@@ -1040,6 +1040,7 @@ def _cmd_sei_train(args: argparse.Namespace) -> int:
             device=None if args.device == "auto" else args.device,
             out_path=out_path,
             patience=args.patience,
+            compute_bootstrap_ci=not args.no_bootstrap,
         )
     except (ValueError, RuntimeError, TypeError, FileNotFoundError) as exc:
         print(f"error: [sei-train] {exc}", file=sys.stderr)
@@ -1638,6 +1639,13 @@ def _build_sei_train_parser(
         dest="no_class_weight",
         action="store_true",
         help="Disable the WiSig max(count)/count class weighting.",
+    )
+    st.add_argument(
+        "--no-bootstrap",
+        dest="no_bootstrap",
+        action="store_true",
+        help="Skip the per-run bootstrap CI (much faster eval). Use for multi-seed sweeps where "
+        "uncertainty comes from the across-seed std, not per-seed bootstrap.",
     )
     st.add_argument("--patience", type=int, default=5, help="Early-stop patience (default: 5).")
     st.add_argument("--seed", type=int, default=42, help="Global seed (default: 42).")

@@ -16,9 +16,25 @@
   },
   "metrics": {
     "primary": "rank1_accuracy",
+    "uncertainty": {
+      "balanced_accuracy": {
+        "ci_high": 0.31508606662566885,
+        "ci_low": 0.275770875961027,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "INSTABILITÉ : la seed 45 de vérification donne 0.397 (vs moyenne 42/43/44 = 0.2965, |Δ|=0.10 > 2σ). Le σ à 3 seeds sous-estime la variance seed-à-seed. NON reproductible → reste self_reported. Moyenne ±1 écart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance à 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de référence (42)."
+      },
+      "rank1_accuracy": {
+        "ci_high": 0.31556821887304626,
+        "ci_low": 0.27741643651149767,
+        "method": "multi_seed_std",
+        "n_seeds": 3,
+        "note": "INSTABILITÉ : la seed 45 de vérification donne 0.397 (vs moyenne 42/43/44 = 0.2965, |Δ|=0.10 > 2σ). Le σ à 3 seeds sous-estime la variance seed-à-seed. NON reproductible → reste self_reported. Moyenne ±1 écart-type DESCRIPTIF sur les seeds 42/43/44. Ce N'EST PAS un intervalle de confiance à 95%. Les IC bootstrap par seed restent disponibles dans les fichiers de staging. Les curves/per_class proviennent du seed de référence (42)."
+      }
+    },
     "values": {
-      "balanced_accuracy": 0.3230147195363261,
-      "rank1_accuracy": 0.32413468904519815
+      "balanced_accuracy": 0.2954284712933479,
+      "rank1_accuracy": 0.29649232769227196
     }
   },
   "model": {
@@ -29,7 +45,7 @@
   "regime": {
     "name": "from_scratch"
   },
-  "schema_version": "1.0.0",
+  "schema_version": "1.2.0",
   "split": {
     "canonical_split_id": "sei-wisig-crossrx-grouped-8010-seed42-v1",
     "checksum": "sha256:50843799fa46630bbf9113ad8ddc53b42ca980d390113160b87ddf33daca7251",

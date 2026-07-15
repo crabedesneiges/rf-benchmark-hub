@@ -252,6 +252,7 @@ def train_sei_baseline(
     num_workers: int = 0,
     patience: int = DEFAULT_PATIENCE,
     val_split: SplitName = "val",
+    compute_bootstrap_ci: bool = True,
 ) -> tuple[Model, dict[str, Any]]:
     """Fit an SEI baseline on ``dataset``'s TRAIN split, then track-aware ``evaluate`` on TEST.
 
@@ -264,8 +265,10 @@ def train_sei_baseline(
     ``l2_lambda`` adds ``l2_lambda * model.l2_penalty()`` to the loss for models exposing the hook
     (WiSig / ORACLE / complex); ``weight_decay`` is the fallback Adam decay for models without it
     (ResNet-1D). ``use_class_weight`` toggles the WiSig ``max(count)/count`` weighting. When
-    ``val`` is unavailable/empty the loop degrades to monitoring TRAIN loss. Returns
-    ``(trained_model, result_dict)``.
+    ``val`` is unavailable/empty the loop degrades to monitoring TRAIN loss.
+    ``compute_bootstrap_ci`` forwards to :func:`evaluate`; pass ``False`` in a multi-seed sweep
+    (where uncertainty is the across-seed std) to skip the per-run bootstrap and speed eval up
+    markedly on large test splits. Returns ``(trained_model, result_dict)``.
     """
     import torch  # noqa: PLC0415
 
@@ -387,6 +390,7 @@ def train_sei_baseline(
         batch_size=max(batch_size, 256),  # eval throughput; scoring is batch-size invariant
         device=resolved_device,
         out_path=out_path,
+        compute_bootstrap_ci=compute_bootstrap_ci,
     )
     return model, result
 

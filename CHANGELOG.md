@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified — LOT 3 SEI : complex_cnn + resnet1d_sei vérifiés (6 lignes)
+
+Re-run GPU seed-45 (hors jeu 42/43/44), tolérance per-métrique 2σ :
+- `complex_cnn` : closed_set 0.813 vs 0.805 ✓, cross_receiver 0.384 vs 0.380 ✓, cross_day 0.463 vs 0.477 ✓
+- `resnet1d_sei` : closed_set 0.893 vs 0.894 ✓, cross_receiver 0.380 vs 0.338 ✓, cross_day 0.539 vs 0.538 ✓
+`wisig_cnn_paper` reste **entièrement self_reported** : instabilité confirmée par la seed-45 sur
+les 3 pistes rank1 (closed_set bimodal ; cross_day collapse au hasard 0.007 vs 0.356 ; cross_receiver
+outlier 0.397 vs 0.296, hors 2σ). Baseline fragile, non reproductible — chaque piste porte une note.
+Board verified total : amc 6/9, snr 2/2, interference_id 1/1, sei 6/12.
+
+### Changed — board SEI passé en multi-seed (barres d'erreur) + fixes éval (LOT 3)
+
+Upgrade des 3 baselines SEI (complex_cnn/resnet1d_sei/wisig_cnn_paper) sur les 3 pistes rank1
+(closed_set/cross_receiver/cross_day) en `multi_seed_std` (seeds 42/43/44) — le board SEI gagne
+enfin ses bandes ±1σ, cohérent avec AMC/interf. Débloqué par deux fixes d'éval :
+- conversion IQ `np.asarray` avant `torch.as_tensor` (3 modèles) — supprimait un hang de 75 min ;
+- flag `sei-train --no-bootstrap` (bootstrap inutile par-seed, σ vient de l'across-seed).
+Corrige au passage une **valeur board cassée** : `wisig_cnn_paper` cross_day 0.0067 (run collapsé)
+→ 0.356 (multi-seed). **Instabilité flaggée** : `wisig_cnn_paper` closed_set est bimodal (collapse
+au hasard sur 2 seeds/3) → moyenne 0.1465 avec note explicite, **reste self_reported** (non
+reproductible). Manifests SEI (8) prêts pour le flip verified via re-run seed-45.
+
 ### Verified — LOT 3 : deep AMC vérifiés par re-run seed-fraîche à 2σ (tier `verified`)
 
 Vérification stochastique **non circulaire** : re-run GPU d'**une seed fraîche (45)** hors du jeu

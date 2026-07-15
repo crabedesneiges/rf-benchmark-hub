@@ -332,6 +332,33 @@ def test_per_metric_tolerance_overrides_global(
     assert report.primary_check.tolerance == pytest.approx(0.05)
 
 
+# --- stochastic-baseline doctrine (EVALUATION_PROTOCOL: 2 sigma widening) --------------
+
+
+def test_stochastic_2sigma_widening_verifies_where_floor_would_reject(
+    result: dict[str, Any], manifest: dict[str, Any]
+) -> None:
+    """A trained-NN re-run 1.5 sigma from the multi-seed mean verifies under absolute = 2 sigma,
+    but the deterministic floor (0.005) alone would reject it.
+
+    Encodes the protocol's ``tolerance.absolute = max(floor, 2*sigma_multiseed)`` rule: the manifest
+    author widens the bound to the published across-seed spread so run-to-run CUDA noise does not
+    veto a faithful reproduction. mcldnn's sigma ~= 0.0096 -> 2 sigma ~= 0.0192.
+    """
+    sigma = 0.0096
+    rerun = {"accuracy_overall": 0.6123 - 1.5 * sigma}  # 1.5 sigma below the mean
+
+    manifest["tolerance"] = {"absolute": max(0.005, 2 * sigma)}  # widened per the doctrine
+    widened = verify_result(result, manifest, rerun, verified_by="m", verified_hardware="h")
+    assert widened.verified is True
+    assert widened.primary_check is not None
+    assert widened.primary_check.tolerance == pytest.approx(0.0192)
+
+    manifest["tolerance"] = {"absolute": 0.005}  # deterministic floor only
+    floored = verify_result(result, manifest, rerun, verified_by="m", verified_hardware="h")
+    assert floored.verified is False  # 0.0144 > 0.005
+
+
 # --- helper API -----------------------------------------------------------------------
 
 

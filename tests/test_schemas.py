@@ -182,6 +182,28 @@ def test_result_1_2_0_all_new_fields_round_trip() -> None:
     _assert_valid(validator, instance)
 
 
+# --- verified tier: snr_estimation accepted by the submission schema (LOT 2) -----
+
+
+def test_submission_schema_accepts_snr_estimation_task() -> None:
+    """A manifest for ``snr_estimation`` validates: the task.name enum + result_path pattern
+    were widened so SNR baselines can reach the ``verified`` tier (LOT 2)."""
+    validator = Draft202012Validator(_submission_schema())
+    instance = _load_json(SUBMISSION_VALID_PATH)
+    instance["task"]["name"] = "snr_estimation"
+    instance["result_path"] = "leaderboard/results/snr_estimation/mean_snr.json"
+    _assert_valid(validator, instance)
+
+
+def test_submission_schema_still_rejects_unknown_task() -> None:
+    """Widening the enum must stay closed: an unknown task name is still rejected."""
+    validator = Draft202012Validator(_submission_schema())
+    instance = _load_json(SUBMISSION_VALID_PATH)
+    instance["task"]["name"] = "not_a_real_task"
+    with pytest.raises(ValidationError):
+        validator.validate(instance)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

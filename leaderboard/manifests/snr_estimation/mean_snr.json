@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.1.0",
+  "result_path": "leaderboard/results/snr_estimation/mean_snr.json",
+  "task": {
+    "name": "snr_estimation",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "code_commit": "git@bc438bc02f3c1d791f38ec1c56cd631f4a2d7612",
+  "command": "sbatch slurm/train_snr_baselines.sh mean_snr  # RadioML 2016.10a, seed 42, full SNR range (CPU/defq)",
+  "artifacts": {
+    "source_only": true
+  },
+  "hardware": "1x Dalia defq node (ARM Neoverse V2, CPU-only)",
+  "expected_metrics": {
+    "rmse_db": 11.532562594670797,
+    "mae_db": 10.0
+  },
+  "tolerance": {
+    "absolute": 0.1
+  },
+  "rerun_mode": "full_retrain"
+}

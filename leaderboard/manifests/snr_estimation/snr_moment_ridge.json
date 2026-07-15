@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.1.0",
+  "result_path": "leaderboard/results/snr_estimation/snr_moment_ridge.json",
+  "task": {
+    "name": "snr_estimation",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "code_commit": "git@bc438bc02f3c1d791f38ec1c56cd631f4a2d7612",
+  "command": "sbatch slurm/train_snr_baselines.sh snr_moment_ridge  # RadioML 2016.10a, seed 42, full SNR range (CPU/defq)",
+  "artifacts": {
+    "source_only": true
+  },
+  "hardware": "1x Dalia defq node (ARM Neoverse V2, CPU-only)",
+  "expected_metrics": {
+    "rmse_db": 7.642190401082233,
+    "mae_db": 5.825841818031866
+  },
+  "tolerance": {
+    "absolute": 0.1
+  },
+  "rerun_mode": "full_retrain"
+}

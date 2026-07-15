@@ -86,6 +86,7 @@ for TRACK in $TRACKS; do
     --weight-decay "$WD" \
     --patience "$PATIENCE" \
     --seed "$SEED" \
+    --no-bootstrap \
     --device cuda \
     --out "$OUT"
   rc=$?

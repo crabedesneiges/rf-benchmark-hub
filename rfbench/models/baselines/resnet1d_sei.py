@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
+import numpy as np
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -142,6 +143,11 @@ class ResNet1dNet(nn.Module):
 
 def _iq_to_bt2_tensor(iq_batch: object, device: torch.device, window: int) -> Tensor:
     """Stack the collated ``x["iq"]`` list into a ``(B, window, 2)`` float tensor on ``device``."""
+    # Collate the per-sample list into ONE ndarray first: torch.as_tensor on a list of ndarrays
+    # copies element-by-element ("extremely slow" per torch) and dominated SEI eval wall-time.
+    # np.asarray stacks in one shot; the resulting tensor is numerically identical.
+    if isinstance(iq_batch, (list, tuple)):
+        iq_batch = np.asarray(iq_batch)
     tensor = torch.as_tensor(iq_batch, dtype=torch.float32, device=device)
     if tensor.ndim == 2:
         tensor = tensor.unsqueeze(0)

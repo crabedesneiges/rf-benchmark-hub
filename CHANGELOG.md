@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified — LOT 3 SEI open_set : 3 lignes vérifiées (SEI complet)
+
+Re-run seed-45 (2σ) : `complex_cnn` auroc 0.641 vs 0.646 ✓, `resnet1d_sei` 0.809 vs 0.825 ✓,
+`wisig_cnn_paper` 0.500 vs 0.493 ✓ (chance-level mais reproductible → vérifiable). SEI : **9/12
+verified** (complex_cnn 4/4, resnet1d_sei 4/4, wisig open_set) ; les 3 pistes rank1 wisig restent
+self_reported (instables). Board verified total : **18 lignes** (amc 6, snr 2, interference_id 1,
+sei 9).
+
 ### Changed — board SEI open_set passé en multi-seed (AUROC/EER)
 
 Les 3 pistes `open_set` (held-out-Tx, AUROC/EER) agrégées en `multi_seed_std` (seeds 42/43/44),

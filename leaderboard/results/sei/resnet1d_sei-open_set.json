@@ -58,6 +58,12 @@
     "version": "v1"
   },
   "verification": {
-    "status": "self_reported"
+    "status": "verified",
+    "verified_by": "rf-bench-maintainers",
+    "verified_date": "2026-07-15",
+    "verified_hardware": "1x Dalia GB200 (ARM aarch64, CUDA)",
+    "method": "full_retrain",
+    "tolerance": 0.0194,
+    "observed_primary": 0.8086340645262481
   }
 }

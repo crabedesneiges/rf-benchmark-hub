@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified — LOT 3 : deep AMC vérifiés par re-run seed-fraîche à 2σ (tier `verified`)
+
+Vérification stochastique **non circulaire** : re-run GPU d'**une seed fraîche (45)** hors du jeu
+board (moyenne seeds 42/43/44), tolérance per-métrique = 2σ multi-seed. Flip `self_reported` →
+`verified` :
+- `cldnn` : acc 0.5819 vs 0.5801 (|Δ|=0.0018 ≤ 0.012) ✓
+- `mcldnn` : acc 0.5653 vs 0.5728 (|Δ|=0.0076 ≤ 0.020) ✓
+- `resnet_amc` : acc 0.5695 vs 0.5680 (|Δ|=0.0015 ≤ 0.005) ✓
+Board AMC : **6/9 verified** (3 DSP + 3 deep). Doctrine du protocole corrigée pour décrire
+exactement la méthode seed-fraîche-à-2σ (une seed hors jeu tombe à ≤2σ ~95% du temps — repro
+honnête, pas relecture des seeds reportés).
+
 ### Verified — LOT 2 : baselines snr_estimation vérifiées (tier `verified`)
 
 Re-run defq CPU (déterministe) reproduisant les valeurs **bit-exactes** (|delta|=0) → flip

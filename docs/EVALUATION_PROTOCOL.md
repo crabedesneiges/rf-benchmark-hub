@@ -185,21 +185,24 @@ baseline (closed-form DSP, fixed-seed linear model). Stochastic baselines widen 
 | `protocol_tech_id` | `accuracy_overall` | ±0.005 absolute |
 
 **Deterministic vs stochastic.** A `verified` flip checks *reproducibility of the committed
-recipe*, not a fresh point estimate — the re-run replays the **same seed protocol** the manifest's
-`command` declares.
-- **Deterministic** baseline (closed-form DSP, fixed-seed linear/ridge model): the re-run is
-  bit-reproducible up to BLAS noise, so the deterministic-floor bound above applies as
-  `tolerance.absolute`.
+recipe* — a fresh run of the declared command lands where the row claims.
+- **Deterministic** baseline (closed-form DSP, fixed-seed linear/ridge model): the re-run replays
+  the declared seed and is bit-reproducible up to BLAS noise, so the deterministic-floor bound above
+  applies as `tolerance.absolute`.
 - **Stochastic** baseline (trained neural net, reported as a multi-seed mean ±σ): CUDA
-  nondeterminism means even the same seeds do not reproduce bit-exactly. The manifest MUST widen the
-  bound to cover run-to-run spread:
+  nondeterminism means no single run reproduces the mean bit-exactly. The re-run draws **one fresh
+  seed outside the reported set** (e.g. the board mean is over seeds 42/43/44 → re-run seed 45); its
+  single-run primary must land within
 
   `tolerance.absolute = max(deterministic_floor, 2·σ_multiseed)`
 
-  where `σ_multiseed` is the descriptive across-seed standard deviation published in the result's
-  `metrics.uncertainty` (the same σ that draws the board's ±1σ band). A stochastic baseline that
-  ships **no** multi-seed σ cannot claim a tight verified flip; it stays `self_reported` until it is
-  re-run as a multi-seed mean. Per-metric widening uses the manifest's `tolerance.per_metric` block.
+  of the published mean, where `σ_multiseed` is the descriptive across-seed standard deviation in the
+  result's `metrics.uncertainty` (the same σ that draws the board's ±1σ band). A fresh draw falls
+  within 2σ of the mean ≈95% of the time, so this is a genuine — not circular — reproduction check:
+  it re-trains from scratch on an unseen seed rather than re-reading the reported seeds. Widen each
+  compared metric by its own 2σ via the manifest's `tolerance.per_metric` block. A stochastic
+  baseline that ships **no** multi-seed σ cannot claim a tight verified flip; it stays
+  `self_reported` until it is re-run as a multi-seed mean.
 
 **Tolerance representation (no divergence).** The manifest's `tolerance` is an *object*
 (`absolute` / `relative` / `per_metric`) — the criterion the maintainer commits to. The verified

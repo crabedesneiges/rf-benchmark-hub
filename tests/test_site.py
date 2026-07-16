@@ -347,8 +347,12 @@ def test_scalar_metrics_get_one_column_each(tmp_path: Path) -> None:
         assert f">{metric}<" in sei_html
     # The primary column is flagged exactly once.
     assert sei_html.count('<span class="col-note">primary</span>') == 1
-    # The primary header carries the metric name + the primary marker together.
-    assert '<th class="num primary">rank1_accuracy<span class="col-note">primary</span>' in sei_html
+    # The primary header carries the metric name + the primary marker together. The header now
+    # also carries the interactive-sort hooks (data-sortable/data-metric/aria-sort/tabindex),
+    # but keeps class="num primary" FIRST and the >rank1_accuracy<span class="col-note">primary
+    # substring intact.
+    assert '<th class="num primary" data-sortable data-metric="rank1_accuracy"' in sei_html
+    assert '>rank1_accuracy<span class="col-note">primary</span>' in sei_html
 
 
 def test_missing_metric_renders_en_dash(tmp_path: Path) -> None:
@@ -1289,15 +1293,26 @@ def test_index_has_inline_filter_script(tmp_path: Path) -> None:
 
 
 def test_task_and_guide_pages_have_no_inline_script(tmp_path: Path) -> None:
-    """The search/filter script is homepage-only -- every other page stays zero-JS."""
+    """The interactive board script is scoped to FULL leaderboard pages only.
+
+    A full leaderboard page (amc, which has tables + charts) now carries the inline board
+    script (sort / filter / hover). A WIP page (spectrum_sensing, no board) and the shared
+    Guide page have nothing to make interactive, so they stay script-free -- no dead JS.
+    """
     results = tmp_path / "results"
     out = tmp_path / "site"
     _make_results_tree(results)
     generate.build_site(results, out)
 
-    for name in ("amc.html", "spectrum_sensing.html", "guide.html"):
+    # WIP + Guide pages have no board to drive -> zero <script>.
+    for name in ("spectrum_sensing.html", "guide.html"):
         page = (out / name).read_text(encoding="utf-8")
         assert "<script>" not in page
+    # The full amc leaderboard page carries the board script.
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert "<script>" in amc_html
+    # ...but still never contains the "line plot" substring in that script/CSS/controls.
+    assert "line plot" not in amc_html.split("</table>")[-1]
 
 
 def test_submit_tab_links_to_submission_guide(tmp_path: Path) -> None:
@@ -1654,3 +1669,241 @@ def test_curve_with_ci_renders_shaded_band(tmp_path: Path) -> None:
     sei_html = (out / "sei.html").read_text(encoding="utf-8")
     assert 'class="ci-band"' in sei_html  # the shaded uncertainty envelope
     assert 'aria-label="accuracy_vs_snr line plot"' in sei_html  # the line is still drawn
+
+
+# --------------------------------------------------------------------------------------------------
+# Adversarial-review regressions: XSS, deterministic hues, palette contrast, and the interactive
+# markup <-> board-JS contract (sort / filter / tooltip / legend hooks).
+# --------------------------------------------------------------------------------------------------
+def _rel_luminance(hex_color: str) -> float:
+    """WCAG relative luminance of an ``#rrggbb`` colour."""
+
+    def _lin(channel: int) -> float:
+        c = channel / 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b)
+
+
+def _contrast(lum_a: float, lum_b: float) -> float:
+    hi, lo = max(lum_a, lum_b), min(lum_a, lum_b)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_tooltip_never_uses_innerHTML_on_dynamic_values() -> None:
+    """The shared chart tooltip must build DOM nodes + textContent, never innerHTML.
+
+    ``data-model``/``data-metric`` are contributor-controlled (result.json). ``getAttribute``
+    returns the DECODED string, so any ``innerHTML`` sink would re-parse ``<img onerror=...>``
+    into live markup (stored DOM XSS). Guard the tool never regresses to a string-HTML sink.
+    """
+    js = generate.render_scripts()
+    assert "innerHTML" not in js
+    assert "textContent" in js  # the tooltip is built from text nodes
+
+
+def test_malicious_model_name_never_renders_live_markup(tmp_path: Path) -> None:
+    """A model name containing an HTML payload is escaped everywhere it lands in the page.
+
+    ``model.name`` has no schema pattern (only length 1..128), so a valid result.json can carry
+    ``<img src=x onerror=alert(1)>``. It must appear ONLY as escaped text (``&lt;img ...``),
+    never as a live ``<img ... onerror=...>`` tag, in any data-* attribute or cell.
+    """
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    payload = "<img src=x onerror=alert(1)>"
+    curve = [{"x": -5.0, "y": 0.4}, {"x": 5.0, "y": 0.7}]
+    _write(
+        results / "sei" / "x.json",
+        _sei_row("xss-row", payload, "closed_set", 0.5, curves={"accuracy_vs_snr": curve}),
+    )
+    generate.build_site(results, out)
+    sei_html = (out / "sei.html").read_text(encoding="utf-8")
+    # No LIVE tag: the unescaped '<img ... onerror' opening must never appear (the escaped form
+    # '&lt;img ... onerror=alert(1)&gt;' is inert text and is fine to contain the handler string).
+    assert "<img src=x onerror" not in sei_html
+    # ...but the name is still present, HTML-escaped (angle brackets neutralised).
+    assert "&lt;img src=x onerror=alert(1)&gt;" in sei_html
+
+
+def test_model_hue_is_stable_deterministic_and_valid() -> None:
+    """``_model_hue`` is a pure, deterministic ``str -> #rrggbb`` map (crc32, not salted hash).
+
+    Locks (a) idempotence within a run, (b) an exact value so a swap to the salted built-in
+    ``hash`` (which breaks cross-run determinism) is caught, and (c) the hex format.
+    """
+    hex_re = re.compile(r"^#[0-9a-f]{6}$")
+    for name in ("iqfm", "mcldnn", "wisig-cnn", "snr_cnn", "chance"):
+        first = generate._model_hue(name)
+        assert first == generate._model_hue(name)  # stable within a run
+        assert hex_re.match(first), first
+        assert first in generate._MODEL_PALETTE
+    # Exact locked mapping -> guards the crc32-based determinism (would change under salted hash).
+    assert generate._model_hue("iqfm") == "#d55a4e"
+    # The same model gets the same hue in a line plot AND a bar chart (colour == identity).
+    line = generate._render_curve_plot(
+        "accuracy_vs_snr", [("iqfm", "baseline", [{"x": 0.0, "y": 0.5}, {"x": 1.0, "y": 0.6}])]
+    )
+    assert 'stroke="#d55a4e"' in line
+    bar = generate._render_bar_chart(
+        "accuracy_overall", [_amc_row("h", "iqfm", "from_scratch", 0.5, "self_reported")]
+    )
+    assert "fill:#d55a4e" in bar
+
+
+def test_palette_hues_meet_3to1_contrast_on_plot_background() -> None:
+    """Every series hue clears WCAG 1.4.11 (>= 3:1) against the ACTUAL plot bg ``--surface-2``.
+
+    Curves/markers are informational graphic objects rendered on ``.plot { background:
+    var(--surface-2) }`` -- so each hue must be perceivable on that ground in BOTH themes, not
+    merely distinguishable from its neighbours. The ``--surface-2`` luminances below are derived
+    from the token's two oklch values (light ``0.975 0.004 250`` / dark ``0.25 0.016 260``).
+    """
+    surface2_light_lum = 0.9272
+    surface2_dark_lum = 0.0156
+    for hue in generate._MODEL_PALETTE:
+        lum = _rel_luminance(hue)
+        assert _contrast(lum, surface2_light_lum) >= 3.0, f"{hue} fails on light --surface-2"
+        assert _contrast(lum, surface2_dark_lum) >= 3.0, f"{hue} fails on dark --surface-2"
+
+
+def test_group_table_carries_interactive_hooks(tmp_path: Path) -> None:
+    """Every hook the board JS reads for sort/filter is present on the rendered table markup."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "a.json", _amc_row("row-a", "iqfm", "linear_probe", 0.71, "self_reported")
+    )
+    _write(
+        results / "amc" / "b.json", _amc_row("row-b", "mcldnn", "linear_probe", 0.52, "verified")
+    )
+    generate.build_site(results, out)
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+    # The table advertises its (regime, track) group so the no-mixing invariant is checkable.
+    assert "<table data-leaderboard data-regime=" in amc
+    # Each model row carries data-model + data-family + a data-verified consistent with status.
+    assert 'data-model="iqfm"' in amc and 'data-family="baseline"' in amc
+    assert 'data-model="mcldnn"' in amc
+    assert 'data-verified="true"' in amc  # the verified row
+    assert 'data-verified="false"' in amc  # the self_reported row
+    # Metric cells expose data-value for the numeric sort.
+    assert 'data-value="0.71' in amc or 'data-value="0.71"' in amc
+    # Exactly one no-match row per table (one linear_probe table here), hidden by default.
+    assert amc.count('class="no-match-row"') == 1
+    assert '<tr class="no-match-row" hidden>' in amc
+
+
+def test_board_controls_present_on_full_page_only(tmp_path: Path) -> None:
+    """The controls bar (search / verified / family) is on result pages, not WIP/guide pages."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "a.json", _amc_row("row-a", "iqfm", "linear_probe", 0.7, "self_reported")
+    )
+    generate.build_site(results, out)
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+    assert 'id="board-search"' in amc
+    assert 'id="board-verified-only"' in amc
+    # Three segmented buttons (all | baseline | foundation); count the <button> markup, not the
+    # bare "board-seg" prefix (which also matches the ".board-segmented" wrapper).
+    assert amc.count('type="button" class="board-seg') == 3
+    for fam in ("all", "baseline", "foundation"):
+        assert f'data-family="{fam}"' in amc
+    # The board script is injected on this page (so the controls become live).
+    assert "js-on" in amc
+    # A declared-but-resultless task renders a WIP page with NO controls and NO script.
+    guide = (out / "guide.html").read_text(encoding="utf-8")
+    assert 'id="board-search"' not in guide
+    assert "<script>" not in guide
+
+
+def test_chart_points_and_bars_carry_tooltip_data(tmp_path: Path) -> None:
+    """Curve points and bar rects expose the data-* the tooltip reads, plus focusability."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    curve = [
+        {"x": -10.0, "y": 0.30, "y_low": 0.25, "y_high": 0.35},
+        {"x": 10.0, "y": 0.80, "y_low": 0.77, "y_high": 0.83},
+    ]
+    _write(
+        results / "sei" / "c.json",
+        _sei_row("pt-row", "net", "closed_set", 0.6, curves={"accuracy_vs_snr": curve}),
+    )
+    generate.build_site(results, out)
+    sei = (out / "sei.html").read_text(encoding="utf-8")
+    # Curve points: model + x + y hooks, CI bounds (present because the curve carries y_low/high),
+    # keyboard-focusable, and a group (not opaque img) container so points reach the AT.
+    assert 'data-model="net"' in sei
+    assert "data-x=" in sei and "data-y=" in sei
+    assert "data-ci-low=" in sei and "data-ci-high=" in sei
+    assert 'class="pt"' in sei and 'tabindex="0"' in sei
+    assert '<svg class="plot" viewBox' in sei and 'role="group"' in sei
+
+    # A scalar-only bar chart: bar rects carry data-metric + data-value (+ no CI here).
+    results2 = tmp_path / "results2"
+    out2 = tmp_path / "site2"
+    _write(
+        results2 / "amc" / "a.json", _amc_row("bar-row", "m", "from_scratch", 0.5, "self_reported")
+    )
+    generate.build_site(results2, out2)
+    amc = (out2 / "amc.html").read_text(encoding="utf-8")
+    assert 'class="barplot-bar"' in amc
+    assert 'data-metric="accuracy_overall"' in amc and "data-value=" in amc
+    assert 'class="plot barplot"' in amc and 'role="group"' in amc
+
+
+def test_legend_items_match_series(tmp_path: Path) -> None:
+    """Every ``g.series[data-series=X]`` in a plot has a matching ``legend-item[data-series=X]``."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    curve_a = [{"x": 0.0, "y": 0.4}, {"x": 1.0, "y": 0.6}]
+    curve_b = [{"x": 0.0, "y": 0.3}, {"x": 1.0, "y": 0.5}]
+    _write(
+        results / "sei" / "a.json",
+        _sei_row("s-a", "alpha", "closed_set", 0.6, curves={"accuracy_vs_snr": curve_a}),
+    )
+    _write(
+        results / "sei" / "b.json",
+        _sei_row("s-b", "beta", "closed_set", 0.5, curves={"accuracy_vs_snr": curve_b}),
+    )
+    generate.build_site(results, out)
+    sei = (out / "sei.html").read_text(encoding="utf-8")
+    series = set(re.findall(r'<g class="series" data-series="([^"]+)"', sei))
+    legend = set(re.findall(r'class="legend-item" data-series="([^"]+)"', sei))
+    assert series == legend == {"alpha", "beta"}
+
+
+def test_sortable_affordance_is_gated_behind_js() -> None:
+    """The sort caret + pointer + hover are CSS-hidden until ``body.js-on`` (no dead affordance).
+
+    Headers still carry ``data-sortable``/``tabindex`` in markup (the JS binds click/keydown), but
+    with JS off they must not advertise a sort they cannot perform.
+    """
+    css = generate.render_styles()
+    # Default (JS off): the caret is hidden and the header is not a pointer.
+    assert ".sort-caret {\n  display: none;" in css
+    assert "th[data-sortable] { position: relative; user-select: none; cursor: default; }" in css
+    # JS on: the caret + pointer + hover affordance are revealed, exactly like .board-controls.
+    assert "body.js-on .sort-caret { display: inline-block; }" in css
+    assert "body.js-on th[data-sortable] { cursor: pointer; }" in css
+    assert "body.js-on th[data-sortable]:hover { color: var(--fg); }" in css
+
+
+def test_svg_focus_indicators_have_stroke_fallback() -> None:
+    """Focusable SVG points/bars pair ``outline`` with a ``stroke`` ring (WebKit paints stroke)."""
+    css = generate.render_styles()
+    assert ".plot .pt:focus-visible { outline: 2px solid var(--focus); stroke: var(--focus)" in css
+    assert "stroke-width: 2" in css.split(".plot .barplot-bar:focus-visible")[1][:120]
+
+
+def test_home_search_and_pills_have_a_focus_ring() -> None:
+    """The homepage search box keeps a 2px focus ring (never ``outline: none``); pills get one."""
+    css = generate.render_styles()
+    assert ".search-input:focus { outline: none;" not in css
+    assert ".search-input:focus-visible {\n  outline: 2px solid var(--focus);" in css
+    assert (
+        ".filter-pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }"
+        in css
+    )

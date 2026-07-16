@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — refonte du rendu du leaderboard (tables interactives, charts survolables, thème oklch)
+
+Refonte de `leaderboard/site/generate.py` (stdlib-only, aucune dépendance ajoutée), en
+progressive enhancement — sans JS, tables et charts restent lisibles ; les contrôles sont
+masqués tant que le script n'a pas posé `body.js-on` :
+
+- **Tables interactives** : tri au clic + clavier (Enter/Espace) sur les en-têtes (numérique via
+  `data-value`, alpha pour la colonne Model ; tri stable, caret + `aria-sort` mis à jour). Le tri
+  agit uniquement dans le `<tbody>` de sa propre table `(regime, track)` → invariant no-mixing
+  préservé. Barre de contrôles par page-tâche : recherche modèle, toggle « verified only »,
+  segmented baseline/foundation (masque les `tr[data-model]`, note « no match » par table).
+- **Dataviz survolable** (SVG inline calculé en Python, aucune lib) : titres d'axes dérivés
+  génériquement du nom de courbe (`<y>_vs_<x>`), légende cliquable (`<button data-series>`) qui
+  masque/highlight une série, tooltip au survol/focus (points + barres) via un unique `<div>`
+  data-driven avec fallback `<title>` natif. Couleur = teinte stable par modèle (hash `zlib.crc32`
+  déterministe), trait plein (baseline) vs pointillé (foundation), marqueur cyclé par index (3e
+  canal non-couleur, accessibilité).
+- **Thème oklch** : tokens `:root` light + dark réécrits en oklch (neutres désaturés, accents
+  L/C constants à teinte variable), contraste AA vérifié ; nouveaux tokens `--accent-2`,
+  `--focus`, `--tooltip-bg/fg`, `--radius`. Tous les noms de tokens/classes conservés.
+- **Home** : tri des cartes (priorité / nb de résultats / % verified) via `<select>`, agissant
+  dans chaque `.card-grid` (jamais entre scope-sections) ; pills de statut inchangées.
+
+Sortie idempotente (build 2× → octets identiques). Tests `tests/test_site.py` mis à jour
+uniquement pour le markup volontairement changé (en-têtes triables, script board sur les pages
+leaderboard complètes) ; les invariants protocole/ordre/no-mixing restent intacts.
+
 ### Changed — bandes d'IC par-bin peuplées sur les baselines AMC mono-run (§1)
 
 Re-run defq CPU (déterministe) de `chance`/`hoc_lr`/`majority_class` avec le nouveau bootstrap

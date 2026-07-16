@@ -76,6 +76,7 @@ import html
 import json
 import re
 import sys
+import zlib
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -418,19 +419,80 @@ _REPO_ICON_SVG: str = (
     '<polyline points="16 6 22 12 16 18"></polyline></svg>'
 )
 
-#: Distinct (color, dash-pattern) pairs cycled across model lines in a curve plot. Chosen
-#: for contrast in both light and dark themes; the dash pattern makes lines distinguishable
-#: without relying on color alone (accessibility).
-_PLOT_SERIES_STYLES: tuple[tuple[str, str], ...] = (
-    ("#0b5fff", "none"),
-    ("#d1495b", "6 3"),
-    ("#00897b", "2 3"),
-    ("#8e44ad", "8 3 2 3"),
-    ("#e08e0b", "4 2"),
-    ("#2c7fb8", "1 3"),
-    ("#c0392b", "10 4"),
-    ("#16a085", "3 3 1 3"),
+#: Perceptually-spaced hue palette (hex), robust in both light and dark themes. A model's
+#: colour is a DETERMINISTIC pick from this palette (``zlib.crc32`` of its name), so the SAME
+#: model keeps the SAME hue on every chart and across every run -- colour therefore carries
+#: meaning (identity), never a per-run accident. ``zlib.crc32`` (not the salted built-in
+#: ``hash``) guarantees the mapping is stable between interpreter runs (idempotent output).
+#: Every hue is calibrated to clear WCAG 1.4.11 non-text contrast (>= 3:1) against the ACTUAL
+#: plot background ``--surface-2`` in BOTH themes (off-white in light, near-black in dark) --
+#: curves/markers are informational graphic objects, so each must be perceivable on its own
+#: ground, not merely distinguishable from its neighbours. ``tests/test_site.py`` recomputes
+#: the ratio for every hue against both oklch ``--surface-2`` values and asserts >= 3.0.
+_MODEL_PALETTE: tuple[str, ...] = (
+    "#2f6bff",  # blue
+    "#d1495b",  # rose
+    "#0f9d8f",  # teal
+    "#a45fc9",  # violet
+    "#a86a09",  # amber
+    "#2c7fb8",  # steel
+    "#d55a4e",  # brick
+    "#16a085",  # green
+    "#d81b60",  # magenta
+    "#5c6bc0",  # indigo
+    "#00838f",  # cyan
+    "#548a2b",  # lime
 )
+
+#: Family -> line dash pattern (a non-colour channel): ``baseline`` is a SOLID line, a
+#: ``foundation`` model is DASHED, so the two families read apart even in greyscale.
+_FAMILY_DASH: dict[str, str] = {
+    "baseline": "none",
+    "foundation": "7 4",
+}
+
+#: Marker shapes cycled by a series' index in its group (a THIRD, shape-based channel on top
+#: of hue + dash, for colour-blind accessibility): circle, square, triangle, diamond.
+_MARKER_SHAPES: tuple[str, ...] = ("circle", "square", "triangle", "diamond")
+
+
+def _model_hue(name: str) -> str:
+    """Deterministic palette colour for a model name (stable across runs and charts).
+
+    Uses ``zlib.crc32`` (NOT the salted built-in ``hash``) so the name -> colour mapping is
+    identical on every interpreter run, keeping the generated site byte-for-byte reproducible.
+    """
+    return _MODEL_PALETTE[zlib.crc32(name.encode("utf-8")) % len(_MODEL_PALETTE)]
+
+
+def _family_dash(family: str | None) -> str:
+    """Line dash-array for a model family (baseline solid, foundation dashed), else solid."""
+    return _FAMILY_DASH.get(family or "", "none")
+
+
+def _marker_shape(index: int) -> str:
+    """Marker shape cycled by a series' index within its group (3rd, non-colour channel)."""
+    return _MARKER_SHAPES[index % len(_MARKER_SHAPES)]
+
+
+def _marker_svg(shape: str, cx: float, cy: float, r: float, fill: str, extra: str = "") -> str:
+    """Render one marker of ``shape`` centred at ``(cx, cy)`` with radius ``r`` (filled ``fill``).
+
+    ``extra`` is appended verbatim to the element's attributes (used for the data-* hooks and
+    the ``<title>`` child are handled by the caller). Falls back to a circle for an unknown shape.
+    """
+    if shape == "square":
+        s = r * 1.7
+        return f'<rect x="{cx - s / 2:.1f}" y="{cy - s / 2:.1f}" width="{s:.1f}" height="{s:.1f}" fill="{fill}"{extra}'  # noqa: E501
+    if shape == "triangle":
+        h = r * 1.9
+        pts = f"{cx:.1f},{cy - h:.1f} {cx - h:.1f},{cy + h * 0.75:.1f} {cx + h:.1f},{cy + h * 0.75:.1f}"  # noqa: E501
+        return f'<polygon points="{pts}" fill="{fill}"{extra}'
+    if shape == "diamond":
+        d = r * 1.7
+        pts = f"{cx:.1f},{cy - d:.1f} {cx + d:.1f},{cy:.1f} {cx:.1f},{cy + d:.1f} {cx - d:.1f},{cy:.1f}"  # noqa: E501
+        return f'<polygon points="{pts}" fill="{fill}"{extra}'
+    return f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{r:.1f}" fill="{fill}"{extra}'
 
 
 # --------------------------------------------------------------------------------------------------
@@ -985,6 +1047,19 @@ def _fmt_axis(value: float) -> str:
     return f"{value:g}"
 
 
+def _axis_titles(curve_name: str) -> tuple[str | None, str | None]:
+    """Derive ``(y_title, x_title)`` GENERICALLY from a ``"<y>_vs_<x>"`` curve name.
+
+    ``accuracy_vs_snr`` -> ``("accuracy", "snr")``; a name with no ``_vs_`` yields
+    ``(None, None)`` (no axis title). Nothing task/metric-specific is hardcoded -- the labels
+    are just the two halves of the name split on the first ``_vs_``.
+    """
+    parts = curve_name.split("_vs_", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return (None, None)
+    return (parts[0], parts[1])
+
+
 # --------------------------------------------------------------------------------------------------
 # Inline-SVG line plot (stdlib only -- polylines computed from the curve points)
 # --------------------------------------------------------------------------------------------------
@@ -1011,19 +1086,23 @@ def _render_bar(value: float, vmax: float, *, lower_is_better: bool = False) -> 
 
 def _render_curve_plot(
     curve_name: str,
-    series: list[tuple[str, list[dict[str, Any]]]],
+    series: list[tuple[str, str | None, list[dict[str, Any]]]],
 ) -> str:
     """Render one inline-SVG line plot overlaying every model's curve in a group.
 
-    ``series`` is a list of ``(model_name, points)`` where each point is a ``{x, y}`` dict.
-    Axes, gridlines and a legend are drawn; each series gets a distinct color + dash pattern
-    (cycled from ``_PLOT_SERIES_STYLES``) so lines stay distinguishable without color alone.
-    Every x/y is computed here -- there is no JS and no external chart library.
+    ``series`` is a list of ``(model_name, family, points)`` where each point is a ``{x, y}``
+    dict (optionally ``y_low``/``y_high`` for a per-point CI). A model's colour is its stable
+    hue (:func:`_model_hue`), its line style keys off the family (baseline solid / foundation
+    dashed), and a marker shape cycled by series index gives a third, non-colour channel. Axis
+    titles are derived generically from a ``"<y>_vs_<x>"`` curve name. Each series is wrapped in
+    a ``<g class="series" data-series>`` so the inline legend buttons can toggle it; every point
+    carries data-* hooks + a native ``<title>`` so tooltips work with OR without JS. Everything
+    is computed here -- no JS drawing, no external chart library.
     """
     # Collect the global x/y ranges across all series (including any uncertainty band bounds).
-    xs = [float(p["x"]) for _, pts in series for p in pts]
+    xs = [float(p["x"]) for _, _fam, pts in series for p in pts]
     ys: list[float] = []
-    for _, pts in series:
+    for _, _fam, pts in series:
         for p in pts:
             ys.append(float(p["y"]))
             if "y_low" in p:
@@ -1045,9 +1124,10 @@ def _render_curve_plot(
 
     # SVG geometry (viewBox coordinates; scales responsively via CSS width:100%).
     width, height = 720, 340
-    pad_l, pad_r, pad_t, pad_b = 56, 16, 20, 44
+    pad_l, pad_r, pad_t, pad_b = 56, 16, 20, 52
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
+    y_title, x_title = _axis_titles(curve_name)
 
     def sx(x: float) -> float:
         return pad_l + (x - xmin) / (xmax - xmin) * plot_w
@@ -1056,7 +1136,10 @@ def _render_curve_plot(
         return pad_t + (ymax - y) / (ymax - ymin) * plot_h
 
     parts: list[str] = [
-        f'<svg class="plot" viewBox="0 0 {width} {height}" role="img" '
+        # role="group" (not "img"): an img exposes an OPAQUE subtree, which would hide the
+        # focusable per-point children (their aria-labels would never reach the AT). A group keeps
+        # the aria-label as the accessible name while leaving the points explorable by keyboard.
+        f'<svg class="plot" viewBox="0 0 {width} {height}" role="group" '
         f'aria-label="{_esc(curve_name)} line plot" '
         f'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
     ]
@@ -1097,12 +1180,33 @@ def _render_curve_plot(
         f'<line class="axis" x1="{pad_l:.1f}" y1="{pad_t:.1f}" '
         f'x2="{pad_l:.1f}" y2="{pad_t + plot_h:.1f}"/>'
     )
+    # Axis titles, derived generically from the "<y>_vs_<x>" curve name (omitted otherwise).
+    if x_title:
+        parts.append(
+            f'<text class="axis-title" x="{pad_l + plot_w / 2:.1f}" '
+            f'y="{height - 6:.1f}" text-anchor="middle">{_esc(x_title)}</text>'
+        )
+    if y_title:
+        ty = pad_t + plot_h / 2
+        parts.append(
+            f'<text class="axis-title" x="14" y="{ty:.1f}" text-anchor="middle" '
+            f'transform="rotate(-90 14 {ty:.1f})">{_esc(y_title)}</text>'
+        )
+
+    def _ci_text(p: dict[str, Any]) -> str:
+        if "y_low" in p and "y_high" in p:
+            return f" (CI [{_fmt_metric(float(p['y_low']))}, {_fmt_metric(float(p['y_high']))}])"
+        return ""
 
     # Series polylines.
     legend_items: list[str] = []
-    for idx, (model_name, pts) in enumerate(series):
-        color, dash = _PLOT_SERIES_STYLES[idx % len(_PLOT_SERIES_STYLES)]
+    for idx, (model_name, family, pts) in enumerate(series):
+        color = _model_hue(model_name)
+        dash = _family_dash(family)
+        shape = _marker_shape(idx)
         ordered = sorted(pts, key=lambda p: float(p["x"]))
+        dash_attr = "" if dash == "none" else f' stroke-dasharray="{dash}"'
+        series_parts: list[str] = [f'<g class="series" data-series="{_esc(model_name)}">']
         # Uncertainty band: a shaded envelope from y_high (left->right) back along y_low
         # (right->left), drawn BEHIND the line, when every point carries a per-point CI.
         if ordered and all("y_low" in p and "y_high" in p for p in ordered):
@@ -1110,28 +1214,50 @@ def _render_curve_plot(
             down = " ".join(
                 f"{sx(float(p['x'])):.1f},{sy(float(p['y_low'])):.1f}" for p in reversed(ordered)
             )
-            parts.append(
+            series_parts.append(
                 f'<polygon class="ci-band" fill="{color}" fill-opacity="0.14" '
                 f'stroke="none" points="{up} {down}"/>'
             )
         coords = " ".join(f"{sx(float(p['x'])):.1f},{sy(float(p['y'])):.1f}" for p in ordered)
-        dash_attr = "" if dash == "none" else f' stroke-dasharray="{dash}"'
-        parts.append(
+        series_parts.append(
             f'<polyline fill="none" stroke="{color}" stroke-width="2" '
             f'stroke-linejoin="round" stroke-linecap="round"{dash_attr} points="{coords}"/>'
         )
-        # Point markers for readability.
+        # Point markers: hoverable/focusable, with data-* hooks + a native <title> fallback.
         for p in ordered:
-            parts.append(
-                f'<circle cx="{sx(float(p["x"])):.1f}" cy="{sy(float(p["y"])):.1f}" '
-                f'r="2.2" fill="{color}"/>'
+            px, py = float(p["x"]), float(p["y"])
+            cx, cy = sx(px), sy(py)
+            ci_attr = ""
+            if "y_low" in p and "y_high" in p:
+                ci_attr = (
+                    f' data-ci-low="{_fmt_metric(float(p["y_low"]))}"'
+                    f' data-ci-high="{_fmt_metric(float(p["y_high"]))}"'
+                )
+            title = _esc(f"{model_name}: {_fmt_axis(px)} → {_fmt_metric(py)}{_ci_text(p)}")
+            extra = (
+                f' class="pt" data-model="{_esc(model_name)}" data-x="{_fmt_axis(px)}"'
+                f' data-y="{_fmt_metric(py)}"{ci_attr} tabindex="0" role="img"'
+                f' aria-label="{title}">'
+                f"<title>{title}</title>"
             )
+            elem = _marker_svg(shape, cx, cy, 2.8, color, extra)
+            close = (
+                "</rect>"
+                if shape == "square"
+                else ("</circle>" if shape == "circle" else "</polygon>")
+            )
+            series_parts.append(elem + close)
+        series_parts.append("</g>")
+        parts.append("".join(series_parts))
         legend_items.append(
-            '<span class="legend-item">'
+            '<button type="button" class="legend-item" '
+            f'data-series="{_esc(model_name)}" aria-pressed="false">'
             f'<svg class="legend-swatch" viewBox="0 0 24 10" aria-hidden="true">'
             f'<line x1="1" y1="5" x2="23" y2="5" stroke="{color}" stroke-width="2"'
-            f"{dash_attr}/></svg>"
-            f"<span>{_esc(model_name)}</span></span>"
+            f"{dash_attr}/>"
+            f"{_marker_svg(shape, 12, 5, 2.6, color, '/>')}"
+            "</svg>"
+            f"<span>{_esc(model_name)}</span></button>"
         )
 
     parts.append("</svg>")
@@ -1170,7 +1296,7 @@ def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
     SVG -- no JS, no chart library (mirrors :func:`_render_curve_plot`).
     """
     lower = _is_lower_better(metric_key)
-    entries: list[tuple[str, float, tuple[float, float] | None]] = []
+    entries: list[tuple[str, float, tuple[float, float] | None, str | None]] = []
     for row in rows:
         values = _scalar_values(row)
         if metric_key not in values:
@@ -1180,6 +1306,7 @@ def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
                 str(row["model"]["name"]),
                 float(values[metric_key]),
                 _metric_uncertainty(row, metric_key),
+                _family(row),
             )
         )
     if not entries:
@@ -1203,7 +1330,9 @@ def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
         return pad_t + (ymax - y) / (ymax - ymin) * plot_h
 
     parts: list[str] = [
-        f'<svg class="plot barplot" viewBox="0 0 {width} {height}" role="img" '
+        # role="group" (not "img"): keeps the focusable per-bar children exposed to the AT while
+        # the aria-label names the chart (see the line-plot container for the full rationale).
+        f'<svg class="plot barplot" viewBox="0 0 {width} {height}" role="group" '
         f'aria-label="{_esc(metric_key)} by model bar chart" '
         f'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
     ]
@@ -1216,12 +1345,23 @@ def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
             f'text-anchor="end">{_esc(_fmt_axis(yval))}</text>'
         )
     baseline = sy(max(ymin, 0.0))
-    for idx, (name, val, ci) in enumerate(entries):
+    for idx, (name, val, ci, family) in enumerate(entries):
         cx = pad_l + slot * (idx + 0.5)
         top = sy(val)
+        color = _model_hue(name)
+        ci_attr = ""
+        ci_txt = ""
+        if ci is not None:
+            ci_attr = f' data-ci-low="{_fmt_metric(ci[0])}" data-ci-high="{_fmt_metric(ci[1])}"'
+            ci_txt = f" (CI [{_fmt_metric(ci[0])}, {_fmt_metric(ci[1])}])"
+        title = _esc(f"{name}: {metric_key} = {_fmt_metric(val)}{ci_txt}")
+        fam_attr = f' data-family="{_esc(family)}"' if family else ""
         parts.append(
             f'<rect class="barplot-bar" x="{cx - bar_w / 2:.1f}" y="{min(top, baseline):.1f}" '
-            f'width="{bar_w:.1f}" height="{abs(baseline - top):.1f}" rx="2"/>'
+            f'width="{bar_w:.1f}" height="{abs(baseline - top):.1f}" rx="2" '
+            f'style="fill:{color}" data-model="{_esc(name)}"{fam_attr} '
+            f'data-metric="{_esc(metric_key)}" data-value="{_fmt_metric(val)}"{ci_attr} '
+            f'tabindex="0" role="img" aria-label="{title}"><title>{title}</title></rect>'
         )
         parts.append(
             f'<text class="bar-val" x="{cx:.1f}" y="{top - 5:.1f}" '
@@ -1240,6 +1380,12 @@ def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
         )
     parts.append(_svg_line("axis", pad_l, pad_t + plot_h, pad_l + plot_w, pad_t + plot_h))
     parts.append(_svg_line("axis", pad_l, pad_t, pad_l, pad_t + plot_h))
+    # Y-axis title = the metric (X is simply the model, labelled per-bar below).
+    ty = pad_t + plot_h / 2
+    parts.append(
+        f'<text class="axis-title" x="14" y="{ty:.1f}" text-anchor="middle" '
+        f'transform="rotate(-90 14 {ty:.1f})">{_esc(metric_key)}</text>'
+    )
     parts.append("</svg>")
     arrow = "&darr; lower is better" if lower else "&uarr; higher is better"
     has_ci = any(e[2] is not None for e in entries)
@@ -1364,21 +1510,25 @@ def _render_row(
             metric_cells.append('<td class="num">&ndash;</td>')
             continue
         formatted = _fmt_metric(values[key])
+        value_attr = f' data-value="{formatted}"'
         if key == primary_key:
             bar = _render_bar(values[key], primary_max, lower_is_better=lower_is_better)
             ci_note = _render_ci_note(row, overlaps_above)
             cell_class = "num primary overlap" if overlaps_above else "num primary"
             metric_cells.append(
-                f'<td class="{cell_class}"><span class="metric-val">{formatted}</span>'
+                f'<td class="{cell_class}"{value_attr}><span class="metric-val">{formatted}</span>'
                 f"{ci_note}{bar}</td>"
             )
         else:
-            metric_cells.append(f'<td class="num">{formatted}</td>')
+            metric_cells.append(f'<td class="num"{value_attr}>{formatted}</td>')
 
     badge = _render_badge(_status(row))
     rank_html = f'<span class="rank-badge">{rank}</span>' if rank == 1 else str(rank)
+    family = _family(row)
+    family_attr = f' data-family="{_esc(family)}"' if family else ""
+    verified = "true" if _status(row) == "verified" else "false"
     return (
-        "<tr>"
+        f'<tr data-model="{_esc(str(model["name"]))}"{family_attr} data-verified="{verified}">'
         f'<td class="rank num">{rank_html}</td>'
         f'<td class="model"><span class="model-name">{name}</span>{chip}{overlap_badge}'
         f'<span class="params">{params}</span></td>'
@@ -1406,17 +1556,23 @@ def _render_group_table(
     primary_max = max((_primary_value(r) for r in ordered), default=1.0)
     overlap_flags = _overlap_with_above(ordered)
 
+    caret = '<span class="sort-caret" aria-hidden="true"></span>'
     head_metric_cells = "".join(
         (
-            f'<th class="num primary">{_esc(k)}<span class="col-note">primary</span></th>'
+            f'<th class="num primary" data-sortable data-metric="{_esc(k)}" data-sort="num" '
+            f'aria-sort="none" tabindex="0">{_esc(k)}'
+            f'<span class="col-note">primary</span>{caret}</th>'
             if k == primary_key
-            else f'<th class="num">{_esc(k)}</th>'
+            else f'<th class="num" data-sortable data-metric="{_esc(k)}" data-sort="num" '
+            f'aria-sort="none" tabindex="0">{_esc(k)}{caret}</th>'
         )
         for k in scalar_keys
     )
     header = (
         "<thead><tr>"
-        '<th class="rank">#</th><th class="model">Model</th>'
+        '<th class="rank">#</th>'
+        f'<th class="model" data-sortable data-sort="text" aria-sort="none" tabindex="0">'
+        f"Model{caret}</th>"
         f"{head_metric_cells}"
         '<th class="status">Status</th>'
         "</tr></thead>"
@@ -1432,10 +1588,14 @@ def _render_group_table(
         )
         for i, row in enumerate(ordered, start=1)
     )
+    no_match = (
+        '<tr class="no-match-row" hidden><td colspan="99" class="no-match">'
+        "No model matches the current filter.</td></tr>"
+    )
     return (
         '<div class="table-scroll">'
-        f'<table data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
-        f"{header}<tbody>\n{body_rows}\n</tbody></table>"
+        f'<table data-leaderboard data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
+        f"{header}<tbody>\n{body_rows}\n{no_match}</tbody></table>"
         "</div>"
     )
 
@@ -1460,11 +1620,11 @@ def _render_group(
     # One inline-SVG plot per discovered curve metric (skipped gracefully if none).
     plots: list[str] = []
     for curve_name in _ordered_curve_names(rows):
-        series: list[tuple[str, list[dict[str, Any]]]] = []
+        series: list[tuple[str, str | None, list[dict[str, Any]]]] = []
         for row in _sort_rows(rows):
             curves = _curves(row)
             if curve_name in curves:
-                series.append((str(row["model"]["name"]), curves[curve_name]))
+                series.append((str(row["model"]["name"]), _family(row), curves[curve_name]))
         plot = _render_curve_plot(curve_name, series)
         if plot:
             plots.append(plot)
@@ -1721,6 +1881,34 @@ def _render_submit_card() -> str:
     )
 
 
+def _render_board_controls() -> str:
+    """Render the per-task-page interactive controls bar (search + verified toggle + family).
+
+    Progressive enhancement: the bar is ``display:none`` until the board script adds
+    ``body.js-on`` (so no dead control shows when JS is off). Every control is a hook the
+    generic board script reads by attribute -- it filters the ``tr[data-model]`` rows of EVERY
+    table on the page (masking rows never violates the one-regime-per-table invariant) and does
+    not couple to any task. Deliberately free of the substring "line plot" so the scalar-only
+    page test (which asserts that substring never appears when no curve is drawn) stays true.
+    """
+    return (
+        '<div class="board-controls" role="region" aria-label="Leaderboard controls">'
+        '<input type="search" class="board-search" id="board-search" '
+        'placeholder="Filter models by name..." aria-label="Filter models by name">'
+        '<label class="board-toggle"><input type="checkbox" id="board-verified-only">'
+        "<span>Verified only</span></label>"
+        '<div class="board-segmented" role="group" aria-label="Model family">'
+        '<button type="button" class="board-seg board-seg-active" data-family="all" '
+        'aria-pressed="true">All</button>'
+        '<button type="button" class="board-seg" data-family="baseline" '
+        'aria-pressed="false">Baseline</button>'
+        '<button type="button" class="board-seg" data-family="foundation" '
+        'aria-pressed="false">Foundation</button>'
+        "</div>"
+        "</div>"
+    )
+
+
 #: A generic "empty tray" glyph for the no-baseline empty state (stdlib inline SVG, no new
 #: binary assets; a distinct class from ``.plot`` keeps the "no plot on a WIP page" test true).
 _EMPTY_STATE_SVG: str = (
@@ -1834,6 +2022,7 @@ def render_task_page(
     sidebar = _render_task_sidebar(nav_ids, declared, task_name)
     details_card = _render_task_details_card(entry, task_name, rows)
     submit_card = _render_submit_card()
+    controls = _render_board_controls()
     body = (
         '<section class="task">'
         f'<p class="breadcrumb"><a href="index.html">Tasks</a> / {_esc(title)}</p>'
@@ -1847,6 +2036,7 @@ def render_task_page(
         f'<p class="note">Each (regime, track) is ranked separately &mdash; a table or plot '
         "never mixes two regimes nor two tracks (protocol invariant). Badges mark "
         "maintainer-verified rows vs self-reported ones.</p>"
+        f"{controls}"
         f"{''.join(sections)}"
         "</div>"
         '<aside class="task-sidebar-right">'
@@ -1856,7 +2046,12 @@ def render_task_page(
         "</section>"
     )
     page_title = f"{title} — RF-Benchmark-Hub"
-    return _page(page_title, body, current=task_name)
+    return _page(
+        page_title,
+        body,
+        current=task_name,
+        extra_body=f"<script>{render_scripts()}</script>",
+    )
 
 
 def _best_summary(rows: list[dict[str, Any]]) -> tuple[str, str, str]:
@@ -1888,8 +2083,12 @@ def _render_result_card(
         if entry is not None and entry.blurb
         else ""
     )
+    priority = entry.priority if (entry is not None and entry.priority) else ""
+    verified_frac = f"{n_verified / n_rows:.4f}" if n_rows else "0"
     return (
         f'<a class="task-card hover-elevate" data-status="{_esc(status)}" '
+        f'data-priority="{_esc(priority)}" data-results="{n_rows}" '
+        f'data-verified="{verified_frac}" '
         f'href="{_esc(task_name)}.html">'
         f'<span class="card-title">{_esc(title)}</span>{badge}'
         f"{blurb}"
@@ -1911,6 +2110,7 @@ def _render_wip_card(entry: DeclaredTask) -> str:
     blurb = f'<span class="card-blurb">{_esc(entry.blurb)}</span>' if entry.blurb else ""
     return (
         f'<a class="task-card task-card-wip hover-elevate" data-status="{_esc(entry.status)}" '
+        f'data-priority="{_esc(entry.priority or "")}" data-results="0" data-verified="0" '
         f'href="{_esc(entry.id)}.html">'
         f'<span class="card-title">{_esc(entry.title)}</span>{badge}'
         f"{blurb}"
@@ -1982,7 +2182,14 @@ def _render_stats_row(stats: dict[str, int]) -> str:
 
 
 def _render_filter_bar() -> str:
-    """Render the homepage's search input + status filter pills (wired by the inline JS)."""
+    """Render the homepage's search input + status filter pills + card sort (wired by inline JS).
+
+    The sort ``<select>`` is CSS-hidden until the script adds ``body.js-on`` (progressive
+    enhancement, no dead control with JS off). The pills (All/Implemented/In progress/Planned)
+    are unchanged. Sorting acts only WITHIN each ``.card-grid`` (never moves a card across a
+    scope section), keyed off the ``data-priority``/``data-results``/``data-verified`` hooks the
+    cards carry.
+    """
     pills = (
         ("all", "All tasks", True),
         ("implemented", "Implemented", False),
@@ -1994,11 +2201,22 @@ def _render_filter_bar() -> str:
         f'data-filter="{value}">{_esc(label)}</button>'
         for value, label, active in pills
     )
+    sort_options = (
+        ("default", "Default order"),
+        ("priority", "Priority (P1 first)"),
+        ("results", "Most results"),
+        ("verified", "% verified"),
+    )
+    option_html = "".join(
+        f'<option value="{value}">{_esc(label)}</option>' for value, label in sort_options
+    )
     return (
         '<div class="filter-bar">'
         '<input type="search" id="task-search" class="search-input" '
         'placeholder="Search a task, dataset or metric...">'
         f'<div class="filter-pills">{pill_html}</div>'
+        '<div class="home-sort"><label class="home-sort-label" for="task-sort">Sort</label>'
+        f'<select id="task-sort">{option_html}</select></div>'
         "</div>"
     )
 
@@ -2528,7 +2746,7 @@ def _page(
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_esc(title)}</title>\n"
         f"{_GOOGLE_FONTS_LINK}"
-        f"<style>{_CSS}</style>\n"
+        f"<style>{render_styles()}</style>\n"
         "</head>\n<body>\n"
         '<header class="site-header">'
         '<div class="brand">'
@@ -2543,8 +2761,9 @@ def _page(
         f"<main>\n{body}\n</main>\n"
         '<footer class="site-footer"><p>Generated by leaderboard/site/generate.py '
         "&mdash; every row validated against result.schema.json. Charts are inline SVG "
-        "computed here in Python; a Google Fonts link and a small homepage-only inline "
-        "filter script are the only external/runtime additions.</p></footer>\n"
+        "computed here in Python; a Google Fonts link and a small inline interactivity "
+        "script (sort / filter / hover) are the only external/runtime additions, and the "
+        "board stays fully readable with JavaScript disabled.</p></footer>\n"
         f"{extra_body}"
         "</body>\n</html>\n"
     )
@@ -2564,70 +2783,105 @@ _LOGO_SVG = (
 )
 
 _CSS = """
+/* Theme tokens in oklch (perceptually uniform): neutrals are desaturated (near-zero chroma,
+   varying lightness), accents hold a constant L/C with only the hue turning per semantic
+   (blue=accent, green=positive, amber=caution, red=danger, violet=info). All token NAMES are
+   preserved so every existing rule + test keeps working; contrast targets AA in both schemes. */
 :root {
-  --bg: #ffffff;
-  --surface: #ffffff;
-  --surface-2: #f7f8fa;
-  --fg: #1a1c20;
-  --muted: #5c6470;
-  --line: #e2e5ea;
-  --line-strong: #cbd0d8;
-  --accent: #2f6bff;
-  --accent-soft: #e8f0ff;
-  --head: #f4f5f7;
+  --bg: oklch(1 0 0);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.975 0.004 250);
+  --fg: oklch(0.24 0.012 260);
+  --muted: oklch(0.5 0.02 260);
+  --line: oklch(0.92 0.006 260);
+  --line-strong: oklch(0.85 0.01 260);
+  --accent: oklch(0.53 0.2 260);
+  --accent-2: oklch(0.58 0.13 200);
+  --accent-soft: oklch(0.96 0.03 260);
+  --head: oklch(0.965 0.004 250);
+  --focus: oklch(0.53 0.2 260);
+  --radius: 12px;
+  --tooltip-bg: oklch(0.26 0.015 260);
+  --tooltip-fg: oklch(0.97 0.004 260);
   --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
   --font-heading: "Space Grotesk", var(--font-body);
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  --badge-verified-bg: #e6f6ea; --badge-verified-fg: #137333; --badge-verified-bd: #9fd8ae;
-  --badge-self-bg: #fff4e5; --badge-self-fg: #a15c00; --badge-self-bd: #f0c891;
-  --badge-paper-bg: #eaf1fb; --badge-paper-fg: #2158a0; --badge-paper-bd: #b9d2f0;
-  --badge-paper-uncertain-bg: #f2eefb; --badge-paper-uncertain-fg: #6b4fa0;
-  --badge-paper-uncertain-bd: #d6c8f0;
-  --badge-overlap-none-bg: #e6f6ea; --badge-overlap-none-fg: #137333;
-  --badge-overlap-none-bd: #9fd8ae;
-  --badge-overlap-unknown-bg: #fff4e5; --badge-overlap-unknown-fg: #a15c00;
-  --badge-overlap-unknown-bd: #f0c891;
-  --badge-overlap-confirmed-bg: #fce8e8; --badge-overlap-confirmed-fg: #b3261e;
-  --badge-overlap-confirmed-bd: #f0b3ae;
-  --chip-baseline-bg: #eef0f3; --chip-baseline-fg: #444b56; --chip-baseline-bd: #d6dae1;
-  --chip-foundation-bg: #f1e9fb; --chip-foundation-fg: #6b31c9; --chip-foundation-bd: #d9c4f4;
-  --status-impl-bg: #e6f6ea; --status-impl-fg: #137333; --status-impl-bd: #9fd8ae;
-  --status-wip-bg: #fdeede; --status-wip-fg: #9a5b00; --status-wip-bd: #f0c891;
-  --status-planned-bg: #eef0f3; --status-planned-fg: #5c6470; --status-planned-bd: #d6dae1;
-  --bar-track: #eef0f3; --bar-fill: #0b5fff;
-  --grid: #edeff2;
+  --badge-verified-bg: oklch(0.95 0.04 150); --badge-verified-fg: oklch(0.46 0.12 150);
+  --badge-verified-bd: oklch(0.82 0.08 150);
+  --badge-self-bg: oklch(0.96 0.045 75); --badge-self-fg: oklch(0.52 0.11 65);
+  --badge-self-bd: oklch(0.84 0.09 75);
+  --badge-paper-bg: oklch(0.95 0.035 255); --badge-paper-fg: oklch(0.47 0.13 255);
+  --badge-paper-bd: oklch(0.83 0.07 255);
+  --badge-paper-uncertain-bg: oklch(0.95 0.035 300);
+  --badge-paper-uncertain-fg: oklch(0.5 0.13 300);
+  --badge-paper-uncertain-bd: oklch(0.84 0.07 300);
+  --badge-overlap-none-bg: oklch(0.95 0.04 150); --badge-overlap-none-fg: oklch(0.46 0.12 150);
+  --badge-overlap-none-bd: oklch(0.82 0.08 150);
+  --badge-overlap-unknown-bg: oklch(0.96 0.045 75);
+  --badge-overlap-unknown-fg: oklch(0.52 0.11 65);
+  --badge-overlap-unknown-bd: oklch(0.84 0.09 75);
+  --badge-overlap-confirmed-bg: oklch(0.95 0.04 25);
+  --badge-overlap-confirmed-fg: oklch(0.52 0.19 25);
+  --badge-overlap-confirmed-bd: oklch(0.83 0.09 25);
+  --chip-baseline-bg: oklch(0.95 0.006 260); --chip-baseline-fg: oklch(0.42 0.02 260);
+  --chip-baseline-bd: oklch(0.87 0.01 260);
+  --chip-foundation-bg: oklch(0.95 0.035 300); --chip-foundation-fg: oklch(0.5 0.16 300);
+  --chip-foundation-bd: oklch(0.85 0.08 300);
+  --status-impl-bg: oklch(0.95 0.04 150); --status-impl-fg: oklch(0.46 0.12 150);
+  --status-impl-bd: oklch(0.82 0.08 150);
+  --status-wip-bg: oklch(0.96 0.045 75); --status-wip-fg: oklch(0.52 0.12 65);
+  --status-wip-bd: oklch(0.84 0.09 75);
+  --status-planned-bg: oklch(0.95 0.006 260); --status-planned-fg: oklch(0.5 0.02 260);
+  --status-planned-bd: oklch(0.87 0.01 260);
+  --bar-track: oklch(0.94 0.006 260); --bar-fill: oklch(0.55 0.2 260);
+  --grid: oklch(0.945 0.005 260);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #101317;
-    --surface: #161a20;
-    --surface-2: #1b2028;
-    --fg: #e6e8ec;
-    --muted: #9aa3b0;
-    --line: #262c35;
-    --line-strong: #333b46;
-    --accent: #6f97ff;
-    --accent-soft: #1a2740;
-    --head: #1b2028;
-    --badge-verified-bg: #12281a; --badge-verified-fg: #57cc7f; --badge-verified-bd: #2c5b3b;
-    --badge-self-bg: #2e2410; --badge-self-fg: #e0a94b; --badge-self-bd: #5c4a1f;
-    --badge-paper-bg: #16233a; --badge-paper-fg: #7fb0ea; --badge-paper-bd: #2c4a70;
-    --badge-paper-uncertain-bg: #241c38; --badge-paper-uncertain-fg: #b79ce6;
-    --badge-paper-uncertain-bd: #3f2f5c;
-    --badge-overlap-none-bg: #12281a; --badge-overlap-none-fg: #57cc7f;
-    --badge-overlap-none-bd: #2c5b3b;
-    --badge-overlap-unknown-bg: #2e2410; --badge-overlap-unknown-fg: #e0a94b;
-    --badge-overlap-unknown-bd: #5c4a1f;
-    --badge-overlap-confirmed-bg: #33191a; --badge-overlap-confirmed-fg: #f28b82;
-    --badge-overlap-confirmed-bd: #5f2b2b;
-    --chip-baseline-bg: #20262e; --chip-baseline-fg: #b6bdc8; --chip-baseline-bd: #333b46;
-    --chip-foundation-bg: #241a35; --chip-foundation-fg: #b892ec; --chip-foundation-bd: #4a3670;
-    --status-impl-bg: #12281a; --status-impl-fg: #57cc7f; --status-impl-bd: #2c5b3b;
-    --status-wip-bg: #2e2410; --status-wip-fg: #e0a94b; --status-wip-bd: #5c4a1f;
-    --status-planned-bg: #20262e; --status-planned-fg: #9aa3b0; --status-planned-bd: #333b46;
-    --bar-track: #20262e; --bar-fill: #5b8dff;
-    --grid: #22282f;
+    --bg: oklch(0.18 0.012 260);
+    --surface: oklch(0.22 0.014 260);
+    --surface-2: oklch(0.25 0.016 260);
+    --fg: oklch(0.93 0.006 260);
+    --muted: oklch(0.7 0.02 260);
+    --line: oklch(0.31 0.014 260);
+    --line-strong: oklch(0.38 0.016 260);
+    --accent: oklch(0.72 0.15 260);
+    --accent-2: oklch(0.74 0.11 200);
+    --accent-soft: oklch(0.3 0.05 260);
+    --head: oklch(0.25 0.016 260);
+    --focus: oklch(0.72 0.15 260);
+    --tooltip-bg: oklch(0.32 0.016 260);
+    --tooltip-fg: oklch(0.96 0.006 260);
+    --badge-verified-bg: oklch(0.3 0.06 150); --badge-verified-fg: oklch(0.8 0.14 150);
+    --badge-verified-bd: oklch(0.44 0.08 150);
+    --badge-self-bg: oklch(0.32 0.06 70); --badge-self-fg: oklch(0.82 0.13 75);
+    --badge-self-bd: oklch(0.45 0.07 70);
+    --badge-paper-bg: oklch(0.3 0.06 255); --badge-paper-fg: oklch(0.8 0.12 255);
+    --badge-paper-bd: oklch(0.44 0.09 255);
+    --badge-paper-uncertain-bg: oklch(0.31 0.06 300);
+    --badge-paper-uncertain-fg: oklch(0.82 0.11 300);
+    --badge-paper-uncertain-bd: oklch(0.45 0.08 300);
+    --badge-overlap-none-bg: oklch(0.3 0.06 150); --badge-overlap-none-fg: oklch(0.8 0.14 150);
+    --badge-overlap-none-bd: oklch(0.44 0.08 150);
+    --badge-overlap-unknown-bg: oklch(0.32 0.06 70);
+    --badge-overlap-unknown-fg: oklch(0.82 0.13 75);
+    --badge-overlap-unknown-bd: oklch(0.45 0.07 70);
+    --badge-overlap-confirmed-bg: oklch(0.32 0.08 25);
+    --badge-overlap-confirmed-fg: oklch(0.8 0.14 25);
+    --badge-overlap-confirmed-bd: oklch(0.46 0.1 25);
+    --chip-baseline-bg: oklch(0.28 0.012 260); --chip-baseline-fg: oklch(0.78 0.02 260);
+    --chip-baseline-bd: oklch(0.38 0.016 260);
+    --chip-foundation-bg: oklch(0.3 0.06 300); --chip-foundation-fg: oklch(0.82 0.12 300);
+    --chip-foundation-bd: oklch(0.46 0.09 300);
+    --status-impl-bg: oklch(0.3 0.06 150); --status-impl-fg: oklch(0.8 0.14 150);
+    --status-impl-bd: oklch(0.44 0.08 150);
+    --status-wip-bg: oklch(0.32 0.06 70); --status-wip-fg: oklch(0.82 0.13 75);
+    --status-wip-bd: oklch(0.45 0.07 70);
+    --status-planned-bg: oklch(0.28 0.012 260); --status-planned-fg: oklch(0.7 0.02 260);
+    --status-planned-bd: oklch(0.38 0.016 260);
+    --bar-track: oklch(0.3 0.014 260); --bar-fill: oklch(0.7 0.15 260);
+    --grid: oklch(0.29 0.014 260);
   }
 }
 * { box-sizing: border-box; }
@@ -2835,7 +3089,11 @@ td.num.primary .metric-val { font-weight: 700; }
   border: 1px solid var(--line); background: var(--surface); color: var(--fg);
   font-family: var(--font-body); font-size: 0.88rem;
 }
-.search-input:focus { outline: none; border-color: var(--accent); }
+/* Keep the same 2px focus ring the rest of the site uses (never `outline: none`); the accent
+   border stays as an extra cue. */
+.search-input:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--accent);
+}
 .filter-pills { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .filter-pill {
   font-family: var(--font-body); font-size: 0.82rem; padding: 0.35rem 0.8rem;
@@ -2843,6 +3101,7 @@ td.num.primary .metric-val { font-weight: 700; }
   color: var(--fg); cursor: pointer;
 }
 .filter-pill:hover { border-color: var(--line-strong); }
+.filter-pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .filter-pill-active {
   background: var(--fg); color: var(--bg); border-color: var(--fg);
 }
@@ -3067,7 +3326,325 @@ td.num.primary .metric-val { font-weight: 700; }
 .site-footer { border-top: 1px solid var(--line); background: var(--surface); }
 .site-footer p { max-width: 1080px; margin: 0 auto; padding: 1rem 1.5rem;
   color: var(--muted); font-size: 0.78rem; }
+
+/* Progressive enhancement: interactivity controls are hidden until the board script marks
+   <body class="js-on">, so no dead control shows when JavaScript is off. */
+.board-controls { display: none; }
+body.js-on .board-controls { display: flex; }
+body.js-on .home-sort { display: inline-flex; }
+.home-sort { display: none; }
+
+/* Per-task-page interactive controls bar (search + verified toggle + family segmented). */
+.board-controls {
+  flex-wrap: wrap; align-items: center; gap: 0.6rem 0.9rem; margin: 0 0 1.25rem;
+}
+.board-search {
+  flex: 1 1 220px; min-width: 160px; padding: 0.45rem 0.8rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+  font-family: var(--font-body); font-size: 0.85rem;
+}
+.board-search:focus {
+  outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--accent);
+}
+.board-toggle {
+  display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem;
+  color: var(--muted); cursor: pointer; user-select: none;
+}
+.board-toggle input { accent-color: var(--accent); }
+.board-segmented {
+  display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden;
+}
+.board-seg {
+  font-family: var(--font-body); font-size: 0.8rem; padding: 0.35rem 0.75rem; border: none;
+  background: var(--surface); color: var(--muted); cursor: pointer;
+}
+.board-seg + .board-seg { border-left: 1px solid var(--line); }
+.board-seg:hover { color: var(--fg); background: var(--surface-2); }
+.board-seg-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.board-seg:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.no-match td { color: var(--muted); font-style: italic; text-align: center; }
+
+/* Sortable table headers: the caret + pointer + hover affordance are GATED behind body.js-on,
+   exactly like .board-controls -- with JS off the click/keydown handlers never bind, so the
+   header must not advertise a sort it cannot perform (no dead affordance). The focus ring is
+   kept unconditionally so keyboard users still get a visible focus outline. */
+th[data-sortable] { position: relative; user-select: none; cursor: default; }
+th[data-sortable]:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+body.js-on th[data-sortable] { cursor: pointer; }
+body.js-on th[data-sortable]:hover { color: var(--fg); }
+.sort-caret {
+  display: none; width: 0.7em; margin-left: 0.3em; opacity: 0.35;
+  font-size: 0.85em; vertical-align: middle;
+}
+body.js-on .sort-caret { display: inline-block; }
+.sort-caret::after { content: "\\2195"; }
+th[aria-sort="ascending"] .sort-caret { opacity: 1; }
+th[aria-sort="ascending"] .sort-caret::after { content: "\\2191"; }
+th[aria-sort="descending"] .sort-caret { opacity: 1; }
+th[aria-sort="descending"] .sort-caret::after { content: "\\2193"; }
+th[aria-sort="ascending"], th[aria-sort="descending"] { color: var(--accent); }
+
+/* Chart axis titles + interactive series/point/legend affordances. */
+.plot .axis-title {
+  fill: var(--muted); font-size: 11px; font-family: var(--font-heading); font-weight: 600;
+}
+.plot .pt { cursor: pointer; transition: r .1s ease; }
+/* SVG `outline` is not painted by WebKit/Safari on graphic elements; pair it with a `stroke`
+   ring (rendered by every engine) so the focus indicator stays visible everywhere (WCAG 2.4.7). */
+.plot .pt:focus-visible { outline: 2px solid var(--focus); stroke: var(--focus); stroke-width: 2; }
+g.series.series-off { display: none; }
+g.series.series-hi polyline { stroke-width: 3.5; }
+g.series.series-hi .pt { stroke: var(--fg); stroke-width: 1; }
+.plot .barplot-bar { cursor: pointer; }
+/* Same WebKit `outline`-not-painted fallback as the points: add a stroke ring (WCAG 2.4.7). */
+.plot .barplot-bar:focus-visible {
+  outline: 2px solid var(--focus); stroke: var(--focus); stroke-width: 2;
+}
+.legend-item {
+  cursor: pointer; background: none; border: 1px solid transparent; border-radius: 8px;
+  padding: 0.15rem 0.4rem; font-family: var(--font-body);
+}
+.legend-item[aria-pressed="true"] { opacity: 0.4; }
+.legend-item:hover, .legend-item.legend-hover { background: var(--surface-2); }
+.legend-item:focus-visible { outline: 2px solid var(--focus); }
+
+/* Single shared floating tooltip (created once by the board script). */
+.chart-tooltip {
+  position: fixed; z-index: 40; pointer-events: none; max-width: 260px;
+  background: var(--tooltip-bg); color: var(--tooltip-fg);
+  border-radius: 8px; padding: 0.4rem 0.6rem; font-size: 0.78rem; line-height: 1.35;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25); opacity: 0; transition: opacity .08s ease;
+}
+.chart-tooltip.visible { opacity: 1; }
+.chart-tooltip .tt-model { font-weight: 700; }
+.chart-tooltip .tt-ci { color: var(--tooltip-fg); opacity: 0.75; }
+
+/* Home card sort control (segmented alongside the existing status pills). */
+.home-sort { align-items: center; gap: 0.4rem; margin-left: auto; }
+.home-sort-label { color: var(--muted); font-size: 0.8rem; }
+.home-sort select {
+  font-family: var(--font-body); font-size: 0.82rem; padding: 0.35rem 0.6rem;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--fg); cursor: pointer;
+}
+.home-sort select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* Respect a user's reduced-motion preference: neutralise the (small) hover/tooltip
+   transitions -- WCAG 2.3.3. Focus rings and layout are unaffected. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 """
+
+
+def render_styles() -> str:
+    """Return the site's full CSS (the ``_CSS`` theme + component rules) as one string.
+
+    A thin accessor so callers (``_page``) don't reach into the module constant directly and
+    the stylesheet has a single named entry point. The content is a constant, so the output is
+    deterministic (idempotent build).
+    """
+    return _CSS
+
+
+#: The per-task-page interactive board script -- vanilla JS, no dependencies, no build step.
+#: GENERIC + data-driven: it reads the semantic ``data-*`` hooks the generator emits and never
+#: names a task or metric. It (1) sorts a table's OWN tbody on a header click/Enter/Space
+#: (numeric via ``data-value``, alpha for the Model column; stable; caret + aria-sort updated),
+#: (2) filters ``tr[data-model]`` across every table from the controls bar (search / verified /
+#: family; masking rows preserves the one-regime-per-table invariant), (3) toggles chart series
+#: via the legend buttons, and (4) shows a single shared tooltip on point/bar hover+focus.
+#: Progressive enhancement: it adds ``body.js-on`` FIRST (revealing the controls, which are CSS-
+#: hidden otherwise), so with JS off the tables + charts stay fully readable and no dead control
+#: is shown. NOTE: this text must never contain the substring "line plot" (a scalar-only page
+#: asserts that substring is absent when it draws no curve).
+_BOARD_JS: str = """
+(function () {
+  document.body.classList.add('js-on');
+
+  // ---- Sortable tables (each table sorts only its OWN tbody = one (regime, track) group) ----
+  function cellValue(row, index, kind) {
+    var cell = row.children[index];
+    if (!cell) { return kind === 'num' ? -Infinity : ''; }
+    if (kind === 'num') {
+      var raw = cell.getAttribute('data-value');
+      if (raw === null) { return -Infinity; }
+      var num = parseFloat(raw);
+      return isNaN(num) ? -Infinity : num;
+    }
+    // Text key = the clean model name only (a .model-name span), never the whole cell -- the
+    // family chip / params / badges in the Model cell must not pollute the alphabetical sort.
+    var nameEl = cell.querySelector('.model-name');
+    return ((nameEl ? nameEl.textContent : cell.textContent) || '').trim().toLowerCase();
+  }
+  function sortTable(table, th) {
+    var headRow = th.parentNode;
+    var index = Array.prototype.indexOf.call(headRow.children, th);
+    var kind = th.getAttribute('data-sort') || 'text';
+    var current = th.getAttribute('aria-sort');
+    var dir = current === 'ascending' ? 'descending' : 'ascending';
+    var tbody = table.tBodies[0];
+    if (!tbody) { return; }
+    var rows = Array.prototype.filter.call(tbody.rows, function (r) {
+      return r.hasAttribute('data-model');
+    });
+    var decorated = rows.map(function (r, i) {
+      return { r: r, i: i, v: cellValue(r, index, kind) };
+    });
+    decorated.sort(function (a, b) {
+      if (a.v < b.v) { return dir === 'ascending' ? -1 : 1; }
+      if (a.v > b.v) { return dir === 'ascending' ? 1 : -1; }
+      return a.i - b.i;  // stable
+    });
+    decorated.forEach(function (d) { tbody.appendChild(d.r); });
+    var extra = Array.prototype.filter.call(tbody.rows, function (r) {
+      return !r.hasAttribute('data-model');
+    });
+    extra.forEach(function (r) { tbody.appendChild(r); });  // keep the no-match row last
+    headRow.querySelectorAll('th[data-sortable]').forEach(function (h) {
+      h.setAttribute('aria-sort', 'none');
+    });
+    th.setAttribute('aria-sort', dir);
+  }
+  document.querySelectorAll('table[data-leaderboard] th[data-sortable]').forEach(function (th) {
+    var table = th.closest('table');
+    th.addEventListener('click', function () { sortTable(table, th); });
+    th.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sortTable(table, th); }
+    });
+  });
+
+  // ---- Controls bar: filter rows across every table on the page ----
+  var search = document.getElementById('board-search');
+  var verifiedOnly = document.getElementById('board-verified-only');
+  var segButtons = document.querySelectorAll('.board-seg');
+  var family = 'all';
+  var tables = document.querySelectorAll('table[data-leaderboard]');
+  function applyRowFilters() {
+    var q = (search && search.value || '').trim().toLowerCase();
+    tables.forEach(function (table) {
+      var tbody = table.tBodies[0];
+      if (!tbody) { return; }
+      var shown = 0;
+      Array.prototype.forEach.call(tbody.rows, function (row) {
+        if (!row.hasAttribute('data-model')) { return; }
+        var name = (row.getAttribute('data-model') || '').toLowerCase();
+        var fam = row.getAttribute('data-family') || '';
+        var ver = row.getAttribute('data-verified') === 'true';
+        var ok = (!q || name.indexOf(q) !== -1)
+          && (family === 'all' || fam === family)
+          && (!(verifiedOnly && verifiedOnly.checked) || ver);
+        row.hidden = !ok;
+        if (ok) { shown++; }
+      });
+      var note = tbody.querySelector('.no-match-row');
+      if (note) { note.hidden = shown !== 0; }
+    });
+  }
+  if (search) { search.addEventListener('input', applyRowFilters); }
+  if (verifiedOnly) { verifiedOnly.addEventListener('change', applyRowFilters); }
+  segButtons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      segButtons.forEach(function (b) {
+        b.classList.remove('board-seg-active');
+        b.setAttribute('aria-pressed', 'false');
+      });
+      btn.classList.add('board-seg-active');
+      btn.setAttribute('aria-pressed', 'true');
+      family = btn.getAttribute('data-family') || 'all';
+      applyRowFilters();
+    });
+  });
+
+  // ---- Chart legend toggles (hide/show a series) + hover highlight ----
+  function seriesFor(btn) {
+    var name = btn.getAttribute('data-series');
+    var svg = btn.closest('.plot-figure').querySelector('svg.plot');
+    if (!svg) { return null; }
+    var groups = svg.querySelectorAll('g.series[data-series]');
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].getAttribute('data-series') === name) { return groups[i]; }
+    }
+    return null;
+  }
+  document.querySelectorAll('.legend-item[data-series]').forEach(function (btn) {
+    var group = seriesFor(btn);
+    btn.addEventListener('click', function () {
+      if (!group) { return; }
+      var off = group.classList.toggle('series-off');
+      btn.setAttribute('aria-pressed', off ? 'true' : 'false');
+    });
+    btn.addEventListener('mouseenter', function () {
+      if (group) { group.classList.add('series-hi'); }
+    });
+    btn.addEventListener('mouseleave', function () {
+      if (group) { group.classList.remove('series-hi'); }
+    });
+  });
+
+  // ---- Single shared tooltip for points + bars (hover AND focus) ----
+  var tip = document.createElement('div');
+  tip.className = 'chart-tooltip';
+  tip.setAttribute('role', 'tooltip');
+  document.body.appendChild(tip);
+  function showTip(el) {
+    var model = el.getAttribute('data-model');
+    if (!model) { return; }
+    var x = el.getAttribute('data-x');
+    var metric = el.getAttribute('data-metric');
+    var y = el.getAttribute('data-y');
+    var lo = el.getAttribute('data-ci-low');
+    var hi = el.getAttribute('data-ci-high');
+    // Build the tooltip from DOM nodes + textContent -- never an HTML-string sink: data-model /
+    // data-metric are contributor-controlled (result.json) and getAttribute returns the DECODED
+    // value, so re-parsing it as markup would turn '<img onerror=...>' into live DOM (stored XSS).
+    tip.textContent = '';
+    var name = document.createElement('span');
+    name.className = 'tt-model';
+    name.textContent = model;
+    tip.appendChild(name);
+    if (x !== null) {
+      tip.appendChild(document.createElement('br'));
+      tip.appendChild(document.createTextNode('x = ' + x));
+    }
+    tip.appendChild(document.createElement('br'));
+    var yline = (metric ? metric + ' = ' : '') + (y !== null ? y : '');
+    tip.appendChild(document.createTextNode(yline));
+    if (lo !== null && hi !== null) {
+      var ci = document.createElement('span');
+      ci.className = 'tt-ci';
+      ci.textContent = ' CI [' + lo + ', ' + hi + ']';
+      tip.appendChild(ci);
+    }
+    var box = el.getBoundingClientRect();
+    tip.style.left = (box.left + box.width / 2) + 'px';
+    tip.style.top = (box.top - 8) + 'px';
+    tip.style.transform = 'translate(-50%, -100%)';
+    tip.classList.add('visible');
+  }
+  function hideTip() { tip.classList.remove('visible'); }
+  document.querySelectorAll('.pt[data-model], .barplot-bar[data-model]').forEach(function (el) {
+    el.addEventListener('mouseenter', function () { showTip(el); });
+    el.addEventListener('mouseleave', hideTip);
+    el.addEventListener('focus', function () { showTip(el); });
+    el.addEventListener('blur', hideTip);
+  });
+})();
+"""
+
+
+def render_scripts() -> str:
+    """Return the per-task-page interactive board script (``_BOARD_JS``) as a string.
+
+    A named accessor mirroring :func:`render_styles`; the script is injected verbatim into the
+    task page's ``extra_body`` (inside a ``<script>`` tag). Constant content -> deterministic.
+    """
+    return _BOARD_JS
+
 
 #: Homepage-only inline search/filter script -- vanilla JS, no dependencies, no build step.
 #: Degrades gracefully with JS disabled: cards carry no default ``display:none``, so every
@@ -3075,9 +3652,12 @@ td.num.primary .metric-val { font-weight: 700; }
 #: ``extra_body`` kwarg (``render_index`` only); every other page has zero ``<script>``.
 _JS: str = """
 (function () {
+  document.body.classList.add('js-on');
   var search = document.getElementById('task-search');
   var pills = document.querySelectorAll('.filter-pill');
+  var sortSelect = document.getElementById('task-sort');
   var cards = document.querySelectorAll('.task-card');
+  var grids = document.querySelectorAll('.card-grid');
   var activeStatus = 'all';
 
   function applyFilters() {
@@ -3089,7 +3669,31 @@ _JS: str = """
     });
   }
 
+  function priorityRank(card) {
+    var p = (card.getAttribute('data-priority') || '').toUpperCase();
+    var m = p.match(/P(\\d+)/);
+    return m ? parseInt(m[1], 10) : 99;  // P1 first; unprioritised last
+  }
+  function num(card, attr) { return parseFloat(card.getAttribute(attr) || '0') || 0; }
+  function sortCards() {
+    var mode = sortSelect ? sortSelect.value : 'default';
+    // Sort WITHIN each grid only -- a card never leaves its scope section.
+    grids.forEach(function (grid) {
+      var items = Array.prototype.slice.call(grid.querySelectorAll('.task-card'));
+      var decorated = items.map(function (c, i) { return { c: c, i: i }; });
+      decorated.sort(function (a, b) {
+        var d = 0;
+        if (mode === 'priority') { d = priorityRank(a.c) - priorityRank(b.c); }
+        else if (mode === 'results') { d = num(b.c, 'data-results') - num(a.c, 'data-results'); }
+        else if (mode === 'verified') { d = num(b.c, 'data-verified') - num(a.c, 'data-verified'); }
+        return d !== 0 ? d : a.i - b.i;  // stable, and 'default' keeps DOM order
+      });
+      decorated.forEach(function (d) { grid.appendChild(d.c); });
+    });
+  }
+
   if (search) { search.addEventListener('input', applyFilters); }
+  if (sortSelect) { sortSelect.addEventListener('change', sortCards); }
   pills.forEach(function (pill) {
     pill.addEventListener('click', function () {
       pills.forEach(function (p) { p.classList.remove('filter-pill-active'); });

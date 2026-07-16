@@ -412,6 +412,148 @@ def _bootstrap_uncertainty(
 
 
 # --------------------------------------------------------------------------------------------------
+# Per-bin curve confidence bands (percentile bootstrap, stratified WITHIN each bin)
+# --------------------------------------------------------------------------------------------------
+def _bootstrap_curve_bands(
+    metric: Metric,
+    curve_name: str,
+    points: list[dict[str, float]],
+    pred: Tensor,
+    target: Tensor,
+    meta: Batch | None,
+    bins: list[float],
+    *,
+    n_resamples: int,
+    confidence: float,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Attach a per-bin percentile-bootstrap ``y_low``/``y_high`` band to ``points``.
+
+    For every curve bin the samples belonging to that bin are resampled WITH replacement
+    ``n_resamples`` times (stratified WITHIN the bin: a fixed draw count equal to the bin's
+    observed size, so the interval is the sampling spread of *that bin's* value and does not
+    borrow strength from the other bins). Each resample re-runs
+    ``metric.reset()/update()/compute()`` on the bin's resampled slice and reads the bin's
+    ``y`` back from the re-emitted curve; the two-sided percentile interval at ``confidence``
+    becomes ``y_low``/``y_high`` on the matching point. Bounds are clamped to ``[0, 1]``
+    (these curves are accuracies/rates). The point's own ``x``/``y``/``label`` are preserved
+    verbatim.
+
+    Randomness is stdlib ``random.Random`` seeded from ``seed`` (per bin + per resample) so
+    the band is reproducible and stable under bin re-ordering; NO numpy/torch RNG is used.
+    Bins with fewer than ``BOOTSTRAP_MIN_SAMPLES`` members, or points the metric does not
+    re-emit, are passed through with no band.
+    """
+    # Group accumulated per-sample indices by their bin key. ``bins[i]`` is the bin of the
+    # i-th accumulated sample, aligned with ``pred``/``target``/``meta``.
+    members: dict[float, list[int]] = {}
+    for index, bin_value in enumerate(bins):
+        members.setdefault(float(bin_value), []).append(index)
+
+    alpha = 1.0 - confidence
+    lo_q, hi_q = alpha / 2.0, 1.0 - alpha / 2.0
+
+    banded: list[dict[str, Any]] = []
+    for point in points:
+        out_point: dict[str, Any] = dict(point)  # copy verbatim: x / y / label survive
+        bin_value = float(point["x"])
+        bin_indices = members.get(bin_value, [])
+        if len(bin_indices) < BOOTSTRAP_MIN_SAMPLES:
+            banded.append(out_point)
+            continue
+
+        # Deterministic per-bin seed so re-ordering the curve never shifts a bin's band.
+        bin_seed = seed + hash((curve_name, bin_value)) % 1_000_000
+        n = len(bin_indices)
+        draws: list[float] = []
+        for i in range(n_resamples):
+            rng = random.Random(bin_seed + i)
+            idx = [bin_indices[rng.randrange(n)] for _ in range(n)]
+            pred_bs = _index_select(pred, idx)
+            target_bs = _index_select(target, idx)
+            meta_bs = _index_select(meta, idx) if meta is not None else None
+            metric.reset()
+            metric.update(pred_bs, target_bs, meta_bs)
+            resampled = metric.compute().get(curve_name)
+            if not isinstance(resampled, list):
+                continue
+            # The resample holds ONLY this bin's samples, so the re-emitted curve carries a
+            # single point at ``bin_value``; read its ``y`` back.
+            for rp in resampled:
+                if isinstance(rp, dict) and float(rp.get("x", float("nan"))) == bin_value:
+                    draws.append(float(rp["y"]))
+                    break
+
+        if len(draws) < BOOTSTRAP_MIN_SAMPLES:
+            banded.append(out_point)
+            continue
+
+        draws.sort()
+        out_point["y_low"] = max(0.0, min(1.0, _percentile(draws, lo_q)))
+        out_point["y_high"] = max(0.0, min(1.0, _percentile(draws, hi_q)))
+        banded.append(out_point)
+    return banded
+
+
+def _curve_uncertainty_bands(
+    metrics: Iterable[Metric],
+    curves: dict[str, list[dict[str, float]]],
+    pred: Tensor,
+    target: Tensor,
+    meta: Batch | None,
+    *,
+    n_resamples: int,
+    confidence: float,
+    seed: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Add per-bin bootstrap bands to every curve whose metric exposes its bins.
+
+    A curve metric MAY expose ``sample_bins(pred, target, meta) -> list[float]`` returning
+    the per-sample bin key aligned with the accumulated samples (``AccuracyVsSnr`` returns
+    the per-sample ``snr_db``). When present, :func:`_bootstrap_curve_bands` conditions a
+    percentile bootstrap on each bin's own samples and attaches ``y_low``/``y_high``. Curves
+    from metrics WITHOUT the hook are left unchanged (no band), so ROC-style threshold curves
+    -- where a point is a threshold, not a stratum of samples -- are never mis-banded.
+
+    Returns ``{curve_name: banded_points}`` only for curves it actually banded; the caller
+    merges these over the existing curves.
+    """
+    if _accumulated_length(pred, target) < BOOTSTRAP_MIN_SAMPLES or n_resamples < 1:
+        return {}
+
+    n = _accumulated_length(pred, target)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for metric in metrics:
+        bin_hook = getattr(metric, "sample_bins", None)
+        if not callable(bin_hook):
+            continue
+        try:
+            bins = bin_hook(pred, target, meta)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not isinstance(bins, list) or len(bins) != n:
+            continue
+        bins_f = [float(b) for b in bins]
+        for curve_name in metric.compute():
+            points = curves.get(curve_name)
+            if not isinstance(points, list) or not points:
+                continue
+            out[curve_name] = _bootstrap_curve_bands(
+                metric,
+                curve_name,
+                points,
+                pred,
+                target,
+                meta,
+                bins_f,
+                n_resamples=n_resamples,
+                confidence=confidence,
+                seed=seed,
+            )
+    return out
+
+
+# --------------------------------------------------------------------------------------------------
 # The single canonical result.json writer
 # --------------------------------------------------------------------------------------------------
 def evaluate(
@@ -504,6 +646,23 @@ def evaluate(
         )
         # Only keep CIs for metrics we actually reported as scalar point estimates.
         uncertainty = {k: v for k, v in uncertainty.items() if k in values}
+
+    # --- Per-bin curve bands (percentile bootstrap, stratified WITHIN each SNR bin) --------------
+    # Same accumulated predictions, same seeded stdlib RNG as the scalar CI: for a mono-run
+    # (single seed) row this is the ONLY source of a per-bin y_low/y_high band on the curves
+    # (the multi-seed aggregator writes its own across-seed band and never reaches here).
+    if acc is not None and curves:
+        banded = _curve_uncertainty_bands(
+            metrics,
+            curves,
+            acc.pred,
+            acc.target,
+            acc.meta,
+            n_resamples=bootstrap_n_resamples,
+            confidence=bootstrap_confidence,
+            seed=bootstrap_seed if bootstrap_seed is not None else seed,
+        )
+        curves.update(banded)
 
     # --- Assemble the result document (regime declared VERBATIM, never inferred) ----------------
     regime_block: dict[str, Any] = {"name": regime.name.value}

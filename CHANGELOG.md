@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — vitrine du tier `verified` sur le site (§3)
+
+L'index met en avant la couverture de vérification d'un coup d'œil :
+- une carte de stat **« Verified scores »** (nombre total de lignes verified, mise en valeur aux
+  couleurs verified) ;
+- sur chaque carte de tâche, un chip **« N/M verified »** (verte si >0, sobre si 0).
+Le badge par-ligne existait déjà ; ceci rend la couverture globale/par-tâche visible sans ouvrir
+chaque page.
+
 ### Verified — LOT 3 SEI open_set : 3 lignes vérifiées (SEI complet)
 
 Re-run seed-45 (2σ) : `complex_cnn` auroc 0.641 vs 0.646 ✓, `resnet1d_sei` 0.809 vs 0.825 ✓,

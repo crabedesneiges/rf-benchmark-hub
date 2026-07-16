@@ -1878,6 +1878,7 @@ def _render_result_card(
     title = _task_title(task_name, declared)
     n_rows = len(rows)
     n_models = len({str(r["model"]["name"]) for r in rows})
+    n_verified = sum(1 for r in rows if _status(r) == "verified")
     best_model, best_score, primary = _best_summary(rows)
     entry = declared.get(task_name)
     badge = _render_status_badge(entry) if entry is not None else ""
@@ -1892,7 +1893,10 @@ def _render_result_card(
         f'href="{_esc(task_name)}.html">'
         f'<span class="card-title">{_esc(title)}</span>{badge}'
         f"{blurb}"
-        f'<span class="card-sub">{_esc(f"{n_rows} results · {n_models} models")}</span>'
+        f'<span class="card-sub">{_esc(f"{n_rows} results · {n_models} models")}'
+        f'<span class="card-verified-cov{"" if n_verified else " card-verified-cov-zero"}" '
+        f'title="maintainer-verified re-runs on this task">{n_verified}/{n_rows} verified</span>'
+        "</span>"
         '<div class="card-best-box">'
         f'<span class="card-best">Best: <strong>{_esc(best_model)}</strong> '
         f"&middot; {_esc(primary)} = <strong>{_esc(best_score)}</strong></span>"
@@ -1950,26 +1954,29 @@ def _compute_stats(
             for row in rows
         }
     )
+    n_verified = sum(1 for rows in grouped.values() for row in rows if _status(row) == "verified")
     return {
         "tasks_defined": len(declared),
         "implemented": n_implemented,
         "live": n_live,
         "eval_tracks": n_eval_groups,
+        "verified": n_verified,
     }
 
 
 def _render_stats_row(stats: dict[str, int]) -> str:
     """Render the homepage's 4 big-number stat cards."""
     items = (
-        (stats["tasks_defined"], "Tasks defined"),
-        (stats["implemented"], "Implemented"),
-        (stats["live"], "Live leaderboard" if stats["live"] == 1 else "Live leaderboards"),
-        (stats["eval_tracks"], "Evaluation tracks"),
+        (stats["tasks_defined"], "Tasks defined", ""),
+        (stats["implemented"], "Implemented", ""),
+        (stats["live"], "Live leaderboard" if stats["live"] == 1 else "Live leaderboards", ""),
+        (stats["eval_tracks"], "Evaluation tracks", ""),
+        (stats["verified"], "Verified scores", " stat-card-verified"),
     )
     cards = "".join(
-        f'<div class="stat-card"><span class="stat-value">{n}</span>'
+        f'<div class="stat-card{extra}"><span class="stat-value">{n}</span>'
         f'<span class="stat-label">{_esc(label)}</span></div>'
-        for n, label in items
+        for n, label, extra in items
     )
     return f'<div class="stats-row">{cards}</div>'
 
@@ -2807,6 +2814,18 @@ td.num.primary .metric-val { font-weight: 700; }
   font-family: var(--font-heading); font-size: 1.9rem; font-weight: 700; color: var(--fg);
 }
 .stat-label { color: var(--muted); font-size: 0.8rem; }
+.stat-card-verified {
+  border-color: var(--badge-verified-bd); background: var(--badge-verified-bg);
+}
+.stat-card-verified .stat-value { color: var(--badge-verified-fg); }
+.card-verified-cov {
+  display: inline-block; margin-left: 0.5rem; padding: 0.05rem 0.4rem; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 600; background: var(--badge-verified-bg);
+  color: var(--badge-verified-fg); border: 1px solid var(--badge-verified-bd);
+}
+.card-verified-cov-zero {
+  background: transparent; color: var(--muted); border-color: var(--line); font-weight: 500;
+}
 
 .filter-bar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 0 0 1.5rem;

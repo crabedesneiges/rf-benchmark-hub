@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — bandes d'IC par-bin peuplées sur les baselines AMC mono-run (§1)
+
+Re-run defq CPU (déterministe) de `chance`/`hoc_lr`/`majority_class` avec le nouveau bootstrap
+par-bin : leurs courbes `accuracy_vs_snr` portent désormais une enveloppe `y_low/y_high` par bin de
+SNR (rendue par le site). Re-verified (repro |Δ|=0). Les baselines mono-run rejoignent le rendu
+des multi-seed — plus aucune courbe sans incertitude sur le board.
+
 ### Added — baseline CNN régresseur SNR `snr_cnn` (nouvelle meilleure baseline snr_estimation)
 
 CNN 1D régression (raw-IQ → SNR dB, MSE) entraînée multi-seed (42/43/44) sur RadioML 2016.10a :

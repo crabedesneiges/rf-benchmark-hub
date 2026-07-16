@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — data path réel T-PRIME (`protocol_tech_id`) : nesting par salle + fenêtrage anti-fuite
+
+Le loader `tprime_wifi4` ne pouvait pas ingérer les vraies captures DS 3.0 : il cherchait
+`802.11x/` directement sous la racine alors que le layout réel est `RM_<salle>/802.11x/*.bin`
+(→ `prepare` levait `FileNotFoundError`), et chaque `.bin` est un **long enregistrement**
+(~198k samples complex128), pas une fenêtre — l'ancien code n'en gardait que le centre (1536
+samples ≈ 0,8 %).
+
+- `rfbench/data/prepare/protocol.py` : `_iter_class_files` descend désormais dans les dossiers
+  par salle (`RM_*/802.11x/`) **et** un layout aplati ; nouvel `_iter_recording_files` partagé
+  (ordre canonique unique label↔array) ; `_window_offsets` (offsets de fenêtres déterministes,
+  répartis uniformément) ; constantes `TPRIME_WINDOW_LEN=1536`, `WINDOWS_PER_RECORDING=32`.
+- `rfbench/tasks/protocol_tech_id/dataset.py` : `_read_windows` remplace `_load_protocol_arrays`
+  — chaque enregistrement est **tuilé** en fenêtres `(2,1536)` float32 (complex128 natif),
+  zero-pad si trop court.
+- **Split au niveau enregistrement** (1 label/capture) → aucune fenêtre d'un même enregistrement
+  ne fuit entre train/test (anti-fuite par construction).
+- Tests : nesting par salle, offsets, split anti-fuite (pur-stdlib, CI) + smoke `_read_windows`
+  numpy-gardé. Prépare la 1re colonne réelle `protocol_tech_id` (baseline `tprime`, à entraîner).
+
 ### Changed — refonte du rendu du leaderboard (tables interactives, charts survolables, thème oklch)
 
 Refonte de `leaderboard/site/generate.py` (stdlib-only, aucune dépendance ajoutée), en

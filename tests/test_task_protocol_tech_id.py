@@ -260,46 +260,127 @@ def test_end_to_end_writes_valid_json(tmp_path: Path) -> None:
     Draft202012Validator(_load_schema()).validate(on_disk)
 
 
-# --- on-disk loader: index alignment (regression guard) --------------------------------
+# --- on-disk loader: recording-level split, windowing + index alignment (regression guards) ---
+# The real DS 3.0 captures are LONG recordings nested one level under per-room dirs
+# (<root>/RM_*/802.11x/*.bin). The split partitions RECORDINGS (one label per capture); the array
+# loader tiles each recording into fixed-length windows AFTER the split, so windows never leak
+# across train/test. These guard the enumeration order, the windowing geometry, the leak-free
+# split (all pure-stdlib, run in CI) and -- numpy-guarded -- the real tiling of a .bin capture.
 
 
-def test_protocol_arrays_align_with_prepare_labels(tmp_path: Path) -> None:
-    """The on-disk IQ flatten order MUST equal prepare's label order (else indices corrupt).
+def _touch(path: Path) -> None:
+    """Create an empty capture file (and its parents) for the pure-stdlib enumeration tests."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
 
-    numpy-guarded: skips in the dep-free venv, runs on the cluster [tasks]/[data] venv. Uses a
-    synthetic per-class ``.npy`` tree matching the loader's class-subdir + sorted-file walk.
+
+def test_iter_recording_files_walks_per_room_nesting(tmp_path: Path) -> None:
+    """The recording enumeration descends into RM_*/802.11x/ (and a flattened class dir alike)."""
+    from rfbench.data.prepare.protocol import _iter_recording_files
+
+    root = tmp_path / "tprime_wifi4"
+    _touch(root / "RM_a" / "802.11b" / "c2.bin")
+    _touch(root / "RM_a" / "802.11b" / "c1.bin")
+    _touch(root / "RM_b" / "802.11b" / "c3.bin")
+    _touch(root / "RM_a" / "802.11g" / "g1.bin")
+    _touch(root / "802.11n" / "n1.bin")  # flattened-layout fallback still found
+    _touch(root / "RM_b" / "802.11ax" / "ax1.bin")
+
+    recordings = _iter_recording_files(root)
+    classes = [cls for _path, cls in recordings]
+    # Class-major order (b, g, n, ax); every capture found across rooms AND the flattened dir.
+    assert classes == ["802.11b", "802.11b", "802.11b", "802.11g", "802.11n", "802.11ax"]
+    # Within a class the flatten is deterministic sorted-path order.
+    b_paths = [path for path, cls in recordings if cls == "802.11b"]
+    assert b_paths == sorted(b_paths)
+    assert len(recordings) == 6
+
+
+def test_load_labels_is_one_per_recording_and_aligned(tmp_path: Path) -> None:
+    """``load`` labels are one-per-recording, in the SAME order the array loader enumerates."""
+    from rfbench.data.prepare.protocol import _iter_recording_files, _load_tprime_wifi4_labels
+
+    root = tmp_path / "tprime_wifi4"
+    _touch(root / "RM_a" / "802.11b" / "b1.bin")
+    _touch(root / "RM_a" / "802.11g" / "g1.bin")
+    _touch(root / "RM_b" / "802.11g" / "g2.bin")
+
+    labels = _load_tprime_wifi4_labels(tmp_path)
+    assert labels == [cls for _path, cls in _iter_recording_files(root)]
+    assert labels == ["802.11b", "802.11g", "802.11g"]  # one label per capture, class order
+
+
+def test_window_offsets_are_deterministic_and_in_bounds() -> None:
+    """The tiling offsets are deterministic, evenly spread, capped, and in-bounds."""
+    from rfbench.data.prepare.protocol import _window_offsets
+
+    offs = _window_offsets(198080, 1536, 32)  # a real-sized recording
+    assert len(offs) == 32
+    assert offs == sorted(offs)
+    assert offs[0] == 0 and offs[-1] == 198080 - 1536
+    assert all(0 <= o <= 198080 - 1536 for o in offs)
+    assert _window_offsets(198080, 1536, 32) == offs  # deterministic across calls
+    # Capped at the non-overlapping capacity when fewer than max_windows fit.
+    assert len(_window_offsets(5 * 1536, 1536, 32)) == 5
+    # A capture shorter than (or equal to) one window collapses to a single (padded) window.
+    assert _window_offsets(1000, 1536, 32) == [0]
+    assert _window_offsets(1536, 1536, 32) == [0]
+
+
+def test_prepare_split_is_recording_level_and_leak_free(tmp_path: Path) -> None:
+    """The split partitions RECORDINGS into disjoint train/val/test -> no window can leak."""
+    from rfbench.data.prepare.protocol import (
+        CANONICAL_SPLIT_IDS,
+        PROTOCOL_CLASSES,
+        prepare_protocol,
+    )
+
+    labels = [cls for cls in PROTOCOL_CLASSES for _ in range(25)]  # 100 recordings, 25 per class
+    split, _manifest = prepare_protocol("tprime_wifi4", out_dir=tmp_path, labels=labels, seed=42)
+    idx_path = (
+        tmp_path / "splits" / "tprime_wifi4" / f"{CANONICAL_SPLIT_IDS['tprime_wifi4']}.idx.json"
+    )
+    assert idx_path.is_file()  # versioned split index written under out_dir
+
+    train = set(split.indices["train"])
+    val = set(split.indices["val"])
+    test = set(split.indices["test"])
+    # Recording indices, disjoint across splits: since items ARE recordings, no window straddles.
+    assert train.isdisjoint(val) and train.isdisjoint(test) and val.isdisjoint(test)
+    assert train | val | test == set(range(len(labels)))
+    assert len(train) + len(val) + len(test) == 100
+    assert len(train) >= 70 and len(val) >= 1 and len(test) >= 1  # ~80/10/10, every split covered
+
+
+def test_read_windows_tiles_a_real_capture(tmp_path: Path) -> None:
+    """A ``.bin`` capture is read as complex128 and tiled into (2, win) float32 windows.
+
+    numpy-guarded: skips in the dep-free CI venv, runs on the cluster [data] venv (and on the
+    ARM validation). Exercises the real byte-reading path the synthetic ``samples=`` tests skip.
     """
     np = pytest.importorskip("numpy")
 
-    from rfbench.data.prepare.protocol import (
-        PROTOCOL_CLASSES,
-        _load_tprime_wifi4_labels,
-    )
-    from rfbench.tasks.protocol_tech_id.dataset import _load_protocol_arrays
+    from rfbench.data.prepare.protocol import _window_offsets
+    from rfbench.tasks.protocol_tech_id.dataset import _read_windows
 
-    ds_dir = tmp_path / "tprime_wifi4"
-    # Two files for the first class, one each for the next two, to exercise the flatten order.
-    # Uses the primary on-disk folder spelling for each class (802_11<x>).
-    layout = {"802_11b": 2, "802_11g": 1, "802_11n": 1}
-    for class_dir_name, n in layout.items():
-        class_dir = ds_dir / class_dir_name
-        class_dir.mkdir(parents=True)
-        for i in range(n):
-            np.save(class_dir / f"sample_{i}.npy", np.zeros((2, 8), dtype=np.float32))
+    n, win, k = 100, 8, 3
+    data = (np.arange(n) + 1j * np.arange(n, 2 * n)).astype(np.complex128)
+    cap = tmp_path / "cap.bin"
+    data.tofile(cap)
 
-    # Point the cache at tmp_path so the loaders find the synthetic tree.
-    import os
+    windows = _read_windows(cap, win, k)
+    offsets = _window_offsets(n, win, k)
+    assert len(windows) == len(offsets) == 3
+    for window, offset in zip(windows, offsets, strict=True):
+        assert window.shape == (2, win)
+        assert window.dtype == np.float32
+        assert np.allclose(window[0], data.real[offset : offset + win])  # I on row 0
+        assert np.allclose(window[1], data.imag[offset : offset + win])  # Q on row 1
 
-    os.environ["RFBENCH_CACHE"] = str(tmp_path)
-    try:
-        labels = _load_tprime_wifi4_labels(tmp_path)
-        iq, class_names = _load_protocol_arrays("tprime_wifi4")
-    finally:
-        os.environ.pop("RFBENCH_CACHE", None)
-
-    assert len(iq) == len(labels) == 4
-    assert class_names == labels  # identical order == index alignment
-    # Class order follows PROTOCOL_CLASSES (802.11b, 802.11g, 802.11n, 802.11ax).
-    assert labels[0] == "802.11b"
-    assert set(labels) <= set(PROTOCOL_CLASSES)
-    assert iq[0].shape == (2, 8)
+    # A capture shorter than one window yields a single zero-padded window.
+    short = tmp_path / "short.bin"
+    (np.arange(3) + 1j * np.arange(3)).astype(np.complex128).tofile(short)
+    short_windows = _read_windows(short, win, k)
+    assert len(short_windows) == 1
+    assert short_windows[0].shape == (2, win)
+    assert np.allclose(short_windows[0][:, 3:], 0.0)  # zero-padded tail beyond the 3 real samples

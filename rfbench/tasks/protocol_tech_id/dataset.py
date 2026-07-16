@@ -140,19 +140,40 @@ class ProtocolDataset(Dataset):
         return self._load_from_disk(split)
 
     def _load_from_disk(self, split: SplitName) -> _InMemoryProtocolSplit:
-        """Materialise ``(iq, label)`` samples from the prepared split (cluster-only).
+        """Materialise ``(iq, label)`` WINDOW samples from the prepared split (cluster-only).
 
-        Reads the versioned ``.idx.json`` for ``split`` then slices the cached IQ windows with
-        a LAZY numpy import guarded by a clear install hint. The flat sample order MUST match
-        ``rfbench.data.prepare.protocol``'s label flattening so the split indices align.
-        Never exercised in the dep-free unit venv (needs the real dataset + heavy deps).
+        Reads the versioned ``.idx.json`` RECORDING indices for ``split`` then tiles each
+        selected recording into fixed-length windows with a LAZY numpy import (guarded by a clear
+        install hint). The recording enumeration MUST equal
+        ``rfbench.data.prepare.protocol._iter_recording_files`` -- the same order the label loader
+        used to build the split -- so recording index ``i`` denotes the same capture on both
+        sides. Because the split partitions RECORDINGS (never windows), every window of a
+        recording lands in one split, so no window leaks across train/test. Never exercised in the
+        dep-free unit venv (needs the real dataset + heavy deps).
         """
+        from rfbench.data.prepare._common import resolve_cache_dir
+        from rfbench.data.prepare.protocol import (
+            TPRIME_WINDOW_LEN,
+            WINDOWS_PER_RECORDING,
+            _iter_recording_files,
+            _resolve_dataset_root,
+        )
+
         indices = self._read_split_indices(split)
-        iq_all, class_names = _load_protocol_arrays(self.name)
+        ds_dir = _resolve_dataset_root(resolve_cache_dir(None))
+        if ds_dir is None:
+            raise FileNotFoundError(
+                "tprime_wifi4 not found in the cache; run the download step first "
+                "(rfbench.data.download.protocol_tprime.download_tprime_wifi4)."
+            )
+        recordings = _iter_recording_files(ds_dir)
         class_to_idx = {c: i for i, c in enumerate(PROTOCOL_CLASSES)}
-        samples: list[Batch] = [
-            {"iq": iq_all[i], "label": class_to_idx[class_names[i]]} for i in indices
-        ]
+        samples: list[Batch] = []
+        for i in indices:
+            path, class_name = recordings[i]
+            label = class_to_idx[class_name]
+            for window in _read_windows(path, TPRIME_WINDOW_LEN, WINDOWS_PER_RECORDING):
+                samples.append({"iq": window, "label": label})
         return _InMemoryProtocolSplit(samples)
 
     def _read_split_indices(self, split: SplitName) -> list[int]:
@@ -182,70 +203,47 @@ def _find_split_index(name: str, split_id: str) -> Path | None:
     return None
 
 
-def _load_protocol_arrays(name: str) -> tuple[list[Any], list[str]]:
-    """Load flat ``(iq_rows, class_names)`` from the cached T-PRIME captures (lazy numpy).
+def _read_windows(path: Path, window_len: int, max_windows: int) -> list[Any]:
+    """Tile one raw-IQ capture into up to ``max_windows`` ``(2, window_len)`` float32 windows.
 
-    The iteration order mirrors ``rfbench.data.prepare.protocol`` exactly so the versioned
-    split indices line up: the class subtrees are walked in :data:`PROTOCOL_CLASSES` order,
-    and within each class the ``.bin`` captures are read in sorted-path order (the same order
-    the label loader enumerates). Cluster-only.
-
-    Each raw-IQ ``.bin`` capture is read as **native complex128** (CONFIRMED 2026-07 against
-    the official loader, ``t-prime/preprocessing/TPrime_dataset.py``:
-    ``np.fromfile(path, dtype=np.complex128)`` -- NOT interleaved float32 pairs, the
-    previously-assumed layout) and split into a ``(2, L)`` float32 window, I on row 0 / Q on
-    row 1, matching the T-PRIME channel-first layout the ``tprime`` baseline consumes.
-
-    TODO (cluster): the official loader tiles a long recording into fixed-``slice_len``
-    windows with stride ``slice_len - int(slice_len * overlap_ratio)``
-    (``TPrime_dataset.generate_windows``); confirm whether DS 3.0's per-capture ``.bin`` files
-    are already single fixed-length windows or long recordings needing the same tiling here,
-    and if the latter, tile with the SAME window length + stride the label loader uses so the
-    committed split indices remain aligned.
+    Reads the capture with a LAZY numpy import (guarded by a clear install hint). ``.bin`` /
+    ``.iq`` / ``.dat`` / ``.sigmf-data`` are read as **native complex128** (CONFIRMED 2026-07
+    against the official loader ``t-prime/preprocessing/TPrime_dataset.py``:
+    ``np.fromfile(path, dtype=np.complex128)`` -- NOT interleaved float32 pairs) and split into I
+    (row 0) / Q (row 1); ``.npy`` is read as whatever ``(2, L)`` float32 layout was saved. DS 3.0
+    captures are LONG recordings (~198k samples), so each is tiled into windows at the offsets
+    from :func:`rfbench.data.prepare.protocol._window_offsets` (deterministic, spread evenly
+    across the recording); a capture shorter than one window is zero-padded. All windows of a
+    capture carry that recording's single class label -- and, since the split is over recordings,
+    they never straddle train/test. Cluster-only (needs the real data + numpy).
     """
-    if name != "tprime_wifi4":
-        raise NotImplementedError(f"on-disk array loading for {name!r} is not wired.")
-
     try:
         import numpy as np
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "loading the real T-PRIME arrays needs numpy; install it with "
-            "`pip install rfbench[tasks]`."
+            "`pip install rfbench[data]`."
         ) from exc
 
-    from rfbench.data.prepare._common import resolve_cache_dir
-    from rfbench.data.prepare.protocol import (
-        _class_dir_names,
-        _iter_class_files,
-        _resolve_dataset_root,
-    )
+    from rfbench.data.prepare.protocol import _window_offsets
 
-    ds_dir = _resolve_dataset_root(resolve_cache_dir(None))
-    if ds_dir is None:
-        raise FileNotFoundError(
-            "tprime_wifi4 not found in the cache; run the download step first "
-            "(rfbench.data.download.protocol_tprime.download_tprime_wifi4)."
-        )
-    dir_names = _class_dir_names()
-    iq: list[Any] = []
-    class_names: list[str] = []
-    for class_name in PROTOCOL_CLASSES:
-        for path in _iter_class_files(ds_dir, dir_names[class_name]):
-            # Read one raw-IQ file into a (2, L) float32 array (I on row 0, Q on row 1).
-            # .npy: whatever layout was saved. .bin/.iq/.dat/.sigmf-data: native complex128,
-            # matching the official T-PRIME loader (np.fromfile(path, dtype=np.complex128)) --
-            # confirmed against t-prime/preprocessing/TPrime_dataset.py, 2026-07.
-            suffix = path.suffix.lower()
-            if suffix == ".npy":
-                arr = np.asarray(np.load(path), dtype=np.float32)
-                window = arr if arr.shape[0] == 2 else arr.reshape(2, -1)
-            else:  # native complex128 -> (2, L) float32
-                complex_iq = np.fromfile(path, dtype=np.complex128)
-                window = np.stack([complex_iq.real, complex_iq.imag]).astype(np.float32)
-            iq.append(window)
-            class_names.append(class_name)
-    return iq, class_names
+    suffix = path.suffix.lower()
+    if suffix == ".npy":
+        arr = np.asarray(np.load(path), dtype=np.float32)
+        iq2 = arr if arr.ndim == 2 and arr.shape[0] == 2 else arr.reshape(2, -1)
+    else:  # native complex128 -> (2, L) float32 (I on row 0, Q on row 1)
+        complex_iq = np.fromfile(path, dtype=np.complex128)
+        iq2 = np.stack([complex_iq.real, complex_iq.imag]).astype(np.float32)
+    n_samples = int(iq2.shape[1])
+
+    windows: list[Any] = []
+    for offset in _window_offsets(n_samples, window_len, max_windows):
+        chunk = iq2[:, offset : offset + window_len]
+        if chunk.shape[1] < window_len:
+            pad = np.zeros((2, window_len - chunk.shape[1]), dtype=np.float32)
+            chunk = np.concatenate([chunk, pad], axis=1)
+        windows.append(np.ascontiguousarray(chunk, dtype=np.float32))
+    return windows
 
 
 __all__ = ["ProtocolDataset", "_InMemoryProtocolSplit"]

@@ -67,6 +67,20 @@ PROTOCOL_CLASSES: tuple[str, ...] = (
     "802.11ax",
 )
 
+#: Canonical raw-IQ window length (samples) drawn from each recording for the T-PRIME **SM**
+#: baseline (paper Table II: N = M*S = 24*64 = 1536). Kept in lockstep with
+#: ``rfbench.models.baselines.tprime.SM_SEQUENCE_LEN``. The canonical split is over RECORDINGS,
+#: so this is a pure LOAD-time reshaping knob: changing it does NOT invalidate the committed
+#: split (only how many samples each window carries).
+TPRIME_WINDOW_LEN: int = 1536
+
+#: How many fixed-length windows are tiled from each recording at load time, spread evenly
+#: across the capture (DS 3.0 ``.bin`` captures are long recordings ~198k samples, not single
+#: windows). A per-recording cap keeps the materialised dataset tractable and weights every
+#: recording equally; it does NOT affect the split (which partitions recordings, never windows,
+#: so windows from one recording never leak across train/test).
+WINDOWS_PER_RECORDING: int = 32
+
 
 def prepare_protocol(
     dataset: ProtocolDataset | str,
@@ -160,11 +174,14 @@ def _class_dir_names() -> dict[str, tuple[str, ...]]:
 
 
 def _load_tprime_wifi4_labels(cache_dir: Path) -> list[str]:
-    """Enumerate the extracted per-class ``.bin`` captures and emit one class label per sample.
+    """Enumerate the extracted per-class ``.bin`` captures and emit one class label PER RECORDING.
 
-    Reads only directory listings (via :mod:`pathlib`), so no numpy is needed to build the
-    label list -- the heavy numpy load of the IQ arrays themselves happens later in the
-    dataset loader. Walks each class subtree in canonical class order.
+    Reads only directory listings (via :mod:`pathlib`), so no numpy is needed to build the label
+    list -- the heavy numpy load of the IQ arrays themselves happens later in the dataset loader.
+    One label per recording (not per window) is what makes the split RECORDING-LEVEL: the array
+    loader tiles each recording into windows AFTER the split, so windows from one capture never
+    straddle train/test (no leakage). Shares :func:`_iter_recording_files` with the array loader
+    so the flat recording order is identical on both sides and the committed indices stay aligned.
     """
     ds_dir = _resolve_dataset_root(cache_dir)
     if ds_dir is None:
@@ -172,18 +189,56 @@ def _load_tprime_wifi4_labels(cache_dir: Path) -> list[str]:
             f"tprime_wifi4 not found under {cache_dir / 'tprime_wifi4'}; run the download step "
             "first (rfbench.data.download.protocol_tprime.download_tprime_wifi4)."
         )
-    dir_names = _class_dir_names()
-    labels: list[str] = []
-    for class_name in PROTOCOL_CLASSES:
-        files = _iter_class_files(ds_dir, dir_names[class_name])
-        labels.extend(class_name for _ in files)
-    if not labels:
+    recordings = _iter_recording_files(ds_dir)
+    if not recordings:
         raise FileNotFoundError(
             f"no per-class IQ captures found under {ds_dir}; the extracted layout of the "
-            "T-PRIME collection may differ from the expected <Class>/*.bin tree (confirm on "
-            "the cluster)."
+            "T-PRIME collection may differ from the expected <room>/<class>/*.bin tree (confirm "
+            "on the cluster)."
         )
-    return labels
+    return [class_name for _path, class_name in recordings]
+
+
+def _iter_recording_files(ds_dir: Path) -> list[tuple[Path, str]]:
+    """Canonical ordered ``(capture_path, class_name)`` list over the extracted T-PRIME tree.
+
+    Walks each class in :data:`PROTOCOL_CLASSES` order and, within a class, every capture file
+    in sorted-path order. This is the ONE ordering the label loader (one label per recording)
+    and the array loader (which tiles each recording into windows) SHARE, so recording index
+    ``i`` denotes the same capture on both sides and the committed split indices stay aligned.
+    Handles the real DS 3.0 layout, where the per-protocol folders are nested one level under
+    per-room directories (``<root>/RM_*/802.11x/*.bin``), and a flattened
+    ``<root>/802.11x/*.bin`` layout alike.
+    """
+    dir_names = _class_dir_names()
+    recordings: list[tuple[Path, str]] = []
+    for class_name in PROTOCOL_CLASSES:
+        for path in _iter_class_files(ds_dir, dir_names[class_name]):
+            recordings.append((path, class_name))
+    return recordings
+
+
+def _window_offsets(n_samples: int, window_len: int, max_windows: int) -> list[int]:
+    """Deterministic start offsets tiling one recording into fixed-length windows.
+
+    Returns up to ``max_windows`` start indices for length-``window_len`` windows, spread evenly
+    across ``[0, n_samples - window_len]`` so the whole capture is represented (not just its
+    head). Falls back to a single ``[0]`` window when the recording is shorter than one window
+    (the array loader zero-pads it). Purely arithmetic -> deterministic + numpy-free, so the
+    tiling geometry is unit-testable without the heavy IO, and identical every run (idempotent).
+    """
+    if window_len <= 0:
+        raise ValueError(f"window_len must be positive, got {window_len}")
+    if max_windows <= 0:
+        raise ValueError(f"max_windows must be positive, got {max_windows}")
+    if n_samples <= window_len:
+        return [0]
+    n_full = n_samples // window_len  # non-overlapping capacity
+    m = min(max_windows, n_full)
+    if m <= 1:
+        return [0]
+    last = n_samples - window_len
+    return [(j * last) // (m - 1) for j in range(m)]
 
 
 def _resolve_dataset_root(cache_dir: Path) -> Path | None:
@@ -201,19 +256,23 @@ def _resolve_dataset_root(cache_dir: Path) -> Path | None:
 
 
 def _iter_class_files(ds_dir: Path, dir_candidates: tuple[str, ...]) -> list[Path]:
-    """Return the sorted raw-IQ capture files for one class under ``ds_dir``.
+    """Return the sorted raw-IQ capture files for one class, across any per-room nesting.
 
-    Looks for each candidate class sub-directory name directly under ``ds_dir`` and collects
-    the raw-IQ files (``.bin`` interleaved-IQ first, plus a few fallbacks). The order is
-    deterministic (sorted paths) so the label flatten and the array flatten stay in lockstep.
+    Collects captures from a class sub-directory located EITHER directly under ``ds_dir``
+    (flattened layout ``ds_dir/802.11x/``) OR one level down under a per-room directory (the real
+    DS 3.0 layout ``ds_dir/RM_*/802.11x/``). Raw-IQ files are ``.bin`` interleaved-IQ first, plus
+    a few fallbacks. The order is deterministic (sorted, de-duplicated full paths) so the label
+    flatten and the array flatten stay in lockstep across every room.
     """
     files: list[Path] = []
     for candidate in dir_candidates:
-        class_dir = ds_dir / candidate
-        if not class_dir.is_dir():
-            continue
-        for pattern in ("*.bin", "*.npy", "*.iq", "*.dat", "*.sigmf-data"):
-            files.extend(sorted(class_dir.glob(pattern)))
+        class_dirs = [ds_dir / candidate]  # flattened layout
+        class_dirs += sorted(ds_dir.glob(f"*/{candidate}"))  # per-room layout (RM_*/<class>)
+        for class_dir in class_dirs:
+            if not class_dir.is_dir():
+                continue
+            for pattern in ("*.bin", "*.npy", "*.iq", "*.dat", "*.sigmf-data"):
+                files.extend(class_dir.glob(pattern))
     return sorted(set(files))
 
 
@@ -222,6 +281,8 @@ __all__ = [
     "CANONICAL_SPLIT_IDS",
     "SOURCE_URLS",
     "PROTOCOL_CLASSES",
+    "TPRIME_WINDOW_LEN",
+    "WINDOWS_PER_RECORDING",
     "prepare_protocol",
     "load_protocol_labels",
 ]

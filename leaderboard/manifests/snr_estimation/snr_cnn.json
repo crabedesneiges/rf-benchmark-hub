@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.1.0",
+  "result_path": "leaderboard/results/snr_estimation/snr_cnn.json",
+  "task": {
+    "name": "snr_estimation",
+    "version": "v1"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "code_commit": "git@55cd118249b8e98bb4c78b99c84893d7dd5c5168",
+  "command": "sbatch slurm/train_snr_cnn_arm.sh snr_cnn 100 45  # RadioML 2016.10a ; board=moyenne 42/43/44, re-run=seed45 <=2\u03c3 (plancher 0.10 dB)",
+  "artifacts": {
+    "source_only": true
+  },
+  "hardware": "1x Dalia GB200 (ARM aarch64, CUDA)",
+  "expected_metrics": {
+    "mae_db": 3.290545534185755,
+    "rmse_db": 5.72920415614193
+  },
+  "tolerance": {
+    "absolute": 0.1,
+    "per_metric": {
+      "mae_db": 0.129,
+      "rmse_db": 0.1
+    }
+  },
+  "rerun_mode": "full_retrain"
+}

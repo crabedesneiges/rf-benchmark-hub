@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — baseline CNN régresseur SNR `snr_cnn` (nouvelle meilleure baseline snr_estimation)
+
+CNN 1D régression (raw-IQ → SNR dB, MSE) entraînée multi-seed (42/43/44) sur RadioML 2016.10a :
+**rmse_db = 5.729** (±1σ très serré, seeds 5.724–5.736), soit **~1.9 dB sous le DSP
+`snr_moment_ridge` (7.64)** et loin devant `mean_snr` (11.53). Nouveau leader du board SNR.
+Manifest prêt, verify seed-45 en cours.
+
 ### Added — vitrine du tier `verified` sur le site (§3)
 
 L'index met en avant la couverture de vérification d'un coup d'œil :

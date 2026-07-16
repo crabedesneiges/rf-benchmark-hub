@@ -467,3 +467,165 @@ def test_percentile_matches_linear_interpolation() -> None:
     assert _percentile(data, 1.0) == 4.0
     assert _percentile(data, 0.5) == 2.0
     assert _percentile(data, 0.25) == 1.0
+
+
+# --------------------------------------------------------------------------------------------------
+# Per-bin curve confidence bands (mono-run y_low/y_high on accuracy_vs_snr)
+# --------------------------------------------------------------------------------------------------
+class SnrBinnedAccuracyCurve(Metric):
+    """A pure-Python metric emitting a scalar accuracy AND a per-``snr_db``-bin curve.
+
+    Mirrors the real AMC pair (``AccuracyOverall`` + ``AccuracyVsSnr``) in a single object:
+    ``compute`` returns the scalar ``accuracy_overall`` (the primary key, so the
+    "primary is a scalar values key" contract holds) alongside the ``accuracy_vs_snr`` curve.
+    It exposes the ``sample_bins`` hook so ``evaluate`` runs the per-bin percentile bootstrap
+    and attaches ``y_low``/``y_high``. Kept self-contained (no torch/numpy) so the eval-path
+    test runs with only ``pytest`` + ``jsonschema``.
+    """
+
+    name = "accuracy_vs_snr"
+    primary_key = "accuracy_overall"
+
+    def __init__(self) -> None:
+        self._correct: dict[int, int] = {}
+        self._total: dict[int, int] = {}
+
+    def reset(self) -> None:
+        self._correct.clear()
+        self._total.clear()
+
+    def update(
+        self,
+        pred: Tensor,
+        target: Tensor,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        assert meta is not None, "SnrBinnedAccuracyCurve needs per-sample snr_db in meta"
+        snrs = meta["snr_db"]
+        for index, (predicted, expected) in enumerate(zip(pred, target, strict=True)):
+            snr = int(snrs[index])
+            self._total[snr] = self._total.get(snr, 0) + 1
+            if predicted == expected:
+                self._correct[snr] = self._correct.get(snr, 0) + 1
+
+    def compute(self) -> dict[str, float | list[dict[str, float]]]:
+        curve: list[dict[str, float]] = []
+        for snr in sorted(self._total):
+            total = self._total[snr]
+            correct = self._correct.get(snr, 0)
+            curve.append({"x": float(snr), "y": (correct / total) if total else 0.0})
+        total_n = sum(self._total.values())
+        correct_n = sum(self._correct.values())
+        return {
+            "accuracy_overall": (correct_n / total_n) if total_n else 0.0,
+            "accuracy_vs_snr": curve,
+        }
+
+    def eval_conditions(self) -> dict[str, Any]:
+        return {"snr_db_min": -20, "snr_db_max": 18, "full_snr_range": True}
+
+    def sample_bins(
+        self,
+        pred: Tensor,
+        target: Tensor,
+        meta: dict[str, Any] | None = None,
+    ) -> list[float]:
+        assert meta is not None
+        return [float(int(v)) for v in meta["snr_db"]]
+
+
+class CurveTask(DummyTask):
+    """An AMC-shaped task whose metric emits a scalar primary + the per-SNR-bin curve."""
+
+    def metrics(self) -> list[Metric]:
+        return [SnrBinnedAccuracyCurve()]
+
+
+def _curve_task(n: int = 60, wrong_every: int = 4) -> tuple[Task, Model]:
+    """A multi-SNR-bin curve task + an imperfect model, so each bin's band is non-degenerate.
+
+    Spreads samples over several SNR bins with a fixed set of wrong predictions so the point
+    estimate is reproducible while resampling within a bin produces a real spread.
+    """
+    snr_bins = [-20, -10, 0, 10, 18]
+    samples: list[Batch] = [
+        {"iq": [0.0, 0.0], "label": i % 3, "snr_db": snr_bins[i % len(snr_bins)]} for i in range(n)
+    ]
+    wrong = frozenset(i for i in range(n) if i % wrong_every == 0)
+    return CurveTask(samples), DummyImperfectModel(wrong)
+
+
+def test_per_bin_curve_band_end_to_end() -> None:
+    """evaluate() attaches a valid per-bin y_low/y_high band to accuracy_vs_snr (mono-run).
+
+    End-to-end through evaluate() (the repo's lesson: eval bugs hide from unit tests): every
+    curve point must carry y_low <= y <= y_high with bounds in [0, 1], and the whole result
+    must still validate against result.schema.json.
+    """
+    from jsonschema import Draft202012Validator
+
+    task, model = _curve_task()
+    result = _run(
+        model=model,
+        task=task,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=64,
+    )
+
+    # Independently valid against the shipped schema.
+    Draft202012Validator(_load_schema()).validate(result)
+
+    points = result["metrics"]["curves"]["accuracy_vs_snr"]
+    assert len(points) == 5, "one point per SNR bin"
+    for point in points:
+        assert "y_low" in point and "y_high" in point, f"missing band on {point}"
+        assert 0.0 <= point["y_low"] <= 1.0
+        assert 0.0 <= point["y_high"] <= 1.0
+        assert point["y_low"] <= point["y"] <= point["y_high"], f"y outside band: {point}"
+
+
+def test_per_bin_curve_band_reproducible() -> None:
+    """A fixed seed makes the whole per-bin band byte-reproducible across runs."""
+    task_a, model_a = _curve_task()
+    task_b, model_b = _curve_task()
+    first = _run(
+        model=model_a,
+        task=task_a,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=48,
+    )
+    second = _run(
+        model=model_b,
+        task=task_b,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=True,
+        bootstrap_n_resamples=48,
+    )
+    assert first["metrics"]["curves"] == second["metrics"]["curves"]
+
+
+def test_per_bin_curve_band_absent_when_bootstrap_disabled() -> None:
+    """With bootstrap OFF the curve keeps only x/y -- no band is fabricated."""
+    task, model = _curve_task()
+    result = _run(
+        model=model,
+        task=task,
+        regime=RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=8,
+        compute_bootstrap_ci=False,
+    )
+    for point in result["metrics"]["curves"]["accuracy_vs_snr"]:
+        assert set(point) == {"x", "y"}
+
+
+def test_per_bin_band_skipped_without_hook() -> None:
+    """A curve metric WITHOUT ``sample_bins`` gets no band (the default dummy curve)."""
+    result = _run(compute_bootstrap_ci=True, bootstrap_n_resamples=16)
+    # DummyAccuracy exposes no sample_bins hook -> its curve stays a bare {x, y}.
+    for point in result["metrics"]["curves"]["accuracy_vs_snr"]:
+        assert set(point) == {"x", "y"}

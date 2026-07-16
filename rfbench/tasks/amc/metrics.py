@@ -269,6 +269,24 @@ class AccuracyVsSnr(Metric):
             curve.append({"x": float(snr), "y": (correct / total) if total else 0.0})
         return {"accuracy_vs_snr": curve}
 
+    def sample_bins(
+        self,
+        pred: Tensor,
+        target: Tensor,
+        meta: dict[str, Any] | None = None,
+    ) -> list[float]:
+        """Per-sample SNR bin key (the curve's ``x``) for the per-bin bootstrap band.
+
+        Returns one bin key per accumulated sample, aligned with ``pred``/``target``, so
+        ``evaluate``'s per-bin percentile bootstrap can resample WITHIN each SNR bin and
+        attach a ``y_low``/``y_high`` envelope to the ``accuracy_vs_snr`` points. The key is
+        the same ``snr_db`` this metric groups on in :meth:`update`, read from the collated
+        ``meta`` batch. Raises ``KeyError`` if the SNR field is absent (the curve cannot be
+        binned without it).
+        """
+        n = len(target)
+        return [float(_snr_of(meta, index)) for index in range(n)]
+
 
 def accuracy(pred: Sequence[Any], target: Sequence[int]) -> float:
     """Convenience top-1 accuracy over two aligned sequences (used by tests).

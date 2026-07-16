@@ -793,6 +793,8 @@ _MODEL_MODULES: dict[str, str] = {
     "oracle_cnn": "rfbench.models.baselines.oracle_cnn",
     "complex_cnn": "rfbench.models.baselines.complex_cnn",
     "resnet1d_sei": "rfbench.models.baselines.resnet1d_sei",
+    # SNR-estimation regression baseline (trained via `rfbench snr-train`).
+    "snr_cnn": "rfbench.models.baselines.snr_cnn",
     "lwm-spectro": "rfbench.models.foundation.lwm_spectro",
     "dummy-fm": "rfbench.models.foundation.dummy",
 }
@@ -1051,6 +1053,106 @@ def _cmd_sei_train(args: argparse.Namespace) -> int:
     extras = ", ".join(f"{k}={v:.4f}" for k, v in values.items() if k != primary)
     print(
         f"[sei-train] wrote result.json -> {out_path} "
+        f"({primary}={values.get(primary):.4f}{'; ' + extras if extras else ''})."
+    )
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------------------------------
+# `snr-train` handler (from-scratch SNR REGRESSION training, dedicated recipe)
+# --------------------------------------------------------------------------------------------------
+def _cmd_snr_train(args: argparse.Namespace) -> int:
+    """Train an SNR regressor on radioml_2016_10a, then emit a result.json (primary rmse_db).
+
+    Uses the SNR-specific REGRESSION loop :func:`rfbench.training_snr.train_snr_regressor` (MSE on
+    the ``snr_db`` target, Adam, best checkpoint + early stop on val LOSS) so the AMC/SEI
+    classification loops stay untouched, and runs the single ``all_snr`` track. torch + the SNR
+    training module are imported inside this handler so ``import rfbench`` / ``rfbench --help``
+    stay dependency-free.
+    """
+    import logging
+
+    # Surface the per-epoch training trajectory (train/val loss, best-checkpoint, early stop) on
+    # stdout so a cluster .out log shows convergence -- otherwise the loop's logger.info lines are
+    # swallowed at the default WARNING level.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    try:
+        from rfbench.core.registry import MODELS, TASKS
+        from rfbench.training_snr import train_snr_regressor
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: [snr-train] needs the torch extra (`pip install rfbench[torch]`): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    try:
+        _import_model_module(args.model)
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: [snr-train] could not import the '{args.model}' model module "
+            f"(needs the torch extra): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    os.environ.setdefault("RFBENCH_CACHE", args.cache)
+    try:
+        _import_task_module("snr_estimation")
+        task = TASKS.get("snr_estimation")()
+        datasets = task.datasets()
+        if not datasets:
+            raise ValueError("snr_estimation task declares no datasets")
+        dataset = next((d for d in datasets if d.name == args.dataset), None)
+        if dataset is None:
+            available = ", ".join(sorted(d.name for d in datasets))
+            raise ValueError(f"unknown --dataset {args.dataset!r}; available: {available}")
+        spec = _regime_spec(args.regime, None)
+        model = MODELS.get(args.model)(device=None if args.device == "auto" else args.device)
+    except (KeyError, ValueError, TypeError) as exc:
+        print(f"error: [snr-train] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    checksum = _load_split_checksum(args.dataset, _repo_root() / "leaderboard")
+    if checksum is not None and hasattr(dataset, "checksum"):
+        dataset.checksum = checksum
+
+    out_path = (
+        Path(args.out)
+        if args.out
+        else Path("leaderboard") / "results" / "snr_estimation" / f"{args.model}.json"
+    )
+    print(
+        f"[snr-train] training '{args.model}' on snr_estimation/{args.dataset} "
+        f"(regime={args.regime}, epochs={args.epochs}, batch_size={args.batch_size}, "
+        f"lr={args.lr}, weight_decay={args.weight_decay}, device={args.device})..."
+    )
+    try:
+        _model, result = train_snr_regressor(
+            task,
+            model,
+            dataset,
+            regime=spec,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            seed=args.seed,
+            device=None if args.device == "auto" else args.device,
+            out_path=out_path,
+            patience=args.patience,
+            compute_bootstrap_ci=not args.no_bootstrap,
+        )
+    except (ValueError, RuntimeError, TypeError, FileNotFoundError) as exc:
+        print(f"error: [snr-train] {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    primary = result["metrics"]["primary"]
+    values = result["metrics"]["values"]
+    extras = ", ".join(f"{k}={v:.4f}" for k, v in values.items() if k != primary)
+    print(
+        f"[snr-train] wrote result.json -> {out_path} "
         f"({primary}={values.get(primary):.4f}{'; ' + extras if extras else ''})."
     )
     return EXIT_OK
@@ -1663,6 +1765,70 @@ def _build_sei_train_parser(
     st.set_defaults(func=_cmd_sei_train)
 
 
+def _build_snr_train_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    parent: argparse.ArgumentParser,
+) -> None:
+    sn = subparsers.add_parser(
+        "snr-train",
+        parents=[parent],
+        help="Train an SNR regressor (MSE) and emit a result.json with primary rmse_db (M3, GPU).",
+        description=(
+            "Runs the SNR-specific REGRESSION loop (rfbench.training_snr.train_snr_regressor: MSE "
+            "on the snr_db target, Adam, best checkpoint + early stop on validation LOSS) over the "
+            "single all_snr track, then evaluates on the test split and writes a schema-valid "
+            "result.json (primary rmse_db, lower is better). The AMC/SEI classification loops are "
+            "left untouched. Needs the torch extra; runs on the cluster GPU."
+        ),
+    )
+    sn.add_argument(
+        "--dataset",
+        default="radioml_2016_10a",
+        choices=("radioml_2016_10a",),
+        help="SNR-estimation dataset variant (default: radioml_2016_10a).",
+    )
+    sn.add_argument("--model", required=True, metavar="NAME", help="Registered SNR model name.")
+    sn.add_argument(
+        "--regime",
+        default="from_scratch",
+        choices=("from_scratch", "full_finetune"),
+        help="Trainable regime, ALWAYS declared (default: from_scratch).",
+    )
+    sn.add_argument("--epochs", type=int, default=100, help="Max epochs (default: 100).")
+    sn.add_argument(
+        "--batch-size", dest="batch_size", type=int, default=256, help="Batch size (default: 256)."
+    )
+    sn.add_argument("--lr", type=float, default=1e-3, help="Adam learning rate (default: 1e-3).")
+    sn.add_argument(
+        "--weight-decay",
+        dest="weight_decay",
+        type=float,
+        default=1e-4,
+        help="Adam weight_decay / L2 (default: 1e-4).",
+    )
+    sn.add_argument("--patience", type=int, default=10, help="Early-stop patience (default: 10).")
+    sn.add_argument("--seed", type=int, default=42, help="Global seed (default: 42).")
+    sn.add_argument(
+        "--device",
+        choices=("cuda", "cpu", "auto"),
+        default="auto",
+        help="Compute device (default: auto -> cuda when available).",
+    )
+    sn.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Output path (default: leaderboard/results/snr_estimation/<model>.json).",
+    )
+    sn.add_argument(
+        "--no-bootstrap",
+        dest="no_bootstrap",
+        action="store_true",
+        help="Skip the per-run bootstrap CI (much faster eval). Use for multi-seed sweeps where "
+        "uncertainty comes from the across-seed std, not per-seed bootstrap.",
+    )
+    sn.set_defaults(func=_cmd_snr_train)
+
+
 def _build_submit_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     parent: argparse.ArgumentParser,
@@ -1814,6 +1980,7 @@ def build_parser() -> argparse.ArgumentParser:
     _build_eval_parser(subparsers, parent)
     _build_train_parser(subparsers, parent)
     _build_sei_train_parser(subparsers, parent)
+    _build_snr_train_parser(subparsers, parent)
     _build_submit_parser(subparsers, parent)
     _build_leaderboard_parser(subparsers, parent)
     _build_verify_parser(subparsers, parent)

@@ -272,6 +272,24 @@ def test_build_site_returns_index_and_pages(tmp_path: Path) -> None:
     assert "sei.html" in index_html
 
 
+def test_index_showcases_verified_tier(tmp_path: Path) -> None:
+    """The landing page surfaces verified coverage: a global 'Verified scores' stat card and a
+    per-task 'N/M verified' chip. The sample tree has 2 verified rows (of 3 amc + 1 sei)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+
+    index_html = generate.build_site(results, out).read_text(encoding="utf-8")
+
+    # Global stat: exactly the 2 verified rows across the board, in the highlighted card.
+    assert "Verified scores" in index_html
+    assert 'stat-card-verified"><span class="stat-value">2<' in index_html
+    # Per-task coverage chips: amc has 2 of its 3 rows verified; sei has 0 of 1 (muted variant).
+    assert "2/3 verified" in index_html
+    assert "0/1 verified" in index_html
+    assert "card-verified-cov-zero" in index_html
+
+
 def test_build_site_requires_existing_results_dir(tmp_path: Path) -> None:
     """A missing results directory raises FileNotFoundError (never a silent empty build)."""
     missing = tmp_path / "does-not-exist"

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `tprime` corrigé reproduit le papier sur `protocol_tech_id` (0.995 per-fenêtre)
+
+Re-run du modèle corrigé avec la **recette officielle** (Adam **lr=2e-4**, batch 128 ; extraite du
+code `genesys-neu/t-prime`) : **`accuracy_overall = 0.995`** (macro_f1 0.995, IC bootstrap
+[0.9941, 0.9959]) sur `tprime_wifi4`, seed 42, SM (1.58M params). C'est **au niveau du papier**
+(≥99 % time-split) et ça **valide les 6 corrections** de réimplémentation. Deux échecs en chemin,
+tous deux dus à la recette (pas à l'architecture) : le lr=1e-3 par défaut de rfbench (5× le lr
+officiel) **collapse** le transformer au hasard (0.259) — un transformer from-scratch sans warmup
+ne supporte pas ce régime. Le board affiche désormais la ligne `self_reported` reproduite **à côté**
+de la référence `from_paper_uncertain` (0.99). Honnêteté : notre split est **within-distribution**
+(salles/jours mélangés train/test), le régime « facile » — comme le time-split du papier ; le
+cross-room (scenario-split) serait plus dur.
+
 ### Fixed — réimplémentation `tprime` alignée sur le code officiel + retrait du score bugué
 
 Audit de notre `tprime` vs le code officiel `genesys-neu/t-prime` (Belgiovine et al., INFOCOM
@@ -25,7 +38,8 @@ Les comptes de params reconcilient désormais avec le papier — **SM 1 580 164 
 0.7099 (produit par la config bugguée) est **retiré** ; en attendant un re-run du code corrigé,
 le board affiche une ligne **`from_paper_uncertain`** (`tprime-paper`, 0.99) citant le papier —
 non comparable à notre primaire per-fenêtre (chiffre papier = per-transmission, time-split ≠
-notre split 80/10/10). La perf reproduite (per-fenêtre, notre split) sera ajoutée après le re-run.
+notre split 80/10/10). La perf reproduite (per-fenêtre, notre split) est désormais sur le board
+(voir l'entrée Added ci-dessus : 0.995 avec la recette officielle).
 
 ### Added — 1re colonne réelle `protocol_tech_id` : baseline `tprime` (WiFi 802.11 b/g/n/ax)
 

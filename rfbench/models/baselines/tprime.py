@@ -7,13 +7,15 @@ into one of four 802.11 standards (``802.11b``, ``802.11g``, ``802.11n``, ``802.
 transformer encoder that uses **no learned input embedding**: the raw IQ values are fed
 directly as the token space.
 
-Tokenisation (paper §III, Table II). One window is a ``(2, N)`` sequence (I on row 0, Q on
-row 1) that is sliced along time into ``M`` consecutive slices of ``(2, S)`` (``N = M * S``);
-each ``(2, S)`` slice is **flattened** into a single ``1 x 2S`` token (I samples then Q
-samples). Those ``M`` tokens of width ``2S`` are fed straight into a standard transformer
-encoder (a learned positional encoding is added, but the token values themselves are the raw
-IQ -- there is no learned linear projection of the input). A mean-pool over the ``M`` token
-representations gives the window embedding, and a linear head maps it to the four class logits.
+Tokenisation (official ``model_transformer.py`` / ``TPrime_testing_SoTA.py``, paper §III). One
+window is a ``(2, N)`` sequence (I on row 0, Q on row 1). The two channels are **interleaved**
+into ``[I_0, Q_0, I_1, Q_1, ...]`` and split into ``M`` consecutive tokens of width ``2S``
+(``N = M * S``); the raw interleaved IQ values ARE the token space (no learned input embedding,
+no linear projection). A learned initial ``LayerNorm(2S)`` normalises each token, then the
+``M`` tokens are fed into a standard transformer encoder with **no positional encoding** (the
+paper omits it -- ``use_pos=False``). The full ``M x 2S`` encoder output is **flattened** and
+projected by ``Linear(2S*M, 2S)`` + ReLU + ``Dropout(0.5)`` before a linear head maps it to the
+four class logits (encoder ``dim_feedforward=2048``, so params reconcile: SM ~1.6M, LG ~6.8M).
 
 Two published variants (Table II):
 
@@ -61,7 +63,7 @@ SM_SLICES = 24  # M: number of slices/tokens
 SM_SLICE_LEN = 64  # S: samples per slice per channel
 SM_LAYERS = 2  # transformer encoder layers
 SM_HEADS = 8  # attention heads (d_model = 2S = 128 must be divisible by heads)
-SM_FF_DIM = 128  # feed-forward hidden width
+SM_FF_DIM = 2048  # PyTorch default; the official code never overrides dim_feedforward
 #: SM window length N = M * S.
 SM_SEQUENCE_LEN = SM_SLICES * SM_SLICE_LEN  # 1536
 
@@ -70,7 +72,7 @@ LG_SLICES = 64  # M
 LG_SLICE_LEN = 128  # S
 LG_LAYERS = 2
 LG_HEADS = 8  # d_model = 2S = 256, divisible by 8
-LG_FF_DIM = 256
+LG_FF_DIM = 2048  # PyTorch default; the official code never overrides dim_feedforward
 #: LG window length N = M * S.
 LG_SEQUENCE_LEN = LG_SLICES * LG_SLICE_LEN  # 8192
 
@@ -95,15 +97,24 @@ _VARIANTS: dict[str, dict[str, int]] = {
 
 
 class TPrimeNet(nn.Module):
-    """The T-PRIME transformer network (encoder over raw-IQ slice tokens, no input embedding).
+    """The T-PRIME transformer network (encoder over raw interleaved-IQ tokens, no input embedding).
 
-    Slices a ``(B, 2, N)`` IQ window into ``M`` tokens of width ``2S`` (each token is one
-    ``(2, S)`` slice flattened as ``[I_0..I_{S-1}, Q_0..Q_{S-1}]``), adds a learned positional
-    encoding, runs a ``num_layers``-deep transformer encoder, mean-pools the ``M`` token
-    outputs, and classifies the pooled ``(B, 2S)`` embedding into ``num_classes`` logits.
+    Faithful to the official implementation (``genesys-neu/t-prime`` ``model_transformer.py`` /
+    ``TPrime_testing_SoTA.py``): the two channels of a ``(B, 2, N)`` IQ window are **interleaved**
+    into ``[I_0, Q_0, I_1, Q_1, ...]`` and split into ``M`` consecutive tokens of width ``2S``
+    (``N = M * S``) -- the raw interleaved IQ values ARE the token space (no learned input
+    embedding). A learned initial ``LayerNorm(2S)`` normalises each token (the reference's only
+    normalisation), a ``num_layers``-deep transformer encoder runs with **NO positional encoding**
+    (the paper omits it -- ``use_pos=False``), then the whole ``M x 2S`` encoder output is
+    **flattened** and projected by ``Linear(2S*M, 2S)`` + ReLU + ``Dropout(0.5)`` before a linear
+    head maps it to the ``num_classes`` logits. Encoder ``dim_feedforward=2048`` (the PyTorch
+    default the official code keeps), so the param counts reconcile with the paper (SM ~1.6M,
+    LG ~6.8M).
 
-    :meth:`forward` returns ``(B, num_classes)`` logits; :meth:`features` returns the
-    ``(B, d_model)`` pooled encoder embedding the probing regimes fit a head on.
+    :meth:`forward` returns ``(B, num_classes)`` **raw logits** (no LogSoftmax -- rfbench trains
+    with :class:`~torch.nn.CrossEntropyLoss`, so the log-softmax is folded into the loss, matching
+    the reference's LogSoftmax+NLLLoss); :meth:`features` returns the ``(B, d_model)``
+    pre-classifier embedding the probing regimes fit a head on.
     """
 
     def __init__(
@@ -112,7 +123,7 @@ class TPrimeNet(nn.Module):
         *,
         variant: TPrimeVariant = "SM",
     ) -> None:
-        """Build the positional encoding, transformer encoder and classifier for ``variant``."""
+        """Build the LayerNorm, transformer encoder and flatten classifier for ``variant``."""
         super().__init__()
         if num_classes < 1:
             raise ValueError(f"num_classes must be >= 1, got {num_classes}")
@@ -126,12 +137,13 @@ class TPrimeNet(nn.Module):
         self.slices = cfg["slices"]
         self.slice_len = cfg["slice_len"]
         self.sequence_len = self.slices * self.slice_len
-        # No learned input embedding: the token dimension IS the flattened raw-IQ slice (2*S).
+        # No learned input embedding: the token dimension IS the interleaved raw-IQ slice (2*S).
         self.d_model = _IQ_CHANNELS * self.slice_len
         self.embed_dim = self.d_model
 
-        # Learned positional encoding over the M token positions (added to the raw tokens).
-        self.pos_encoding = nn.Parameter(torch.zeros(1, self.slices, self.d_model))
+        # Initial learned LayerNorm is the ONLY normalisation (official model_transformer.py L16);
+        # NO positional encoding (paper omits it, official use_pos=False).
+        self.input_norm = nn.LayerNorm(self.d_model)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.d_model,
             nhead=cfg["heads"],
@@ -139,64 +151,48 @@ class TPrimeNet(nn.Module):
             batch_first=True,
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg["layers"])
+        # Flatten head (official): Linear(2S*M, 2S) -> ReLU -> Dropout(0.5) -> Linear(2S, classes).
+        self.pre_classifier = nn.Linear(self.d_model * self.slices, self.d_model)
+        self.dropout = nn.Dropout(0.5)
         self.classifier = nn.Linear(self.d_model, num_classes)
 
     def _tokenize(self, x: Tensor) -> Tensor:
-        """Slice a ``(B, 2, N)`` IQ window into ``(B, M, 2S)`` flattened slice tokens.
+        """Interleave a ``(B, 2, N)`` IQ window into ``(B, M, 2S)`` tokens.
 
-        Each of the ``M`` consecutive ``(2, S)`` slices is flattened to ``[I..., Q...]`` (row-
-        major over the channel axis) so token ``m`` is ``[I_{mS}..I_{mS+S-1}, Q_{mS}..]``.
+        The two channels are zipped into ``[I_0, Q_0, I_1, Q_1, ...]`` over the whole stream (the
+        official ``chan2sequence``: ``seq[0::2]=I, seq[1::2]=Q``) then split into ``M`` tokens of
+        width ``2S``, so token ``m`` is ``[I_{mS}, Q_{mS}, ..., I_{mS+S-1}, Q_{mS+S-1}]``.
         """
         b = x.shape[0]
-        # (B, 2, M, S) -> (B, M, 2, S) -> (B, M, 2S): channel-major flatten per slice.
-        sliced = x.reshape(b, _IQ_CHANNELS, self.slices, self.slice_len)
-        sliced = sliced.permute(0, 2, 1, 3).contiguous()
-        return sliced.reshape(b, self.slices, self.d_model)
+        # (B, 2, N) -> (B, N, 2) -> (B, 2N) interleaved -> (B, M, 2S).
+        interleaved = x.permute(0, 2, 1).reshape(b, self.sequence_len * _IQ_CHANNELS)
+        return interleaved.reshape(b, self.slices, self.d_model)
 
     def features(self, x: Tensor) -> Tensor:
-        """Return the ``(B, d_model)`` mean-pooled encoder embedding for a ``(B, 2, N)`` batch."""
-        tokens = self._tokenize(x) + self.pos_encoding  # (B, M, 2S)
+        """Return the ``(B, d_model)`` pre-classifier embedding for a ``(B, 2, N)`` batch."""
+        tokens = self.input_norm(self._tokenize(x))  # (B, M, 2S), LayerNorm'd, no pos-encoding
         encoded = self.encoder(tokens)  # (B, M, 2S)
-        return cast("Tensor", encoded.mean(dim=1))  # (B, 2S)
+        flat = torch.flatten(encoded, start_dim=1)  # (B, M*2S)
+        return cast("Tensor", self.pre_classifier(flat))  # (B, 2S)
 
     def forward(self, x: Tensor) -> Tensor:
         """Return ``(B, num_classes)`` protocol logits for a ``(B, 2, N)`` IQ batch."""
-        return cast("Tensor", self.classifier(self.features(x)))
-
-
-def _unit_variance_normalize(x: Tensor, *, eps: float = 1e-8) -> Tensor:
-    """Standardise each ``(2, N)`` IQ window to zero mean and unit variance (per-sample).
-
-    T-PRIME has NO learned input embedding (the raw IQ slices ARE the tokens) and no input
-    scaling, and the DS 3.0 over-the-air captures come in at a small raw scale (I/Q std on the
-    order of ~7e-2, |val| < ~0.2 in the extracted ``.bin``). Feeding a near-zero-scale signal
-    straight into the token space -- summed with the learned positional encoding -- starts
-    training from a poorly-conditioned scale, the same failure mode that collapsed the CLDNN /
-    ResNet AMC baselines (see ``cldnn._unit_variance_normalize`` /
-    ``resnet_amc._unit_variance_normalize``, the transform this mirrors). Standardising each
-    window over BOTH channels and the whole time axis (dims ``(1, 2)``) removes the absolute
-    capture scale (which carries no protocol information) while preserving the I/Q geometry that
-    does. ``eps`` guards an all-constant (zero-variance) window. Matches the T-PRIME reference's
-    per-window normalisation. Duplicated here (not imported from a sibling baseline) so this
-    module stays standalone, the same rationale as :func:`_iq_to_tensor`.
-    """
-    mean = x.mean(dim=(1, 2), keepdim=True)
-    std = x.std(dim=(1, 2), keepdim=True, unbiased=False)
-    return cast("Tensor", (x - mean) / (std + eps))
+        hidden = self.dropout(torch.relu(self.features(x)))
+        return cast("Tensor", self.classifier(hidden))
 
 
 def _iq_to_tensor(iq_batch: object, device: torch.device, sequence_len: int) -> Tensor:
-    """Stack the collated ``x["iq"]`` list into a ``(B, 2, sequence_len)`` normalised float tensor.
+    """Stack the collated ``x["iq"]`` list into a ``(B, 2, sequence_len)`` float tensor.
 
     ``iq_batch`` is the per-sample IQ list :func:`rfbench.core.evaluate.evaluate` collates from
     :class:`~rfbench.tasks.protocol_tech_id.dataset.ProtocolDataset`: each element is a
     ``(2, L)`` array-like (numpy on the cluster, nested lists in a synthetic fixture) in the
     channel-first layout (I on row 0, Q on row 1). Each window is coerced to ``float32`` and
     fixed to the variant's ``N`` by a centre-crop (if longer) or a right zero-pad (if shorter),
-    so the tokeniser always sees exactly ``M * S`` samples, then standardised per-window
-    (:func:`_unit_variance_normalize`) so the raw IQ reaches the embedding-free token space at a
-    healthy scale. A mis-shaped batch (channel axis not 2) fails loudly rather than silently
-    mis-classifying.
+    so the tokeniser always sees exactly ``M * S`` samples. Conditioning of the raw IQ scale is
+    handled INSIDE the model by the initial learned ``LayerNorm`` (the reference's only
+    normalisation), not by any preprocessing here. A mis-shaped batch (channel axis not 2) fails
+    loudly rather than silently mis-classifying.
     """
     tensor = torch.as_tensor(iq_batch, dtype=torch.float32, device=device)
     if tensor.ndim == 2:  # a single unbatched (2, L) sample -> add the batch axis
@@ -214,7 +210,7 @@ def _iq_to_tensor(iq_batch: object, device: torch.device, sequence_len: int) -> 
             tensor.shape[0], _IQ_CHANNELS, sequence_len - length, dtype=tensor.dtype, device=device
         )
         tensor = torch.cat([tensor, pad], dim=2)
-    return _unit_variance_normalize(tensor)
+    return tensor
 
 
 @register_model("tprime")

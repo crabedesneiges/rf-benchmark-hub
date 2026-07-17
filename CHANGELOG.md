@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — réimplémentation `tprime` alignée sur le code officiel + retrait du score bugué
+
+Audit de notre `tprime` vs le code officiel `genesys-neu/t-prime` (Belgiovine et al., INFOCOM
+2024, arXiv:2401.04837) : 6 écarts, dont 4 à fort impact expliquant le gouffre 0.71 (nous) vs
+≥0.99 (papier). Corrigés dans `rfbench/models/baselines/tprime.py` :
+- `dim_feedforward` 128/256 → **2048** (défaut PyTorch, jamais surchargé par le code officiel) ;
+- **flatten + `Linear(2S·M, 2S)` + ReLU + `Dropout(0.5)`** au lieu du mean-pool (le mean-pool
+  supprimait le plus gros bloc de params) ;
+- **suppression du positional encoding appris** (le papier l'omet, `use_pos=False`) ;
+- **`LayerNorm(2S)` initiale apprise** (seule normalisation officielle) à la place du z-score
+  par fenêtre que j'avais ajouté ;
+- **tokenisation entrelacée** `[I,Q,I,Q,…]` au lieu de `[I…,Q…]`.
+
+Les comptes de params reconcilient désormais avec le papier — **SM 1 580 164 (~1.6M)**, LG
+6 826 244 (~6.8M) (vérifié par smoke torch : shapes + entrelacement OK). Le score `self_reported`
+0.7099 (produit par la config bugguée) est **retiré** ; en attendant un re-run du code corrigé,
+le board affiche une ligne **`from_paper_uncertain`** (`tprime-paper`, 0.99) citant le papier —
+non comparable à notre primaire per-fenêtre (chiffre papier = per-transmission, time-split ≠
+notre split 80/10/10). La perf reproduite (per-fenêtre, notre split) sera ajoutée après le re-run.
+
 ### Added — 1re colonne réelle `protocol_tech_id` : baseline `tprime` (WiFi 802.11 b/g/n/ax)
 
 Entraînement GPU from_scratch (seed 42, variant SM, 50 ep, GB200, ~24 min) sur T-PRIME DS 3.0

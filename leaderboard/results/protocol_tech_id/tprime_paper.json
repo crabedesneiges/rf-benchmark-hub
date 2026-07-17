@@ -1,0 +1,39 @@
+{
+  "created_at": "2026-07-17T00:00:00Z",
+  "dataset": {
+    "name": "tprime_wifi4"
+  },
+  "eval": {
+    "conditions": {}
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.99
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "tprime-paper",
+    "url": "https://arxiv.org/abs/2401.04837"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "protocol-tprime-paper-tprimewifi4-timesplit",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "proto-tprime-wifi4-8010-seed42-v1",
+    "checksum": "sha256:f9676c7a206934c88e3982ae16ea7abbcb8017b4ef73d54a82787dbebc269f1c",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "protocol_tech_id",
+    "version": "v1"
+  },
+  "verification": {
+    "status": "from_paper_uncertain",
+    "note": "Reported by the T-PRIME authors (Belgiovine et al., 'T-PRIME: Transformer-based Protocol Identification for Machine-learning at the Edge', IEEE INFOCOM 2024, arXiv:2401.04837v2), NOT reproduced or re-run by this repo. The 0.99 is the paper's time-split single-protocol (DS 3.0, 4-class 802.11 b/g/n/ax) accuracy from Fig. 8 ('both LG and SM models achieve an average classification accuracy >= 99% on time-split test data, with SM slightly out-performing LG'). from_paper_UNCERTAIN for two independent reasons: (1) SPLIT MISMATCH -- our canonical split proto-tprime-wifi4-8010-seed42-v1 is a locally-generated random 80/10/10 (seed 42, stratified by class) over the same Northeastern OTA single-protocol dataset (neu:h989s8519), which is NEITHER the paper's time-split (first 80% of each day's samples per protocol) NOR its scenario-split (leave-one-room-out); same dataset family, different split. (2) EVAL-UNIT MISMATCH -- the paper's number is PER-TRANSMISSION (per-packet, 'for single transmissions'); our primary accuracy_overall is PER-WINDOW (per 1536-sample slice), and the paper publishes no per-slice single-protocol figure. So this row is a literature reference point only, NOT directly comparable to a per-window harness-run row. Context values from the same paper: 0.97 (abstract, global OTA single-protocol including the harder cross-room scenario-split), 0.967 (real-time in two unseen rooms). A faithful in-repo reproduced number (per-window, our split) will be added after re-running the corrected tprime baseline (the prior in-repo 0.7099 was produced by a re-implementation with several config errors -- dim_feedforward, mean-pool vs flatten head, spurious learned positional encoding, wrong tokenisation order -- now fixed to match the official genesys-neu/t-prime code)."
+  }
+}

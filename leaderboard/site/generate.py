@@ -933,6 +933,11 @@ def _family(row: dict[str, Any]) -> str | None:
     return str(family) if family is not None else None
 
 
+def _foundation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter to rows whose declared model family is ``foundation`` (baselines dropped)."""
+    return [r for r in rows if _family(r) == "foundation"]
+
+
 # --------------------------------------------------------------------------------------------------
 # Ordering helpers
 # --------------------------------------------------------------------------------------------------
@@ -992,6 +997,16 @@ def _regime_sort_key(regime: str) -> tuple[int, str]:
 def _track_sort_key(track: str) -> tuple[int, str]:
     """Order tracks with the default ``all`` bucket first, then alphabetically."""
     return (0 if track == _DEFAULT_TRACK else 1, track)
+
+
+def _regime_track_sort_key(rkt: tuple[str, int | None, str]) -> tuple[Any, int, Any]:
+    """Order a ``(regime, k_shot, track)`` group key: regime (D5 order), then k_shot
+    ascending, then track (default bucket first). Shared by :func:`render_task_page` and the
+    Foundation Models page so both partition a task's rows into groups in the same order.
+    """
+    regime, k_shot, track = rkt
+    shot_rank = k_shot if k_shot is not None else -1
+    return (_regime_sort_key(regime), shot_rank, _track_sort_key(track))
 
 
 def _ordered_scalar_keys(rows: list[dict[str, Any]], primary_key: str) -> list[str]:
@@ -2006,12 +2021,7 @@ def render_task_page(
     for row in rows:
         groups.setdefault((_regime_name(row), _k_shot(row), _track_name(row)), []).append(row)
 
-    def _group_sort_key(rkt: tuple[str, int | None, str]) -> tuple[Any, int, Any]:
-        regime, k_shot, track = rkt
-        shot_rank = k_shot if k_shot is not None else -1
-        return (_regime_sort_key(regime), shot_rank, _track_sort_key(track))
-
-    ordered_keys = sorted(groups, key=_group_sort_key)
+    ordered_keys = sorted(groups, key=_regime_track_sort_key)
     sections = [
         _render_group(regime, track, group_rows, _primary_key(group_rows[0]))
         for (regime, _k, track) in ordered_keys
@@ -2356,6 +2366,9 @@ def _render_glossary_section() -> str:
 # --------------------------------------------------------------------------------------------------
 _METHODS_SLUG: str = "methods"
 
+#: Slug for the dedicated Foundation Models page (``foundation.html``, see ``render_foundation``).
+_FOUNDATION_SLUG: str = "foundation"
+
 
 class _MethodDoc(NamedTuple):
     """One registered model's explanation, read from its source WITHOUT importing torch/numpy."""
@@ -2635,6 +2648,452 @@ def render_methods_page() -> str:
     return _page("Methods — RF-Benchmark-Hub", body, current=_METHODS_SLUG)
 
 
+# --------------------------------------------------------------------------------------------------
+# Foundation Models page -- foundation-only per-task podiums + a global cumulative medal table.
+#
+# Gives foundation-model (``model.family == "foundation"``) submissions dedicated prominence
+# instead of being buried inside the per-task tables next to baselines. Everything here is
+# 100% data-driven off ``leaderboard/results/**/*.json`` (no task or model name is ever
+# hardcoded) and NEVER touches ``render_task_page``'s own rendering, which stays byte-identical.
+# --------------------------------------------------------------------------------------------------
+#: Gold/silver/bronze glyphs, indexed 0..2 (rank 1..3). A shared constant so the per-task mini
+#: tables and the global cumulative podium never draw different medals for the same rank.
+_MEDALS: tuple[str, ...] = ("\U0001f947", "\U0001f948", "\U0001f949")
+
+#: Adaptation-cost proxy order for the scatter's X axis: a CATEGORICAL ordinal (NOT an
+#: invented numeric FLOPs/compute-cost value -- the schema does not track compute cost)
+#: derived from ``regime.name``. ``zero_shot`` needs no labelled adaptation data at all;
+#: ``few_shot`` needs k labelled examples (sub-ordered by k ascending, see
+#: :func:`_frugality_sort_key`); ``linear_probe`` fits a probe head; ``full_finetune`` updates
+#: every weight. ``zero_shot`` is not a valid ``regime.name`` in the current schema enum (D5:
+#: only from_scratch/full_finetune/linear_probe/few_shot) -- it is listed here so the axis is
+#: forward-compatible the moment the schema grows that value; today the bucket simply stays
+#: empty. Any unlisted regime (e.g. ``from_scratch``, which is not an "adapted" foundation
+#: model) sorts after every listed value.
+_FRUGALITY_REGIME_ORDER: tuple[str, ...] = (
+    "zero_shot",
+    "few_shot",
+    "linear_probe",
+    "full_finetune",
+)
+
+
+def _medal(rank: int) -> str:
+    """Medal glyph for rank 1..3 (gold/silver/bronze); empty for anything past 3rd."""
+    return _MEDALS[rank - 1] if 1 <= rank <= 3 else ""
+
+
+def _frugality_sort_key(row: dict[str, Any]) -> tuple[int, int]:
+    """Ordinal position of a foundation row along the adaptation-cost axis.
+
+    ``(regime rank, k_shot)`` -- the regime rank from :data:`_FRUGALITY_REGIME_ORDER`, with
+    ``few_shot`` rows additionally sub-ordered by ``k_shot`` ascending (fewer labelled
+    examples = cheaper adaptation). Non-``few_shot`` regimes carry ``k_shot = -1`` so they
+    never interleave with the few_shot sub-order.
+    """
+    regime = _regime_name(row)
+    rank = (
+        _FRUGALITY_REGIME_ORDER.index(regime)
+        if regime in _FRUGALITY_REGIME_ORDER
+        else len(_FRUGALITY_REGIME_ORDER)
+    )
+    k = _k_shot(row)
+    return (rank, k if k is not None else -1)
+
+
+def _ranked_foundation_rows(rows: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any]]]:
+    """Rank a single ``(regime, k_shot, track)`` group of FOUNDATION-only rows, 1-based, best
+    first.
+
+    Reuses :func:`_sort_rows` (same primary-metric direction + trust-tier + name tiebreak as
+    every table on the board), so a competitor's rank here matches what it would get if this
+    group were compared against :func:`_render_group_table`'s ordering restricted to
+    foundation rows. Shared by the per-task mini-tables and the global cumulative podium so
+    the two never disagree on who ranked where.
+    """
+    return list(enumerate(_sort_rows(rows), start=1))
+
+
+def _render_medal_rank(rank: int) -> str:
+    """Render a mini-table's rank cell: a medal glyph for the top 3, a plain number after."""
+    medal = _medal(rank)
+    if medal:
+        return f'<span class="medal" role="img" aria-label="rank {rank}">{medal}</span>'
+    return str(rank)
+
+
+def _render_track_chip(track: str) -> str:
+    """Small chip for a track label; omitted for the default ``all`` bucket (not a real track)."""
+    if track == _DEFAULT_TRACK:
+        return ""
+    return f'<span class="chip chip-track">{_esc(_track_label(track))}</span>'
+
+
+def _render_foundation_group_table(
+    regime: str,
+    track: str,
+    rows: list[dict[str, Any]],
+    primary_key: str,
+) -> str:
+    """Render one foundation-only mini leaderboard for a ``(regime, k_shot, track)`` group.
+
+    ``rows`` are ALREADY filtered to ``model.family == "foundation"`` (see
+    :func:`_foundation_rows`) -- baselines never enter this ranking. The top 3 get a medal (a
+    single-competitor group still awards gold -- expected with today's sparse foundation-model
+    submissions), ranks below 3rd get a plain number. Mirrors :func:`_render_group_table`'s
+    markup so the two stay visually consistent, but drops the per-metric column sprawl (one
+    primary-metric column only, since a mini-table is scoped to one task's primary metric) and
+    the family chip (every row here is foundation by construction).
+    """
+    ranked = _ranked_foundation_rows(rows)
+    body_rows: list[str] = []
+    for rank, row in ranked:
+        model = row["model"]
+        name = _esc(str(model["name"]))
+        url = model.get("url") or _method_anchor(str(model["name"]))
+        if isinstance(url, str) and url:
+            name = f'<a href="{_esc(url)}">{name}</a>'
+        value = _fmt_metric(_primary_value(row))
+        tags = (
+            f'<span class="chip chip-regime">{_esc(_regime_label(row))}</span>'
+            f"{_render_track_chip(track)}"
+            f"{_render_badge(_status(row))}"
+        )
+        body_rows.append(
+            "<tr>"
+            f'<td class="rank num">{_render_medal_rank(rank)}</td>'
+            f'<td class="model"><span class="model-name">{name}</span></td>'
+            f'<td class="tags">{tags}</td>'
+            f'<td class="num primary"><span class="metric-val">{value}</span></td>'
+            "</tr>"
+        )
+    header = (
+        "<thead><tr>"
+        '<th class="rank">#</th>'
+        '<th class="model">Model</th>'
+        '<th class="tags">Regime / Track / Status</th>'
+        f'<th class="num primary">{_esc(primary_key)}</th>'
+        "</tr></thead>"
+    )
+    return (
+        '<div class="table-scroll">'
+        f'<table class="podium-table" data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
+        f"{header}<tbody>\n{''.join(body_rows)}\n</tbody></table>"
+        "</div>"
+    )
+
+
+def _render_foundation_group(regime: str, track: str, rows: list[dict[str, Any]]) -> str:
+    """One foundation-only ``(regime, track)`` mini-leaderboard: heading + ranked table.
+
+    Mirrors :func:`_render_group`'s heading convention (regime-only when the task has no real
+    track, else "Regime · X / Track · Y") so a reader used to the per-task pages recognises
+    the same grouping here.
+    """
+    primary_key = _primary_key(rows[0])
+    table = _render_foundation_group_table(regime, track, rows, primary_key)
+    regime_label = _regime_label(rows[0])
+    if track == _DEFAULT_TRACK:
+        heading = f"Regime &middot; {_esc(regime_label)}"
+    else:
+        heading = (
+            f"Regime &middot; {_esc(regime_label)} &nbsp;/&nbsp; "
+            f"Track &middot; {_esc(_track_label(track))}"
+        )
+    return (
+        '<section class="group podium-group" '
+        f'data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
+        f'<h4 class="group-title">{heading}</h4>'
+        f"{table}"
+        "</section>"
+    )
+
+
+def _render_foundation_scatter(rows: list[dict[str, Any]]) -> str:
+    """Per-task scatter: Y = primary metric, X = a CATEGORICAL adaptation-cost axis.
+
+    ``rows`` are a task's foundation rows across EVERY (regime, track) group -- the one chart
+    on this page that intentionally spans regimes, since the tradeoff it visualises (score vs
+    how much labelled data the adaptation regime costs) only exists across regimes. X is not a
+    numeric FLOPs/compute-cost value (the schema does not track compute cost): it is the
+    ordinal position of the row's ``(regime, k_shot)`` along ``zero_shot -> few_shot`` (k
+    ascending) ``-> linear_probe -> full_finetune`` (:func:`_frugality_sort_key`), the only
+    adaptation-cost proxy this board can actually derive from the schema. Skipped entirely
+    (graceful degradation, same philosophy as the WIP empty-state card) when the task has
+    fewer than 2 foundation points -- a single point cannot show a trend and would just be a
+    misleading plot.
+    """
+    if len(rows) < 2:
+        return ""
+    primary_key = _primary_key(rows[0])
+    lower = _is_lower_better(primary_key)
+
+    # Distinct (regime, k_shot) categories actually present, in frugality order.
+    categories: dict[tuple[int, int], tuple[str, int | None]] = {}
+    for row in rows:
+        categories.setdefault(_frugality_sort_key(row), (_regime_name(row), _k_shot(row)))
+    cat_keys = sorted(categories)
+    cat_index = {key: i for i, key in enumerate(cat_keys)}
+    n_cats = len(cat_keys)
+
+    values = [_primary_value(r) for r in rows]
+    ymax = max(values) * 1.08
+    ymin = min(0.0, min(values))
+    if ymax <= ymin:
+        ymax = ymin + 1.0
+
+    width, height = 720, 320
+    pad_l, pad_r, pad_t, pad_b = 56, 16, 20, 60
+    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+    slot = plot_w / n_cats
+
+    def sy(y: float) -> float:
+        return pad_t + (ymax - y) / (ymax - ymin) * plot_h
+
+    def sx(idx: int) -> float:
+        return pad_l + slot * (idx + 0.5)
+
+    parts: list[str] = [
+        f'<svg class="plot" viewBox="0 0 {width} {height}" role="group" '
+        f'aria-label="{_esc(primary_key)} vs adaptation cost scatter" '
+        f'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
+    ]
+    for i in range(6):
+        yval = ymin + (ymax - ymin) * i / 5
+        y = sy(yval)
+        parts.append(_svg_line("grid", pad_l, y, pad_l + plot_w, y))
+        parts.append(
+            f'<text class="tick" x="{pad_l - 6:.1f}" y="{y + 3:.1f}" '
+            f'text-anchor="end">{_esc(_fmt_axis(yval))}</text>'
+        )
+    for key, idx in cat_index.items():
+        regime, k = categories[key]
+        label = _regime_label({"regime": {"name": regime, "k_shot": k}})
+        x = sx(idx)
+        label_y = pad_t + plot_h + 16
+        parts.append(
+            f'<text class="tick" x="{x:.1f}" y="{label_y:.1f}" '
+            f'text-anchor="middle">{_esc(label)}</text>'
+        )
+    parts.append(_svg_line("axis", pad_l, pad_t + plot_h, pad_l + plot_w, pad_t + plot_h))
+    parts.append(_svg_line("axis", pad_l, pad_t, pad_l, pad_t + plot_h))
+    ty = pad_t + plot_h / 2
+    parts.append(
+        f'<text class="axis-title" x="14" y="{ty:.1f}" text-anchor="middle" '
+        f'transform="rotate(-90 14 {ty:.1f})">{_esc(primary_key)}</text>'
+    )
+    parts.append(
+        f'<text class="axis-title" x="{pad_l + plot_w / 2:.1f}" y="{height - 4:.1f}" '
+        'text-anchor="middle">adaptation cost</text>'
+    )
+
+    # One marker per row; colour = stable model hue, shape cycled per distinct competitor (a
+    # non-colour channel), mirroring the curve/bar plots elsewhere on the board.
+    model_order = sorted({str(r["model"]["name"]) for r in rows})
+    shape_for_model = {name: _marker_shape(i) for i, name in enumerate(model_order)}
+    for row in rows:
+        name = str(row["model"]["name"])
+        key = _frugality_sort_key(row)
+        x = sx(cat_index[key])
+        val = _primary_value(row)
+        y = sy(val)
+        color = _model_hue(name)
+        shape = shape_for_model[name]
+        regime, k = categories[key]
+        cat_label = _regime_label({"regime": {"name": regime, "k_shot": k}})
+        title = _esc(f"{name}: {cat_label} → {_fmt_metric(val)}")
+        extra = (
+            f' class="pt" data-model="{_esc(name)}" data-x="{_esc(cat_label)}"'
+            f' data-y="{_fmt_metric(val)}" tabindex="0" role="img"'
+            f' aria-label="{title}">'
+            f"<title>{title}</title>"
+        )
+        elem = _marker_svg(shape, x, y, 4.0, color, extra)
+        close = (
+            "</rect>" if shape == "square" else ("</circle>" if shape == "circle" else "</polygon>")
+        )
+        parts.append(elem + close)
+    parts.append("</svg>")
+
+    legend_items = "".join(
+        '<span class="legend-item">'
+        '<svg class="legend-swatch" viewBox="0 0 24 10" aria-hidden="true">'
+        f"{_marker_svg(shape_for_model[name], 12, 5, 3.0, _model_hue(name), '/>')}"
+        "</svg>"
+        f"<span>{_esc(name)}</span></span>"
+        for name in model_order
+    )
+    legend = f'<div class="legend">{legend_items}</div>'
+    arrow = "&darr; lower is better" if lower else "&uarr; higher is better"
+    return (
+        '<figure class="plot-figure">'
+        f'<figcaption class="plot-title">{_esc(primary_key)} vs adaptation cost '
+        f'<span class="plot-dir">{arrow}</span></figcaption>'
+        f'{"".join(parts)}{legend}'
+        "</figure>"
+    )
+
+
+def _render_foundation_task_section(
+    task_name: str, rows: list[dict[str, Any]], declared: dict[str, DeclaredTask]
+) -> str:
+    """One task's foundation-only section: stacked ``(regime, track)`` mini-tables + a scatter.
+
+    ``rows`` are this task's ALREADY-FILTERED foundation rows (:func:`_foundation_rows`).
+    Groups are partitioned and ordered exactly like :func:`render_task_page` (same
+    :func:`_regime_track_sort_key`), so a group here never mixes two regimes nor two tracks --
+    every group renders its OWN mini-table, stacked vertically, never merged into one table.
+    """
+    groups: dict[tuple[str, int | None, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault((_regime_name(row), _k_shot(row), _track_name(row)), []).append(row)
+    ordered_keys = sorted(groups, key=_regime_track_sort_key)
+    group_sections = "".join(
+        _render_foundation_group(regime, track, groups[(regime, k, track)])
+        for (regime, k, track) in ordered_keys
+    )
+    scatter = _render_foundation_scatter(rows)
+    scatter_html = f'<div class="plots">{scatter}</div>' if scatter else ""
+    title = _task_title(task_name, declared)
+    return (
+        f'<section class="foundation-task" data-task="{_esc(task_name)}">'
+        f'<h3 class="foundation-task-title">'
+        f'<a href="{_esc(task_name)}.html">{_esc(title)}</a></h3>'
+        f"{group_sections}{scatter_html}"
+        "</section>"
+    )
+
+
+def _render_global_podium(grouped: dict[str, list[dict[str, Any]]]) -> str:
+    """Cumulative medal table across EVERY task: one row per distinct foundation result row.
+
+    DELIBERATE, EXPLICIT exception to the board's "never mix two regimes/tiers in one table"
+    rule -- scoped to THIS one summary table only, nowhere else on the site. Every individual
+    result row is its OWN competitor here: ``iqfm-base`` and ``iqfm-paper`` are NOT merged
+    into one "IQFM" identity, even though that means the same underlying model can appear as
+    two separate rows -- collapsing them would silently hide which exact regime/tier earned
+    the medal.
+
+    For each competitor, the BEST rank it achieved in a task counts once for that task (max
+    one medal per task, even when the task has several (regime, track) groups -- its best
+    result among ALL of that task's groups is what's kept); medals are then summed across
+    every task and the table sorts gold desc, then silver desc, then bronze desc.
+    """
+    best_rank_per_task: dict[str, dict[str, int]] = {}
+    for task_name, rows in grouped.items():
+        foundation_rows = _foundation_rows(rows)
+        if not foundation_rows:
+            continue
+        groups: dict[tuple[str, int | None, str], list[dict[str, Any]]] = {}
+        for row in foundation_rows:
+            groups.setdefault((_regime_name(row), _k_shot(row), _track_name(row)), []).append(row)
+        for group_rows in groups.values():
+            for rank, row in _ranked_foundation_rows(group_rows):
+                competitor = str(row["model"]["name"])
+                per_task = best_rank_per_task.setdefault(competitor, {})
+                if per_task.get(task_name) is None or rank < per_task[task_name]:
+                    per_task[task_name] = rank
+
+    tallies: list[tuple[str, int, int, int]] = []
+    for competitor, per_task in best_rank_per_task.items():
+        gold = sum(1 for r in per_task.values() if r == 1)
+        silver = sum(1 for r in per_task.values() if r == 2)
+        bronze = sum(1 for r in per_task.values() if r == 3)
+        if gold or silver or bronze:
+            tallies.append((competitor, gold, silver, bronze))
+    if not tallies:
+        return ""
+    tallies.sort(key=lambda t: (-t[1], -t[2], -t[3], t[0]))
+
+    body_rows = "".join(
+        "<tr>"
+        f'<td class="model"><span class="model-name">{_esc(name)}</span></td>'
+        f'<td class="num">{_medal(1)} &times;{gold}</td>'
+        f'<td class="num">{_medal(2)} &times;{silver}</td>'
+        f'<td class="num">{_medal(3)} &times;{bronze}</td>'
+        "</tr>"
+        for name, gold, silver, bronze in tallies
+    )
+    return (
+        '<section class="group podium-group global-podium">'
+        '<h2 class="group-title">Global cumulative podium</h2>'
+        '<p class="note">Best rank per task (max one medal per task), summed across every '
+        "task. Each result row is its OWN competitor here &mdash; e.g. <code>iqfm-base</code> "
+        "and <code>iqfm-paper</code> are counted separately, never merged &mdash; the one "
+        "table on this board that deliberately departs from the one-regime-per-table rule "
+        "used everywhere else.</p>"
+        '<div class="table-scroll"><table class="podium-table">'
+        f'<thead><tr><th class="model">Model</th><th class="num">{_medal(1)}</th>'
+        f'<th class="num">{_medal(2)}</th><th class="num">{_medal(3)}</th></tr></thead>'
+        f"<tbody>{body_rows}</tbody></table></div>"
+        "</section>"
+    )
+
+
+def render_foundation(
+    grouped: dict[str, list[dict[str, Any]]], declared: dict[str, DeclaredTask]
+) -> str:
+    """Render the standalone Foundation Models page (``foundation.html``).
+
+    Gives foundation-model (``model.family == "foundation"``) submissions dedicated
+    prominence instead of being buried inside per-task tables next to baselines. For every
+    task with >=1 foundation row: every (regime, track) group renders its OWN mini
+    leaderboard ranking ONLY foundation competitors (:func:`_render_foundation_task_section`),
+    plus a frugality scatter (:func:`_render_foundation_scatter`, skipped when the task has
+    fewer than 2 foundation points). A global cumulative podium (:func:`_render_global_podium`)
+    sums medals across every task -- the one table on this page that deliberately treats each
+    result row as its own competitor (see its docstring).
+
+    100% data-driven: no task or model name is ever hardcoded, so the page empties/fills
+    itself automatically as ``leaderboard/results/**/*.json`` changes, exactly like the rest
+    of the generator. Never touches :func:`render_task_page`'s own rendering, which stays
+    byte-identical to before.
+    """
+    intro = (
+        '<p class="note">Dedicated leaderboards for foundation-model submissions '
+        '(<code>model.family == "foundation"</code>), ranked separately from the baselines. '
+        "Each task's (regime, track) groups are ranked independently &mdash; a mini-table "
+        "never mixes two regimes nor two tracks (same protocol invariant as the rest of the "
+        "board).</p>"
+    )
+
+    task_sections_list: list[str] = []
+    for task_name in sorted(grouped, key=_task_sort_key):
+        foundation_rows = _foundation_rows(grouped[task_name])
+        if not foundation_rows:
+            continue
+        task_sections_list.append(
+            _render_foundation_task_section(task_name, foundation_rows, declared)
+        )
+
+    if not task_sections_list:
+        body = (
+            '<section class="task guide">'
+            '<h1 class="task-title">Foundation Models</h1>'
+            f"{intro}"
+            '<div class="wip-card"><div class="empty-state-card">'
+            '<p class="wip-kicker">Work in progress</p>'
+            f"{_EMPTY_STATE_SVG}"
+            '<p class="empty-state-heading">No foundation-model results yet</p>'
+            '<p class="note">This page fills itself in automatically once a foundation-model '
+            "result is submitted.</p>"
+            "</div></div>"
+            "</section>"
+        )
+        return _page("Foundation Models — RF-Benchmark-Hub", body, current=_FOUNDATION_SLUG)
+
+    podium = _render_global_podium(grouped)
+    body = (
+        '<section class="task guide">'
+        '<h1 class="task-title">Foundation Models</h1>'
+        f"{intro}"
+        f"{podium}"
+        f"{''.join(task_sections_list)}"
+        "</section>"
+    )
+    return _page("Foundation Models — RF-Benchmark-Hub", body, current=_FOUNDATION_SLUG)
+
+
 def render_guide() -> str:
     """Render the standalone Guide page (``guide.html``) from the shared ``_GUIDE`` content.
 
@@ -2694,13 +3153,16 @@ def _top_nav(current: str | None) -> str:
     """
     methods_active = current == _METHODS_SLUG
     guide_active = current == _GUIDE_SLUG
+    foundation_active = current == _FOUNDATION_SLUG
     active = "top-tab top-tab-active"
-    tasks_class = "top-tab" if (guide_active or methods_active) else active
+    tasks_class = "top-tab" if (guide_active or methods_active or foundation_active) else active
+    foundation_class = active if foundation_active else "top-tab"
     guide_class = active if guide_active else "top-tab"
     methods_class = active if methods_active else "top-tab"
     return (
         '<div class="top-tabs">'
         f'<a class="{tasks_class}" href="index.html">Tasks</a>'
+        f'<a class="{foundation_class}" href="{_FOUNDATION_SLUG}.html">Foundation</a>'
         f'<a class="{guide_class}" href="{_GUIDE_SLUG}.html">Guide</a>'
         f'<a class="{methods_class}" href="{_METHODS_SLUG}.html">Methods</a>'
         '<a class="top-tab" target="_blank" rel="noopener" '
@@ -3429,6 +3891,21 @@ g.series.series-hi .pt { stroke: var(--fg); stroke-width: 1; }
 }
 .home-sort select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
+/* Foundation Models page: per-task foundation-only podiums + the global cumulative table. */
+.chip-regime {
+  background: var(--surface-2); color: var(--muted); border-color: var(--line-strong);
+}
+.chip-track {
+  background: var(--accent-soft); color: var(--accent); border-color: var(--accent);
+}
+td.tags { display: flex; flex-wrap: wrap; gap: 0.3rem 0.4rem; align-items: center; }
+td.tags > *:first-child { margin-left: 0; }
+.medal { font-size: 1.1rem; }
+.foundation-task { margin: 0 0 2.5rem; }
+.foundation-task-title { font-size: 1.15rem; margin: 0 0 0.75rem; }
+.foundation-task-title a { color: var(--fg); }
+.global-podium { margin-bottom: 2rem; }
+
 /* Respect a user's reduced-motion preference: neutralise the (small) hover/tooltip
    transitions -- WCAG 2.3.3. Focus rings and layout are unaffected. */
 @media (prefers-reduced-motion: reduce) {
@@ -3758,6 +4235,9 @@ def build_site(results_dir: str | Path, out_dir: str | Path) -> Path:
     # Shared educational Guide + Methods pages (linked from the nav on every page).
     (out_path / f"{_GUIDE_SLUG}.html").write_text(render_guide(), encoding="utf-8")
     (out_path / f"{_METHODS_SLUG}.html").write_text(render_methods_page(), encoding="utf-8")
+    (out_path / f"{_FOUNDATION_SLUG}.html").write_text(
+        render_foundation(grouped, declared), encoding="utf-8"
+    )
 
     index_path = out_path / "index.html"
     index_path.write_text(render_index(grouped, declared), encoding="utf-8")

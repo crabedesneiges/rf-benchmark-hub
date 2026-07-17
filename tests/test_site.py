@@ -1907,3 +1907,353 @@ def test_home_search_and_pills_have_a_focus_ring() -> None:
         ".filter-pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }"
         in css
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# Foundation Models page -- dedicated foundation-only podiums (leaderboard/site/generate.py
+# render_foundation) + the global cumulative medal table. All rows are 100% synthetic/in-tree;
+# no task or model name used below is hardcoded anywhere in the generator.
+# --------------------------------------------------------------------------------------------------
+def _foundation_row(
+    result_id: str,
+    task: str,
+    model_name: str,
+    regime: str,
+    value: float,
+    *,
+    status: str = "self_reported",
+    k_shot: int | None = None,
+    track: str | None = None,
+    primary: str = "accuracy_overall",
+    url: str | None = None,
+) -> dict[str, Any]:
+    """Build a schema-valid FOUNDATION-family (``model.family == "foundation"``) result row.
+
+    ``task`` must be one of the schema's registered task ids (``amc``, ``sei``,
+    ``wideband_detection``, ``spectrum_sensing``, ``interference_id``, ``protocol_tech_id``,
+    ``snr_estimation``) -- ``task.name`` is a locked enum, not free-form.
+    """
+    regime_block: dict[str, Any] = {"name": regime}
+    if k_shot is not None:
+        regime_block["k_shot"] = k_shot
+    model: dict[str, Any] = {"name": model_name, "family": "foundation", "pretrained": True}
+    if url is not None:
+        model["url"] = url
+    split_slug = task.replace("_", "-")  # canonical_split_id forbids underscores.
+    split: dict[str, Any] = {
+        "canonical_split_id": f"{split_slug}-synth-8010-seed42-v1",
+        "name": "test",
+        "seed": 42,
+        "checksum": "sha256:" + "2" * 64,
+    }
+    if track is not None:
+        split["track"] = track
+    return {
+        "schema_version": "1.0.0",
+        "result_id": result_id,
+        "task": {"name": task, "version": "v1"},
+        "model": model,
+        "regime": regime_block,
+        "dataset": {"name": f"{task}_synth"},
+        "split": split,
+        "metrics": {"primary": primary, "values": {primary: value}},
+        "verification": {"status": status},
+    }
+
+
+def test_regime_track_sort_key_orders_regime_then_kshot_then_track() -> None:
+    """The hoisted ``_regime_track_sort_key`` orders (regime, k_shot, track) exactly as
+    ``render_task_page`` always has -- D5 regime order, ``k_shot`` ascending, then track (default
+    ``all`` bucket first) -- proving the Foundation page's grouping matches the task pages'."""
+    keys = [
+        ("full_finetune", None, "all"),
+        ("from_scratch", None, "all"),
+        ("few_shot", 50, "all"),
+        ("few_shot", 5, "all"),
+        ("linear_probe", None, "z_track"),
+        ("linear_probe", None, "all"),
+    ]
+    ordered = sorted(keys, key=generate._regime_track_sort_key)
+    assert ordered == [
+        ("from_scratch", None, "all"),
+        ("full_finetune", None, "all"),
+        ("linear_probe", None, "all"),
+        ("linear_probe", None, "z_track"),
+        ("few_shot", 5, "all"),
+        ("few_shot", 50, "all"),
+    ]
+
+
+def test_foundation_page_linked_in_nav_and_tab_active_only_there(tmp_path: Path) -> None:
+    """Every page's top nav links foundation.html; only foundation.html marks that tab active."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    for name in ("index.html", "amc.html", "spectrum_sensing.html", "guide.html"):
+        page = (out / name).read_text(encoding="utf-8")
+        assert 'href="foundation.html">Foundation</a>' in page
+        assert 'top-tab top-tab-active" href="foundation.html">Foundation</a>' not in page
+
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+    assert 'top-tab top-tab-active" href="foundation.html">Foundation</a>' in foundation_html
+    assert 'top-tab top-tab-active" href="index.html">Tasks</a>' not in foundation_html
+
+
+def test_foundation_page_empty_state_when_no_foundation_rows(tmp_path: Path) -> None:
+    """With zero ``model.family == "foundation"`` rows anywhere, foundation.html shows the WIP
+    card instead of an empty/broken table -- same graceful-degradation philosophy as a task's
+    own WIP page."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)  # baselines only, no foundation rows.
+    generate.build_site(results, out)
+
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+    assert "No foundation-model results yet" in foundation_html
+    assert "Work in progress" in foundation_html
+    assert 'class="podium-table"' not in foundation_html
+
+
+def test_foundation_ranking_excludes_baselines_from_medals(tmp_path: Path) -> None:
+    """A baseline row scoring higher than every foundation row must not win the Foundation
+    page's medal, nor even appear on the page: ranking is scoped to ``family == "foundation"``."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "baseline.json",
+        _amc_row("row-base", "mcldnn", "linear_probe", 0.99, "verified"),
+    )
+    _write(
+        results / "amc" / "f1.json",
+        _foundation_row("row-f1", "amc", "iqfm-base", "linear_probe", 0.80),
+    )
+    _write(
+        results / "amc" / "f2.json",
+        _foundation_row(
+            "row-f2", "amc", "wirelessjepa-paper", "linear_probe", 0.75,
+            status="from_paper_uncertain",
+        ),
+    )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+
+    assert "mcldnn" not in foundation_html
+    section = foundation_html[foundation_html.index('data-task="amc"') :]
+    tbody = section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    trs = re.findall(r"<tr>.*?</tr>", tbody, re.S)
+    assert len(trs) == 2
+    assert "\U0001f947" in trs[0] and "iqfm-base" in trs[0]
+    assert "\U0001f948" in trs[1] and "wirelessjepa-paper" in trs[1]
+
+
+def test_single_competitor_group_gets_gold_and_beyond_third_has_no_medal(tmp_path: Path) -> None:
+    """A (regime, track) group with exactly one foundation competitor still awards gold (expected
+    given today's sparse submissions); a 4th-place competitor in a 4-way group gets no medal."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "sei" / "solo.json",
+        _foundation_row("row-solo", "sei", "iqfm-base", "full_finetune", 0.5),
+    )
+    for i, (name, val) in enumerate([("m1", 0.9), ("m2", 0.8), ("m3", 0.7), ("m4", 0.6)]):
+        _write(
+            results / "wideband_detection" / f"r{i}.json",
+            _foundation_row(f"row-r{i}", "wideband_detection", name, "full_finetune", val),
+        )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+
+    # TASK_ORDER puts "sei" before "wideband_detection" -> sei's section comes first.
+    sei_start = foundation_html.index('data-task="sei"')
+    wd_start = foundation_html.index('data-task="wideband_detection"')
+    sei_section = foundation_html[sei_start:wd_start]
+    solo_tbody = sei_section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    assert "\U0001f947" in solo_tbody  # sole competitor in its group still gets gold.
+
+    wd_section = foundation_html[wd_start:]
+    tbody = wd_section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    trs = re.findall(r"<tr>.*?</tr>", tbody, re.S)
+    assert len(trs) == 4
+    assert "\U0001f947" in trs[0]
+    assert "\U0001f948" in trs[1]
+    assert "\U0001f949" in trs[2]
+    assert "\U0001f947" not in trs[3] and "\U0001f948" not in trs[3] and "\U0001f949" not in trs[3]
+    assert '<td class="rank num">4</td>' in trs[3]
+
+
+def test_global_podium_caps_one_medal_per_task_across_groups(tmp_path: Path) -> None:
+    """Global cumulative podium: best rank per task, even across multiple (regime, track)
+    groups within that task -- a competitor winning gold in TWO tracks of the SAME task is
+    credited only ONE gold for that task, not two."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "a.json",
+        _foundation_row("row-a", "amc", "iqfm-base", "full_finetune", 0.9, track="track_a"),
+    )
+    _write(
+        results / "amc" / "b.json",
+        _foundation_row("row-b", "amc", "iqfm-base", "full_finetune", 0.7, track="track_b"),
+    )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+
+    podium_start = foundation_html.index('global-podium')
+    podium_end = foundation_html.index("</section>", podium_start)
+    podium = foundation_html[podium_start:podium_end]
+    trs = re.findall(r"<tr>.*?</tr>", podium.split("<tbody>", 1)[1], re.S)
+    assert len(trs) == 1
+    assert "iqfm-base" in trs[0]
+    assert "&times;1" in trs[0]  # exactly ONE gold credited for the task, not two.
+
+
+def test_global_podium_treats_each_result_row_as_its_own_competitor(tmp_path: Path) -> None:
+    """``iqfm-base`` and ``iqfm-paper`` are two distinct result rows/competitors on the global
+    podium -- the ONE table on this board that deliberately departs from the "never mix two
+    regimes/tiers in one table" rule enforced everywhere else. Sorted gold desc, then silver
+    desc, then bronze desc, with name as the final deterministic tiebreak."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "base.json",
+        _foundation_row("row-1", "amc", "iqfm-base", "linear_probe", 0.9),
+    )
+    _write(
+        results / "amc" / "paper.json",
+        _foundation_row("row-2", "amc", "iqfm-paper", "linear_probe", 0.8, status="from_paper"),
+    )
+    _write(
+        results / "sei" / "base.json",
+        _foundation_row("row-3", "sei", "iqfm-base", "linear_probe", 0.5),
+    )
+    _write(
+        results / "sei" / "paper.json",
+        _foundation_row("row-4", "sei", "iqfm-paper", "linear_probe", 0.6, status="from_paper"),
+    )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+
+    podium_start = foundation_html.index('global-podium')
+    podium_end = foundation_html.index("</section>", podium_start)
+    podium = foundation_html[podium_start:podium_end]
+    trs = re.findall(r"<tr>.*?</tr>", podium.split("<tbody>", 1)[1], re.S)
+    assert len(trs) == 2
+    # Both distinct competitors appear as their OWN row (never merged into one "iqfm" identity).
+    assert '<span class="model-name">iqfm-base</span>' in trs[0] + trs[1]
+    assert '<span class="model-name">iqfm-paper</span>' in trs[0] + trs[1]
+    # Both tally 1 gold + 1 silver (the two tasks swap the winner).
+    for tr in trs:
+        assert "&times;1" in tr
+    assert "iqfm-base" in trs[0]  # exact tie on medal counts -> alphabetical tiebreak.
+
+
+def test_scatter_skipped_for_single_point_task(tmp_path: Path) -> None:
+    """A task with fewer than 2 total foundation points renders no scatter plot at all (same
+    graceful-degradation philosophy as the WIP cards -- no empty/misleading graph)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "spectrum_sensing" / "a.json",
+        _foundation_row("row-a", "spectrum_sensing", "iqfm-base", "linear_probe", 0.8),
+    )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+    assert 'class="plot"' not in foundation_html
+
+
+def test_scatter_orders_adaptation_cost_axis_and_subsorts_few_shot_by_k(tmp_path: Path) -> None:
+    """The frugality x-axis orders few_shot (sub-sorted by k ascending) -> linear_probe ->
+    full_finetune -- a categorical adaptation-cost ordering, never an invented numeric FLOPs
+    axis the schema doesn't track."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    for i, (regime, k) in enumerate(
+        [("full_finetune", None), ("linear_probe", None), ("few_shot", 50), ("few_shot", 5)]
+    ):
+        _write(
+            results / "snr_estimation" / f"r{i}.json",
+            _foundation_row(
+                f"row-{i}", "snr_estimation", "wirelessjepa-paper", regime, 0.5 + i * 0.05, k_shot=k
+            ),
+        )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+
+    section_start = foundation_html.index('data-task="snr_estimation"')
+    svg_start = foundation_html.index('class="plot"', section_start)
+    svg_end = foundation_html.index("</svg>", svg_start)
+    svg = foundation_html[svg_start:svg_end]
+
+    pos_k5 = svg.index("few shot (k=5)")
+    pos_k50 = svg.index("few shot (k=50)")
+    pos_linear = svg.index("linear probe")
+    pos_full = svg.index("full finetune")
+    assert pos_k5 < pos_k50 < pos_linear < pos_full
+
+
+def test_foundation_rows_reuse_existing_verification_badge_and_show_regime_track_chips(
+    tmp_path: Path,
+) -> None:
+    """Each foundation row shows a regime chip, a track chip (when non-default), and the SAME
+    verification-tier badge markup used on the per-task pages (reused, never reimplemented)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "protocol_tech_id" / "a.json",
+        _foundation_row(
+            "row-a",
+            "protocol_tech_id",
+            "iqfm-base",
+            "few_shot",
+            0.8,
+            k_shot=10,
+            status="from_paper_uncertain",
+            track="cross_room",
+        ),
+    )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+
+    assert generate._render_badge("from_paper_uncertain") in foundation_html
+    assert 'class="chip chip-regime"' in foundation_html
+    assert 'class="chip chip-track"' in foundation_html
+
+
+def test_foundation_page_has_no_inline_script(tmp_path: Path) -> None:
+    """foundation.html is zero-JS, like guide.html/methods.html (native <title> tooltips only,
+    no legend-toggle/sort/filter script the way full task pages carry)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    _write(
+        results / "amc" / "found.json",
+        _foundation_row("row-f", "amc", "iqfm-base", "linear_probe", 0.8),
+    )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+    assert "<script>" not in foundation_html
+
+
+def test_render_foundation_is_self_contained() -> None:
+    """render_foundation produces a standalone HTML page sharing the site-wide nav (mirrors
+    test_render_guide_is_self_contained's direct-call pattern)."""
+    declared = generate.load_manifest()
+    grouped: dict[str, list[dict[str, Any]]] = {
+        "amc": [_foundation_row("row-a", "amc", "iqfm-base", "linear_probe", 0.8)]
+    }
+    html_text = generate.render_foundation(grouped, declared)
+    assert "<!DOCTYPE html>" in html_text
+    assert "Foundation Models — RF-Benchmark-Hub" in html_text
+    assert 'href="index.html">Tasks</a>' in html_text
+    assert 'href="foundation.html">Foundation</a>' in html_text
+
+
+def test_foundation_page_css_present() -> None:
+    """The Foundation page's chip/medal/podium CSS is emitted once in the shared stylesheet."""
+    css = generate.render_styles()
+    assert ".chip-regime {" in css
+    assert ".chip-track {" in css
+    assert ".medal { font-size: 1.1rem; }" in css
+    assert ".global-podium { margin-bottom: 2rem; }" in css

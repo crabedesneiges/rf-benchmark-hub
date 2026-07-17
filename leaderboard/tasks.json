@@ -161,11 +161,11 @@
     {
       "id": "protocol_tech_id",
       "title": "Protocol / technology identification",
-      "status": "wip",
+      "status": "implemented",
       "priority": "P2",
       "scope": "terrestrial_iq",
-      "blurb": "Recognise the WiFi 802.11 standard (ax/b/n/g) from raw IQ (T-PRIME). Task added; baseline pending cluster training.",
-      "description": "Recognize the WiFi 802.11 standard (b/g/n/ax) from raw IQ, identifying the protocol/technology rather than the modulation. It matters for spectrum inventory and standard-aware coexistence. Task added; baseline pending cluster training.",
+      "blurb": "Recognise the WiFi 802.11 standard (b/g/n/ax) from raw IQ (T-PRIME). Baseline: tprime transformer.",
+      "description": "Recognize the WiFi 802.11 standard (b/g/n/ax) from raw IQ, identifying the protocol/technology rather than the modulation. It matters for spectrum inventory and standard-aware coexistence.",
       "dataset": {
         "name": "tprime-wifi4 (T-PRIME)",
         "source": "Genesys Lab / Northeastern (arXiv:2401.04837; github.com/genesys-neu/t-prime; Northeastern DRS neu:h989s847q)",

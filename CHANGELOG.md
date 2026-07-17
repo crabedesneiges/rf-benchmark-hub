@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — 1re colonne réelle `protocol_tech_id` : baseline `tprime` (WiFi 802.11 b/g/n/ax)
+
+Entraînement GPU from_scratch (seed 42, variant SM, 50 ep, GB200, ~24 min) sur T-PRIME DS 3.0
+(`tprime_wifi4` : 6579 captures OTA multi-salles, split par enregistrement, ~168k fenêtres train,
+21024 fenêtres test) : **`accuracy_overall = 0.710`** (macro_f1 0.681, IC bootstrap
+[0.703, 0.716]), soit **~2,8× le hasard** (25 %, 4 classes) — pas de collapse, la normalisation
+d'entrée par fenêtre a conditionné l'échelle IQ (~0.07). Chiffre honnête, sous le ~96 % du papier
+(leur protocole : fenêtres chevauchantes + majority-vote intra-capture ; ici per-fenêtre, test
+cross-salles). `self_reported`. Tâche promue `implemented`. Vérification seed-45 (flip
+`verified`) reste à faire.
+
 ### Fixed — data path réel T-PRIME (`protocol_tech_id`) : nesting par salle + fenêtrage anti-fuite
 
 Le loader `tprime_wifi4` ne pouvait pas ingérer les vraies captures DS 3.0 : il cherchait

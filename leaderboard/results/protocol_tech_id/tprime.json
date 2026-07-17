@@ -1,0 +1,62 @@
+{
+  "dataset": {
+    "name": "tprime_wifi4"
+  },
+  "environment": {
+    "framework": "torch 2.12.1+cu130",
+    "hardware": "1x NVIDIA GB200",
+    "python_version": "3.11.15",
+    "rfbench_version": "0.1.0",
+    "seed": 42
+  },
+  "eval": {
+    "batch_size": 256,
+    "conditions": {},
+    "n_samples": 21024
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "uncertainty": {
+      "accuracy_overall": {
+        "ci_high": 0.7156630517503805,
+        "ci_low": 0.703337851978691,
+        "confidence": 0.95,
+        "method": "bootstrap_percentile",
+        "n_resamples": 1000
+      },
+      "macro_f1": {
+        "ci_high": 0.6868951810974401,
+        "ci_low": 0.6757058052633381,
+        "confidence": 0.95,
+        "method": "bootstrap_percentile",
+        "n_resamples": 1000
+      }
+    },
+    "values": {
+      "accuracy_overall": 0.709855403348554,
+      "macro_f1": 0.6814993807858973
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "n_params": 202756,
+    "name": "tprime"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.2.0",
+  "split": {
+    "canonical_split_id": "proto-tprime-wifi4-8010-seed42-v1",
+    "checksum": "sha256:f9676c7a206934c88e3982ae16ea7abbcb8017b4ef73d54a82787dbebc269f1c",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "protocol_tech_id",
+    "version": "v1"
+  },
+  "verification": {
+    "status": "self_reported"
+  }
+}

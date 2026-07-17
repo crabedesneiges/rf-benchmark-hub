@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — ligne `iqfm-base` `linear_probe` retirée du board AMC
+
+`leaderboard/results/amc/iqfm-base-linear_probe.json` (48.87%, `self_reported`) supprimée : ce score
+n'a pas de valeur de comparaison honnête tant que le retrain in-repo n'est pas re-mené proprement
+(cf. le statut « PAUSED » déjà documenté dans `rfbench/models/foundation/iqfm.py`). Docstring corrigé
+en conséquence (ne prétend plus qu'une ligne de board existe pour ce wrapper) ; aucun changement sur
+`wireless-jepa` (pas de ligne de board pour ce modèle non plus, déjà à jour).
+
 ### Added — 3 lignes littérature `from_paper`/`from_paper_uncertain` (amc, sei, protocol_tech_id)
 
 Audit littérature ciblé sur 7 candidats à travers les tâches implémentées, doctrine Tier 3

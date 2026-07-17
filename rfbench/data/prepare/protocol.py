@@ -32,6 +32,7 @@ inside the loader with a clear ``pip install rfbench[data]`` error.
 
 from __future__ import annotations
 
+import random
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
@@ -40,15 +41,34 @@ from rfbench.core.manifest import DatasetManifest
 from rfbench.core.splits import SplitManifest
 from rfbench.data.prepare._common import (
     prepare_from_labels,
+    prepare_from_official,
     resolve_cache_dir,
 )
 
 #: The protocol-tech-ID datasets this module prepares.
 ProtocolDataset = Literal["tprime_wifi4"]
 
-#: Canonical split id per dataset (baked ratios+seed; changing either bumps task version).
+#: Canonical split id per dataset (baked ratios+seed; changing either bumps task version). This is
+#: the WITHIN-DISTRIBUTION track (``closed_set``): recordings from every room are mixed 80/10/10.
 CANONICAL_SPLIT_IDS: dict[str, str] = {
     "tprime_wifi4": "proto-tprime-wifi4-8010-seed42-v1",
+}
+
+#: The physical LOCATIONS (rooms) of the T-PRIME OTA single-protocol collection, used for the
+#: ``cross_room`` track (the paper's scenario-split: leave-one-location-out). A location groups its
+#: per-day sub-collections (e.g. ``RM_573C_1``/``RM_573C_2`` -> ``RM_573C``). Power-scaling and
+#: ``_z``/upsampled/noise variants are not plain ``802.11{b,g,n,ax}`` dirs, so they are excluded by
+#: the recording enumeration and never enter any split.
+CROSSROOM_LOCATIONS: tuple[str, ...] = ("RM_142", "RM_572C", "RM_573C")
+
+#: Per-held-out-location canonical split id for the ``cross_room`` track. Each is a leave-one-
+#: location-out grouped split: the held-out location is the TEST set in full (never seen in train),
+#: the other locations are train + a class-stratified val carve. The board's ``cross_room`` number
+#: is the cross-validation mean over these folds (paper's scenario-split), never mixed with the
+#: within-distribution ``closed_set`` track.
+CROSSROOM_SPLIT_IDS: dict[str, str] = {
+    loc: f"proto-tprime-wifi4-crossroom-heldout-{loc.split('_')[1].lower()}-v1"
+    for loc in CROSSROOM_LOCATIONS
 }
 
 #: Official source URL recorded in the dataset's manifest (provenance, never redistributed).
@@ -241,6 +261,104 @@ def _window_offsets(n_samples: int, window_len: int, max_windows: int) -> list[i
     return [(j * last) // (m - 1) for j in range(m)]
 
 
+def _recording_location(path: Path) -> str:
+    """Return the LOCATION (room) of a capture from its path.
+
+    A capture lives at ``<root>/RM_<id>_<day>/<class>/<file>`` so its per-day sub-collection dir is
+    ``path.parents[1]`` (e.g. ``RM_573C_2``); the location groups the per-day sub-collections to the
+    ``RM_<id>`` prefix (``RM_573C``). Falls back to the sub-collection name if it lacks that shape.
+    """
+    room = path.parents[1].name  # e.g. RM_573C_2
+    parts = room.split("_")
+    return "_".join(parts[:2]) if len(parts) >= 2 else room
+
+
+def _iter_recording_locations(ds_dir: Path) -> list[str]:
+    """One LOCATION per recording, in the canonical recording order (aligned with the labels)."""
+    return [_recording_location(path) for path, _cls in _iter_recording_files(ds_dir)]
+
+
+def load_protocol_locations(
+    dataset: Literal["tprime_wifi4"] = "tprime_wifi4",
+    cache: str | Path | None = None,
+) -> list[str]:
+    """Extract one LOCATION per recording, aligned 1:1 with :func:`load_protocol_labels`.
+
+    Same directory-listing-only enumeration (no numpy) and same canonical order, so a recording's
+    label and its location line up by index -- what :func:`prepare_crossroom` needs to hold whole
+    locations out. Never called in unit tests (needs the real cache).
+    """
+    ds_dir = _resolve_dataset_root(resolve_cache_dir(cache))
+    if ds_dir is None:
+        raise FileNotFoundError(
+            f"tprime_wifi4 not found under {resolve_cache_dir(cache) / 'tprime_wifi4'}; run the "
+            "download step first."
+        )
+    return _iter_recording_locations(ds_dir)
+
+
+def prepare_crossroom(
+    held_out_location: str,
+    *,
+    out_dir: str | Path,
+    labels: Sequence[str],
+    locations: Sequence[str],
+    source_checksums: dict[str, str] | None = None,
+    seed: int = 42,
+    val_fraction: float = 0.1,
+) -> tuple[SplitManifest, DatasetManifest]:
+    """Build the leave-one-location-out ``cross_room`` split holding out ``held_out_location``.
+
+    Reproduces the T-PRIME paper's scenario-split: the held-out location is the TEST set in full
+    (never seen in training), the OTHER locations are the training pool, from which a
+    class-stratified ``val_fraction`` val set is carved (deterministically, seeded) to drive the
+    early-stopping / LR schedule. Whole locations go to one partition, so no recording -- and hence
+    no window -- leaks across the train/test location boundary. ``labels`` and ``locations`` are the
+    per-recording class-name / location lists (aligned; from :func:`load_protocol_labels` /
+    :func:`load_protocol_locations`), so this stays numpy-free and unit-testable on fixtures.
+    """
+    if held_out_location not in CROSSROOM_SPLIT_IDS:
+        raise ValueError(
+            f"unknown held-out location {held_out_location!r}; expected one of "
+            f"{sorted(CROSSROOM_SPLIT_IDS)}"
+        )
+    if len(labels) != len(locations):
+        raise ValueError(
+            f"labels ({len(labels)}) and locations ({len(locations)}) must be the same length"
+        )
+    test = [i for i, loc in enumerate(locations) if loc == held_out_location]
+    rest = [i for i, loc in enumerate(locations) if loc != held_out_location]
+    if not test:
+        raise ValueError(f"no recordings in held-out location {held_out_location!r}")
+    if not rest:
+        raise ValueError(f"held-out location {held_out_location!r} leaves no training data")
+
+    # Deterministic class-stratified val carve from the TRAINING locations (never from the held-out
+    # test location), so val monitors in-distribution generalisation while test stays fully unseen.
+    rng = random.Random(seed)
+    by_class: dict[str, list[int]] = {}
+    for i in rest:
+        by_class.setdefault(labels[i], []).append(i)
+    val: list[int] = []
+    for cls in sorted(by_class):
+        idxs = list(by_class[cls])
+        rng.shuffle(idxs)
+        k = max(1, round(len(idxs) * val_fraction))
+        val.extend(idxs[:k])
+    val_set = set(val)
+    train = [i for i in rest if i not in val_set]
+    official = {"train": sorted(train), "val": sorted(val), "test": sorted(test)}
+    return prepare_from_official(
+        dataset="tprime_wifi4",
+        split_id=CROSSROOM_SPLIT_IDS[held_out_location],
+        official=official,
+        source_url=SOURCE_URLS["tprime_wifi4"],
+        out_dir=out_dir,
+        source_checksums=source_checksums,
+        seed=seed,
+    )
+
+
 def _resolve_dataset_root(cache_dir: Path) -> Path | None:
     """Return the directory that holds the per-protocol capture folders (or ``None``).
 
@@ -279,10 +397,14 @@ def _iter_class_files(ds_dir: Path, dir_candidates: tuple[str, ...]) -> list[Pat
 __all__ = [
     "ProtocolDataset",
     "CANONICAL_SPLIT_IDS",
+    "CROSSROOM_LOCATIONS",
+    "CROSSROOM_SPLIT_IDS",
     "SOURCE_URLS",
     "PROTOCOL_CLASSES",
     "TPRIME_WINDOW_LEN",
     "WINDOWS_PER_RECORDING",
     "prepare_protocol",
+    "prepare_crossroom",
     "load_protocol_labels",
+    "load_protocol_locations",
 ]

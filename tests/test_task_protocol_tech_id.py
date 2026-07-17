@@ -384,3 +384,60 @@ def test_read_windows_tiles_a_real_capture(tmp_path: Path) -> None:
     assert len(short_windows) == 1
     assert short_windows[0].shape == (2, win)
     assert np.allclose(short_windows[0][:, 3:], 0.0)  # zero-padded tail beyond the 3 real samples
+
+
+# --- cross_room track: leave-one-location-out grouped split (pure-stdlib guards) ---------------
+
+
+def test_recording_location_groups_per_day_subcollections() -> None:
+    """A capture's location is the RM_<id> prefix of its per-day sub-collection dir."""
+    from rfbench.data.prepare.protocol import _recording_location
+
+    assert _recording_location(Path("/x/tprime_wifi4/RM_573C_2/802.11b/f.bin")) == "RM_573C"
+    assert _recording_location(Path("/x/tprime_wifi4/RM_142_1/802.11ax/g.bin")) == "RM_142"
+    assert _recording_location(Path("/x/tprime_wifi4/RM_572C_2/802.11n/h.bin")) == "RM_572C"
+
+
+def test_crossroom_split_is_leave_one_location_out_and_leak_free(tmp_path: Path) -> None:
+    """The cross_room split holds a whole LOCATION out as test -> no per-location leakage."""
+    from rfbench.data.prepare.protocol import (
+        CROSSROOM_LOCATIONS,
+        CROSSROOM_SPLIT_IDS,
+        PROTOCOL_CLASSES,
+        prepare_crossroom,
+    )
+
+    labels: list[str] = []
+    locations: list[str] = []
+    for loc in CROSSROOM_LOCATIONS:
+        for cls in PROTOCOL_CLASSES:
+            for _ in range(10):  # 10 recordings per (location, class)
+                labels.append(cls)
+                locations.append(loc)
+
+    held = "RM_573C"
+    split, _manifest = prepare_crossroom(
+        held, out_dir=tmp_path, labels=labels, locations=locations, seed=42
+    )
+    train = set(split.indices["train"])
+    val = set(split.indices["val"])
+    test = set(split.indices["test"])
+
+    # test == exactly the held-out location's recordings (the whole location, unseen in training).
+    assert test == {i for i, loc in enumerate(locations) if loc == held}
+    # disjoint + full coverage.
+    assert train.isdisjoint(val) and train.isdisjoint(test) and val.isdisjoint(test)
+    assert train | val | test == set(range(len(labels)))
+    # NO train/val recording comes from the held-out location -> leak-free by location.
+    assert all(locations[i] != held for i in train | val)
+    # every class is represented in the held-out test location.
+    assert {labels[i] for i in test} == set(PROTOCOL_CLASSES)
+    # the versioned split index was written under its per-held-out-location canonical id.
+    idx_path = tmp_path / "splits" / "tprime_wifi4" / f"{CROSSROOM_SPLIT_IDS[held]}.idx.json"
+    assert idx_path.is_file()
+
+    # deterministic: same seed -> identical partition.
+    split2, _m2 = prepare_crossroom(
+        held, out_dir=tmp_path / "b", labels=labels, locations=locations, seed=42
+    )
+    assert split2.indices == split.indices

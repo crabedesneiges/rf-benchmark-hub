@@ -1,0 +1,10 @@
+{
+  "canonical_split_id": "proto-tprime-wifi4-crossroom-heldout-573c-v1",
+  "created_at": "2026-07-17T12:21:54Z",
+  "dataset": "tprime_wifi4",
+  "n_items": 6579,
+  "seed": 42,
+  "source_checksums": {},
+  "source_url": "https://repository.library.northeastern.edu/files/neu:h989s8519",
+  "split_checksum": "sha256:ef4e82346f8982c574008233538929f5093e1c97b13ba248c5626f86b33d768d"
+}

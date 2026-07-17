@@ -164,16 +164,39 @@ class TPrimeNet(nn.Module):
         return cast("Tensor", self.classifier(self.features(x)))
 
 
+def _unit_variance_normalize(x: Tensor, *, eps: float = 1e-8) -> Tensor:
+    """Standardise each ``(2, N)`` IQ window to zero mean and unit variance (per-sample).
+
+    T-PRIME has NO learned input embedding (the raw IQ slices ARE the tokens) and no input
+    scaling, and the DS 3.0 over-the-air captures come in at a small raw scale (I/Q std on the
+    order of ~7e-2, |val| < ~0.2 in the extracted ``.bin``). Feeding a near-zero-scale signal
+    straight into the token space -- summed with the learned positional encoding -- starts
+    training from a poorly-conditioned scale, the same failure mode that collapsed the CLDNN /
+    ResNet AMC baselines (see ``cldnn._unit_variance_normalize`` /
+    ``resnet_amc._unit_variance_normalize``, the transform this mirrors). Standardising each
+    window over BOTH channels and the whole time axis (dims ``(1, 2)``) removes the absolute
+    capture scale (which carries no protocol information) while preserving the I/Q geometry that
+    does. ``eps`` guards an all-constant (zero-variance) window. Matches the T-PRIME reference's
+    per-window normalisation. Duplicated here (not imported from a sibling baseline) so this
+    module stays standalone, the same rationale as :func:`_iq_to_tensor`.
+    """
+    mean = x.mean(dim=(1, 2), keepdim=True)
+    std = x.std(dim=(1, 2), keepdim=True, unbiased=False)
+    return cast("Tensor", (x - mean) / (std + eps))
+
+
 def _iq_to_tensor(iq_batch: object, device: torch.device, sequence_len: int) -> Tensor:
-    """Stack the collated ``x["iq"]`` list into a ``(B, 2, sequence_len)`` float tensor.
+    """Stack the collated ``x["iq"]`` list into a ``(B, 2, sequence_len)`` normalised float tensor.
 
     ``iq_batch`` is the per-sample IQ list :func:`rfbench.core.evaluate.evaluate` collates from
     :class:`~rfbench.tasks.protocol_tech_id.dataset.ProtocolDataset`: each element is a
     ``(2, L)`` array-like (numpy on the cluster, nested lists in a synthetic fixture) in the
     channel-first layout (I on row 0, Q on row 1). Each window is coerced to ``float32`` and
     fixed to the variant's ``N`` by a centre-crop (if longer) or a right zero-pad (if shorter),
-    so the tokeniser always sees exactly ``M * S`` samples. A mis-shaped batch (channel axis
-    not 2) fails loudly rather than silently mis-classifying.
+    so the tokeniser always sees exactly ``M * S`` samples, then standardised per-window
+    (:func:`_unit_variance_normalize`) so the raw IQ reaches the embedding-free token space at a
+    healthy scale. A mis-shaped batch (channel axis not 2) fails loudly rather than silently
+    mis-classifying.
     """
     tensor = torch.as_tensor(iq_batch, dtype=torch.float32, device=device)
     if tensor.ndim == 2:  # a single unbatched (2, L) sample -> add the batch axis
@@ -191,7 +214,7 @@ def _iq_to_tensor(iq_batch: object, device: torch.device, sequence_len: int) -> 
             tensor.shape[0], _IQ_CHANNELS, sequence_len - length, dtype=tensor.dtype, device=device
         )
         tensor = torch.cat([tensor, pad], dim=2)
-    return tensor
+    return _unit_variance_normalize(tensor)
 
 
 @register_model("tprime")

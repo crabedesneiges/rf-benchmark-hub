@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — page dédiée `foundation.html` pour les modèles de fondation
+
+Nouvel onglet **Foundation** dans la nav (`leaderboard/site/generate.py`), 100 % data-driven
+(aucun nom de tâche/modèle en dur) :
+- pour chaque tâche ayant ≥1 résultat `model.family == "foundation"`, un mini-podium par groupe
+  `(regime, track)` (jamais fusionné) classant **uniquement** les modèles de fondation
+  (baselines ignorées), médailles 🥇🥈🥉 jusqu'à la 3e place seulement ;
+- un **podium cumulatif global** traitant chaque ligne de résultat comme un compétiteur distinct
+  (`iqfm-base` ≠ `iqfm-paper`, jamais fusionnés) — meilleur rang par tâche (un seul médaille max
+  par tâche, même sur plusieurs groupes), trié or puis argent puis bronze. C'est la **seule**
+  table du board qui mélange délibérément plusieurs régimes/tiers dans une même table (exception
+  explicite au principe habituel) ;
+- un scatter par tâche (métrique primaire vs axe catégoriel ordonné coût-d'adaptation :
+  `zero_shot → few_shot (k croissant) → linear_probe → full_finetune`), masqué si <2 points.
+
+Réutilise les badges/couleurs/formes existants ; page statique sans JS (comme `guide.html`).
+9 nouveaux tests dans `tests/test_site.py`.
 ### Removed — ligne `iqfm-base` `linear_probe` retirée du board AMC
 
 `leaderboard/results/amc/iqfm-base-linear_probe.json` (48.87%, `self_reported`) supprimée : ce score

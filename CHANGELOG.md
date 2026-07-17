@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — ligne `iqfm-base` `linear_probe` retirée du board AMC
+
+`leaderboard/results/amc/iqfm-base-linear_probe.json` (48.87%, `self_reported`) supprimée : ce score
+n'a pas de valeur de comparaison honnête tant que le retrain in-repo n'est pas re-mené proprement
+(cf. le statut « PAUSED » déjà documenté dans `rfbench/models/foundation/iqfm.py`). Docstring corrigé
+en conséquence (ne prétend plus qu'une ligne de board existe pour ce wrapper) ; aucun changement sur
+`wireless-jepa` (pas de ligne de board pour ce modèle non plus, déjà à jour).
+
+### Added — 3 lignes littérature `from_paper`/`from_paper_uncertain` (amc, sei, protocol_tech_id)
+
+Audit littérature ciblé sur 7 candidats à travers les tâches implémentées, doctrine Tier 3
+(`docs/SUBMISSION.md`) appliquée strictement — seuls 3 candidats passent le double critère
+dataset+protocole avec un split canonique déjà committé :
+- `leaderboard/results/amc/tldnn_paper.json` : **TLDNN 62.83%** overall (Table II, arXiv:2401.01056),
+  `from_paper` — dépasse notre meilleur `self_reported` (MCLDNN 61.71%) ; cible de réimplémentation
+  la plus prioritaire sur `amc`.
+- `leaderboard/results/sei/wisig_manytx_paper-closed_set.json` : **WiSig ManyTx ~53%** rank-1 à 150 Tx
+  (Fig. 14 / §IV.D, arXiv:2112.15363), `from_paper` — `model.name` distinct (`wisig-manytx-paper`) de
+  notre repro maison `wisig_cnn_paper` pour éviter toute collision.
+- `leaderboard/results/protocol_tech_id/wirelessjepa_paper.json` : **WirelessJEPA 94.26%** linear-probe
+  500-shot (Table II, arXiv:2601.20190), `from_paper_uncertain` — même split que `tprime`/`tprime_paper`,
+  mais la capture OTA sous-jacente n'est pas confirmée identique à celle de T-PRIME.
+
+Les 4 autres candidats (SNR estimation, interference_id/GNSS, wideband_detection/RadDet,
+protocol_tech_id cross_room via WirelessJEPA) restent `not_addable` : soit aucune figure publiée
+comparable trouvée (SNR, interference_id — reconfirme `docs/BIBLIOGRAPHY.md` §A.7), soit aucun split
+canonique committé pour RadDet. Aucune ligne fabriquée pour combler ces trous (doctrine anti-`a689e86`).
+Validé via `rfbench submit --check` (3/3 PR-ready) + `ruff check` + `pytest` (0 failure).
+
+### Added — 3 splits `cross_room` (leave-one-location-out) sur `protocol_tech_id`
+
+`leaderboard/splits/tprime_wifi4/proto-tprime-wifi4-crossroom-heldout-{142,572c,573c}-v1` : un split
+par salle T-PRIME tenue à l'écart (RM_142 / RM_572C / RM_573C), seed 42, pour reproduire à terme le
+scenario-split (cross-room) du papier T-PRIME — plus dur que notre `tprime` `self_reported` actuel
+(within-distribution, salles mélangées train/test). Aucune ligne de board pour ce track pour l'instant
+(entraînement d'une baseline dessus = run GPU, hors scope de cette passe).
+
 ### Added — `tprime` corrigé reproduit le papier sur `protocol_tech_id` (0.995 per-fenêtre)
 
 Re-run du modèle corrigé avec la **recette officielle** (Adam **lr=2e-4**, batch 128 ; extraite du

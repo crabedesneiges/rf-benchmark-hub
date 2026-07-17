@@ -2,11 +2,11 @@
 
 STATUS (2026-07): faithful reproduction is **PAUSED** — IQFM publishes no weights and pre-trains on
 the authors' proprietary OTA MIMO testbed (which we do NOT have), so an in-repo retrain can only be
-a **HOMEMADE, in-distribution** model, not the paper's. The committed board row
-(`leaderboard/results/amc/iqfm-base-linear_probe.json`, 48.87%) is that honest **self_reported**,
-in-distribution number and is kept as such; it must **never** be conflated with the paper's OOD
-**38.1%**, which lives only as a hand-curated `from_paper` row (`.../amc/iqfm_paper.json`). The
-wrapper + shared backbone are kept for future use; further retraining is on hold.
+a **HOMEMADE, in-distribution** model, not the paper's, and **no board row is committed** for it
+(a prior 48.87% `self_reported` row was pulled from the board). It must **never** be conflated with
+the paper's OOD **38.1%**, which lives only as a hand-curated `from_paper` row
+(`.../amc/iqfm_paper.json`). The wrapper + shared backbone are kept for future use; further
+retraining is on hold.
 
 `IQFM <https://arxiv.org/abs/2506.06718>`_ (Mashaal & Abou-Zeid, arXiv:2506.06718v2, 2025,
 **CC-BY 4.0**) is a small RF foundation model: a **ShuffleNetV2-x0.5** backbone (~341k params)

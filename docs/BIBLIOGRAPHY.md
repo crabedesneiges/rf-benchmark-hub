@@ -39,7 +39,7 @@ figures (~90% @ +18 dB) are a different metric and are NOT used here.
 | MCformer | 60.54% (TLDNN T2) | — | not run | Missing |
 | LSTM-DAE | 61.42% (TLDNN T2) | — | not run | Missing |
 | TCN-GRU (Sensors 2024) | 61.56% (own T3) | — | not run | Missing |
-| **TLDNN** (Qu 2024) — SOTA | **62.83%** (+SS 63.35%) | — | not run | Missing (target ceiling) |
+| **TLDNN** (Qu 2024) — SOTA | **62.83%** (+SS 63.35%) | — | not run (own repro); `from_paper` board row (`tldnn_paper`, 2026-07) citing 62.83% | Missing (target ceiling, unimplemented) |
 
 Honest ceiling on 2016.10a is ~61–63% (11 classes). The 2026-06 recipe fix (val-accuracy checkpoint +
 LR schedule + early stopping — Part B item 1, now addressed) closed the gap: MCLDNN now sits **above**
@@ -98,8 +98,10 @@ Headline rank-1 numbers to reproduce (primary sources):
 Board note (updated 2026-06): the fabricated SEI rows — `iqfm` rank1 0.7734 on WiSig cross_receiver
 (IQFM's paper never evaluates WiSig) and the WiSig-CNN closed-set 0.9412 on a synthetic fixture split
 with an unearned `verified` badge — were **removed from the board** in the pre-deploy cleanup
-(commit `a689e86`). The board currently has **no SEI rows**; the analysis below stands as the
-reproduction target for a real WiSig run.
+(commit `a689e86`). The analysis below stands as the reproduction target for a real WiSig run.
+Update (2026-07): `leaderboard/results/sei/wisig_manytx_paper-closed_set.json` now cites the WiSig
+paper's own ManyTx ~53% figure (150 tx) as a `from_paper` row, `model.name` `wisig-manytx-paper` —
+distinct from the `self_reported` reproduction `wisig_cnn_paper` on the same track.
 
 Primary papers:
 - **WiSig** — Hanna, Karunaratne, Cabric, "WiSig: A Large-Scale WiFi Signal Dataset...," *IEEE Access*
@@ -292,16 +294,15 @@ Primary sources & key facts:
   | `amc` | OOD RadioML 2016.10a, 11 mods, full SNR −20…+18 dB | linear probe, 500 samples/class | **74.78%** | ✅ `leaderboard/results/amc/wirelessjepa_paper.json`, `from_paper` — the single most board-comparable public FM number, and it **beats our supervised MCLDNN (61.71%)** |
   | `amc` (in-domain, not board-comparable) | multi-antenna testbed (own data), time-masked variant | linear probe, 1 / 100 samples/class | **80.75%** @ 1-shot, **99.98%** @ 100-shot | ❌ own private multi-antenna testbed |
   | `interference_id` | GNSS Jamming 6-class (Zenodo-synthesized) | linear probe, 500 samples/class | **63.15%** (k-NN 48.85%) | ⚠️ `leaderboard/results/interference_id/wirelessjepa_paper.json`, `from_paper_uncertain` — same **task description** (raw-IQ, 6-class GNSS jamming) and class count as our `interf_gnss6` (Swinney & Woods 2021, Zenodo 4629685), but we could **not** confirm the paper's Zenodo source is the same release, nor any split/index overlap |
-  | `protocol_tech_id` | OTA WiFi 802.11 ax/b/n/g (4 protocols), (2,1024) IQ | linear probe, 500 samples/class | **94.26%** (k-NN 84.89%) | ❌ **no board row yet** — `rfbench/tasks/protocol_tech_id/` and the `tprime` baseline exist, but no canonical split has been generated/committed under `leaderboard/splits/` for this task, so there is no real `checksum` to cite honestly (same discipline as the SEI fabrication fix, `a689e86`). Add a row once a `tprime-wifi4` split lands |
+  | `protocol_tech_id` | OTA WiFi 802.11 ax/b/n/g (4 protocols), (2,1024) IQ | linear probe, 500 samples/class | **94.26%** (k-NN 84.89%) | ✅ `leaderboard/results/protocol_tech_id/wirelessjepa_paper.json` (2026-07), `from_paper_uncertain` — same split as `tprime`/`tprime_paper` (`proto-tprime-wifi4-8010-seed42-v1`), but the underlying OTA capture is NOT confirmed identical to T-PRIME's, only the task/class framing matches |
   | `sei` (POWDER, not board's WiSig) | POWDER RF fingerprinting | linear probe, 500 samples/class | **90.45%** (k-NN 87.82%) | ❌ POWDER ≠ our WiSig/ORACLE/LoRa-RFFI dataset (see §A.3) |
   | `interference_id` (5G NR, different dataset) | 5G NR interference | linear probe, 500 samples/class | **76.27%** (k-NN 64.52%) | ❌ different dataset from our GNSS `interf_gnss6`; no committed 5G-NR interference split |
   | `direction_finding` (out of current scope) | AoA, OTA testbed, antenna masking | linear probe, 1 / 100 samples/class | **40.39%** @ 1-shot, **99.87%** @ 100-shot (in-domain) | ❌ private OTA testbed, no public AoA dataset in scope yet |
 
-  Two rows are board-comparable (`amc` confidently, `interference_id` only on dataset description,
-  not confirmed split) and land as `result.json` rows tagged `from_paper` / `from_paper_uncertain`
-  respectively (`docs/EVALUATION_PROTOCOL.md` verification tiers, schema 1.1.0). `protocol_tech_id`
-  is the closest miss: same canonical task, but blocked on a missing split file, not a dataset
-  mismatch — worth prioritizing once `tprime-wifi4` splits are generated.
+  Three rows are board-comparable (`amc` confidently, `interference_id` and `protocol_tech_id` only
+  on dataset/task description, not a confirmed same-source capture) and land as `result.json` rows
+  tagged `from_paper` / `from_paper_uncertain` respectively (`docs/EVALUATION_PROTOCOL.md`
+  verification tiers, schema 1.1.0).
 - **RIS-MAE** — Liu, Liu et al., arXiv:2508.00274 (2025). No weights. ViT-MAE encoder 12L d=768, 1D
   IQ patches of 8 (len 1024 → 128 patches), mask 75%. **2018.01a 24-cls, 1% labels, full SNR:
   48.41% OA / κ 0.4616** (beats MCLDNN 31.92 in that regime). Relevant only if 2018 unblocked.

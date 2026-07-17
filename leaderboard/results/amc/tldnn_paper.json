@@ -1,0 +1,44 @@
+{
+  "created_at": "2026-07-17T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2016_10a",
+    "version": "10a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 18,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.6283
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "tldnn-paper",
+    "url": "https://arxiv.org/abs/2401.01056"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "amc-tldnn-paper-radioml2016-fullsnr",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the TLDNN authors (Qu, Lu, Zeng, Wang, Wang, \"Enhancing Automatic Modulation Recognition through Robust Global Feature Extraction,\" IEEE TVT 2024, arXiv:2401.01056), NOT reproduced or re-run by this repo. Figure is the plain TLDNN row in Table II: 62.83% average/overall accuracy on RadioML 2016.10a (11-class), averaged over the full SNR range -20..+18 dB -- the same dataset, class count, SNR range, and metric unit (accuracy_overall) as our board's AMC track, which is why this qualifies as 'from_paper' (not 'from_paper_uncertain'), mirroring the iqfm_paper.json / wirelessjepa_paper.json precedent: dataset+protocol identity confirmed, sample-level index overlap with our canonical split (amc-radioml2016-strat-snr-8010-seed42-v1) is NOT confirmed since the paper does not publish its exact train/test indices. Deliberately excludes the TLDNN+SS variant (63.35%, Table II/VI), which uses an additional 'Discrete Segment Substitution' data-augmentation scheme during training and is a distinct, separate configuration from plain TLDNN -- only the plain-TLDNN number is cited here. Paper states: \"our proposed TLDNN model outperforms existing SOTA methods on Radio2016.10a across all SNR levels and achieves the highest average accuracy of 62.83% (+2.1%)\" relative to MCLDNN (61.52%) in the same table. Verified directly against the raw arXiv HTML source (https://arxiv.org/html/2401.01056) via curl + grep/regex on the actual table cell content, not just a summarized WebFetch pass; per-SNR figures in the same row (58.3% at -6dB, 92.9% at 12dB) are consistent with the paper's narrative text, corroborating that 62.83% is the full-range average and not a single-SNR-point figure. The IEEE TVT venue-of-record PDF/DOI page (paywalled) was NOT independently checked; only the arXiv preprint was verified, which should match the published version but this has not been cross-confirmed against the journal's final typeset table. Weights/code for TLDNN are not confirmed to be published; this is currently UNIMPLEMENTED in this repo and represents the single highest-value reimplementation target on this task (would surpass our current top self_reported baseline, MCLDNN at 61.71%).",
+    "status": "from_paper"
+  }
+}

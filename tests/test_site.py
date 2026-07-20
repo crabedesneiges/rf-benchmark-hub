@@ -1781,8 +1781,10 @@ def test_group_table_carries_interactive_hooks(tmp_path: Path) -> None:
     )
     generate.build_site(results, out)
     amc = (out / "amc.html").read_text(encoding="utf-8")
-    # The table advertises its (regime, track) group so the no-mixing invariant is checkable.
-    assert "<table data-leaderboard data-regime=" in amc
+    # The table advertises its (dataset, regime, track) group so the no-mixing invariant is
+    # checkable (dataset added so two datasets of one task never share a table).
+    assert "<table data-leaderboard data-dataset=" in amc
+    assert "data-regime=" in amc and "data-track=" in amc
     # Each model row carries data-model + data-family + a data-verified consistent with status.
     assert 'data-model="iqfm"' in amc and 'data-family="baseline"' in amc
     assert 'data-model="mcldnn"' in amc

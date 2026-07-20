@@ -1,0 +1,44 @@
+{
+  "created_at": "2026-07-20T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2018_01a",
+    "version": "01a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 30,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.6332
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "tldnn-paper",
+    "url": "https://arxiv.org/abs/2401.01056"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "amc-tldnn-paper-radioml2018-fullsnr",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2018-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:a6dcde164f5a3974990747c08b1ad48c0be2a05b41f15fc33a071627a3ad6d94",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the TLDNN (Qu, Lu, Zeng, Wang, Wang, 'Enhancing Automatic Modulation Recognition through Robust Global Feature Extraction', IEEE TVT 2024, arXiv:2401.01056) authors, NOT reproduced or re-run by this repo. The 0.6332 is the paper's FULL-SNR-RANGE average accuracy_overall on RadioML 2018.01a (24-class, -20..+30 dB) (verbatim from its results table, NOT a high-SNR peak). Same dataset + same full-SNR-range accuracy_overall metric as our canonical split, which is why it is 'from_paper' (same precedent as the existing tldnn_paper/iqfm_paper rows). The paper uses a 60/20/20 train/val/test ratio (ours is 80/10/10) and does not publish sample indices, so byte-level overlap with our split is not confirmed -- only the dataset + protocol match. Literature reference point, never conflated with an in-repo reproduced number. DISTINCT from the on-board tldnn_paper.json (2016.10a, 0.6283); this is its 2018.01a figure (Table II, plain TLDNN, excluding the +SS variant). Second to MoEformer on 2018.",
+    "status": "from_paper"
+  }
+}

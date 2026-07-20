@@ -1,0 +1,44 @@
+{
+  "created_at": "2026-07-20T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2016_10a",
+    "version": "10a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 18,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.6374
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "moeformer-paper",
+    "url": "https://arxiv.org/abs/2606.09085"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "amc-moeformer-paper-radioml2016-fullsnr",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the MoEformer (Wang, Xie, Mu, Liu, Zhao, Zhang, 'Mixture-of-Experts Transformer for Automatic Modulation Recognition', arXiv:2606.09085, Jun 2026) authors, NOT reproduced or re-run by this repo. The 0.6374 is the paper's FULL-SNR-RANGE average accuracy_overall on RadioML 2016.10a (11-class, -20..+18 dB) (verbatim from its results table, NOT a high-SNR peak). Same dataset + same full-SNR-range accuracy_overall metric as our canonical split, which is why it is 'from_paper' (same precedent as the existing tldnn_paper/iqfm_paper rows). The paper uses a 60/20/20 train/val/test ratio (ours is 80/10/10) and does not publish sample indices, so byte-level overlap with our split is not confirmed -- only the dataset + protocol match. Literature reference point, never conflated with an in-repo reproduced number. New specialized SOTA on 2016.10a, above the on-board tldnn_paper (0.6283).",
+    "status": "from_paper"
+  }
+}

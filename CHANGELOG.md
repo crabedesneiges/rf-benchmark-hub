@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — board groupé par dataset + 4 lignes littérature SOTA (AMC MoEformer/TLDNN, SEI ORACLE)
+
+`generate.py` groupe désormais aussi par DATASET (clé `(dataset, regime, k_shot, track)`, `data-dataset`
+sur chaque table) : deux datasets d'une même tâche ne partagent plus jamais une table (AMC RadioML
+2016.10a 11-class vs 2018.01a 24-class ; SEI WiSig vs ORACLE). Le nom du dataset n'apparaît dans
+l'en-tête que sur les tâches multi-dataset (pages mono-dataset inchangées).
+
+4 lignes littérature ajoutées (audit biblio SOTA, doctrine Tier 3, aucune reproduite) :
+- `amc/moeformer_paper-2016` **0.6374** (`from_paper`, arXiv:2606.09085) — nouveau SOTA spécialisé sur
+  2016.10a, au-dessus de tldnn_paper (0.6283).
+- `amc/moeformer_paper-2018` **0.6422** + `amc/tldnn_paper-2018` **0.6332** (`from_paper`) — 1res lignes
+  littérature sur le split 2018.01a.
+- `sei/oracle_cnn_paper` **0.986** (`from_paper_uncertain`) — ORACLE closed-set single-location (Sankhe
+  et al. INFOCOM 2019) ; caveat split/protocole différent de notre split poolé multi-distance.
+Tenu (non ajouté) : CBADNN (paywall non vérifiable) et Swinney-Woods GNSS (modalité spectrogramme-image
+≠ notre IQ brut). MoEformer très récent (Jun 2026, pas de code publié) : cible de reproduction laissée
+aux auteurs (contact en cours pour soumission directe).
+
 ### Added — page dédiée `foundation.html` pour les modèles de fondation
 
 Nouvel onglet **Foundation** dans la nav (`leaderboard/site/generate.py`), 100 % data-driven

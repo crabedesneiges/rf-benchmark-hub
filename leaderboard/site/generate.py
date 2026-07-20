@@ -917,6 +917,17 @@ def _track_name(row: dict[str, Any]) -> str:
     return text or _DEFAULT_TRACK
 
 
+def _dataset_name(row: dict[str, Any]) -> str:
+    """Return the row's dataset id (``dataset.name``).
+
+    Part of the group key so two DATASETS of the same task never share a leaderboard table/plot
+    (e.g. AMC on RadioML 2016.10a (11-class) vs 2018.01a (24-class), or SEI on WiSig vs ORACLE) --
+    comparing accuracies across different datasets/class-counts would be as meaningless as mixing
+    two regimes, so the board keeps them in separate groups.
+    """
+    return str(row["dataset"]["name"])
+
+
 def _track_label(track: str) -> str:
     """Human label for a track (falls back to a de-underscored form)."""
     return TRACK_TITLES.get(track, track.replace("_", " "))
@@ -1554,13 +1565,14 @@ def _render_row(
 
 
 def _render_group_table(
+    dataset: str,
     regime: str,
     track: str,
     rows: list[dict[str, Any]],
     primary_key: str,
     scalar_keys: list[str],
 ) -> str:
-    """Render the leaderboard table for one ``(regime, track)`` group.
+    """Render the leaderboard table for one ``(dataset, regime, track)`` group.
 
     Columns: ``#``, ``Model`` (name + family chip + params), one column per discovered
     scalar metric (primary first + emphasised), ``Status``. Rows are sorted by the primary
@@ -1609,28 +1621,33 @@ def _render_group_table(
     )
     return (
         '<div class="table-scroll">'
-        f'<table data-leaderboard data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
+        f'<table data-leaderboard data-dataset="{_esc(dataset)}" '
+        f'data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
         f"{header}<tbody>\n{body_rows}\n{no_match}</tbody></table>"
         "</div>"
     )
 
 
 def _render_group(
+    dataset: str,
     regime: str,
     track: str,
     rows: list[dict[str, Any]],
     primary_key: str,
+    *,
+    show_dataset: bool = False,
 ) -> str:
-    """Render one ``(regime, track)`` group: its table plus one plot per curve metric.
+    """Render one ``(dataset, regime, track)`` group: its table plus one plot per curve metric.
 
     Genericity + the plot-OR-table-for-every-metric rule are realised here: the scalar keys
     are discovered from the group's rows (every scalar gets a column) and the curve names
     are discovered too (every curve gets an inline-SVG plot overlaying the group's models).
-    Nothing here is task-specific, and because the group is a single (regime, track), no
-    table or plot ever mixes two regimes nor two tracks.
+    Nothing here is task-specific, and because the group is a single (dataset, regime, track), no
+    table or plot ever mixes two datasets, two regimes nor two tracks. ``show_dataset`` names the
+    dataset in the heading only when the task has more than one (single-dataset pages stay clean).
     """
     scalar_keys = _ordered_scalar_keys(rows, primary_key)
-    table = _render_group_table(regime, track, rows, primary_key, scalar_keys)
+    table = _render_group_table(dataset, regime, track, rows, primary_key, scalar_keys)
 
     # One inline-SVG plot per discovered curve metric (skipped gracefully if none).
     plots: list[str] = []
@@ -1651,19 +1668,20 @@ def _render_group(
             plots.append(bar)
     plots_html = f'<div class="plots">{"".join(plots)}</div>' if plots else ""
 
-    # A clear label for the group. A single-track task (everything in the default 'all'
-    # bucket) is labelled by regime only; multi-track tasks name the track too.
+    # A clear label for the group. The dataset is named only on multi-dataset tasks; a single-track
+    # task (everything in the default 'all' bucket) is labelled by regime only; multi-track tasks
+    # name the track too.
     regime_label = _regime_label(rows[0])
-    if track == _DEFAULT_TRACK:
-        heading = f"Regime &middot; {_esc(regime_label)}"
-    else:
-        heading = (
-            f"Regime &middot; {_esc(regime_label)} &nbsp;/&nbsp; "
-            f"Track &middot; {_esc(_track_label(track))}"
-        )
+    parts = []
+    if show_dataset:
+        parts.append(f"Dataset &middot; {_esc(dataset)}")
+    parts.append(f"Regime &middot; {_esc(regime_label)}")
+    if track != _DEFAULT_TRACK:
+        parts.append(f"Track &middot; {_esc(_track_label(track))}")
+    heading = " &nbsp;/&nbsp; ".join(parts)
     return (
         '<section class="group" '
-        f'data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
+        f'data-dataset="{_esc(dataset)}" data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
         f'<h3 class="group-title">{heading}</h3>'
         f"{table}{plots_html}"
         "</section>"
@@ -2016,16 +2034,30 @@ def render_task_page(
     dataset_card = _render_dataset_card(entry.dataset) if entry is not None else ""
     metrics_block = _render_metrics_block(entry) if entry is not None else ""
 
-    # (regime, k_shot, track) -> rows, preserving input order within each leaf group.
-    groups: dict[tuple[str, int | None, str], list[dict[str, Any]]] = {}
+    # (dataset, regime, k_shot, track) -> rows, preserving input order within each leaf group.
+    # Dataset is part of the key so two datasets of one task never share a table/plot.
+    groups: dict[tuple[str, str, int | None, str], list[dict[str, Any]]] = {}
     for row in rows:
-        groups.setdefault((_regime_name(row), _k_shot(row), _track_name(row)), []).append(row)
+        key = (_dataset_name(row), _regime_name(row), _k_shot(row), _track_name(row))
+        groups.setdefault(key, []).append(row)
+    multi_dataset = len({dataset for dataset, _r, _k, _t in groups}) > 1
 
-    ordered_keys = sorted(groups, key=_regime_track_sort_key)
+    def _dataset_group_sort_key(k: tuple[str, str, int | None, str]) -> tuple[Any, ...]:
+        dataset, regime, k_shot, track = k
+        return (dataset, *_regime_track_sort_key((regime, k_shot, track)))
+
+    ordered_keys = sorted(groups, key=_dataset_group_sort_key)
     sections = [
-        _render_group(regime, track, group_rows, _primary_key(group_rows[0]))
-        for (regime, _k, track) in ordered_keys
-        for group_rows in (groups[(regime, _k, track)],)
+        _render_group(
+            dataset,
+            regime,
+            track,
+            groups[key],
+            _primary_key(groups[key][0]),
+            show_dataset=multi_dataset,
+        )
+        for key in ordered_keys
+        for (dataset, regime, _k, track) in (key,)
     ]
 
     nav_ids = nav_task_ids if nav_task_ids is not None else [task_name]

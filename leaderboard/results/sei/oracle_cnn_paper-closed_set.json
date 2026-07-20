@@ -1,0 +1,40 @@
+{
+  "created_at": "2026-07-20T00:00:00Z",
+  "dataset": {
+    "name": "oracle"
+  },
+  "eval": {
+    "conditions": {}
+  },
+  "metrics": {
+    "primary": "rank1_accuracy",
+    "values": {
+      "rank1_accuracy": 0.986
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "oracle-cnn-paper",
+    "url": "https://arxiv.org/abs/1812.01124"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "sei-oracle-cnn-paper-oracle-closedset",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "sei-oracle-closedset-strat-tx-8010-seed42-v1",
+    "checksum": "sha256:8ad5882415dd9fb3bae89b510524f88cda3242c282d5f2491572196fe96a2964",
+    "name": "test",
+    "seed": 42,
+    "track": "closed_set"
+  },
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the ORACLE authors (Sankhe, Rajendran, Belgiovine, Chowdhury, Ioannidis, 'ORACLE: Optimized Radio clAssification through Convolutional neuraL nEtworks', IEEE INFOCOM 2019, arXiv:1812.01124), NOT reproduced or re-run by this repo. The 0.986 is the paper's closed-set 16-transmitter rank-1 accuracy on the SINGLE static-location experiment (Fig. 6a), raw-IQ window=128, same dataset family + input as our committed split sei-oracle-closedset-strat-tx-8010-seed42-v1. from_paper_UNCERTAIN: the paper's number is a single-location split with a fixed 200K/10K/50K per-device sizing, whereas our canonical split pools all distance folders 80/10/10 stratified-by-tx with a 1024-windows/capture cap -- same dataset, different split/protocol, indices unpublished. A faithful in-repo oracle_cnn run on our split (self_reported) is landing separately and must not be conflated with this literature figure.",
+    "status": "from_paper_uncertain"
+  }
+}

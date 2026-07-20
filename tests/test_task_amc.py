@@ -358,8 +358,22 @@ def test_dataset_resolves_committed_split_checksum() -> None:
     assert ds.checksum == manifest["split_checksum"]  # real, not the placeholder
     assert ds.checksum != _PLACEHOLDER_CHECKSUM
 
-    # No committed manifest (2018) -> honest placeholder fallback, never a fabricated checksum.
-    assert AmcDataset("radioml_2018_01a").checksum == _PLACEHOLDER_CHECKSUM
+    # radioml_2018_01a now ALSO has a committed manifest -> it resolves the real checksum too.
+    ds_2018 = AmcDataset("radioml_2018_01a")
+    manifest_2018 = json.loads(
+        (
+            root
+            / "leaderboard"
+            / "splits"
+            / "radioml_2018_01a"
+            / f"{ds_2018.canonical_split_id}.manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert ds_2018.checksum == manifest_2018["split_checksum"]
+    assert ds_2018.checksum != _PLACEHOLDER_CHECKSUM
+
+    # sig53 has no committed manifest -> honest placeholder fallback, never a fabricated checksum.
+    assert AmcDataset("sig53").checksum == _PLACEHOLDER_CHECKSUM
 
     # An explicit checksum= still wins over the manifest (the synthetic/test path).
     assert AmcDataset("radioml_2016_10a", checksum="sha256:beef").checksum == "sha256:beef"

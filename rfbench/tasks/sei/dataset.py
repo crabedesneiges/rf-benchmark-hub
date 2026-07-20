@@ -326,7 +326,7 @@ def _load_oracle_arrays(
         dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
         raw = np.fromfile(data_path, dtype=dtype).astype(np.float32)
         n_complex = int(raw.size // 2)
-        # Same per-capture cap as load_oracle_records (first k contiguous windows) -> aligned indices.
+        # Same per-capture cap as load_oracle_records (first k windows) -> aligned indices.
         n_windows = min(_ORACLE_WINDOWS_PER_CAPTURE, n_complex // window)
         if n_windows == 0:
             continue

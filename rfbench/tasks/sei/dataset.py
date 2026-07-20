@@ -303,7 +303,12 @@ def _load_oracle_arrays(
         ) from exc
 
     from rfbench.data.prepare._common import resolve_cache_dir
-    from rfbench.data.prepare.sei import _ORACLE_WINDOW, _oracle_tx_id, _sigmf_np_dtype
+    from rfbench.data.prepare.sei import (
+        _ORACLE_WINDOW,
+        _ORACLE_WINDOWS_PER_CAPTURE,
+        _oracle_tx_id,
+        _sigmf_np_dtype,
+    )
 
     cache_dir = resolve_cache_dir(None)
     root = cache_dir / name
@@ -321,7 +326,8 @@ def _load_oracle_arrays(
         dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
         raw = np.fromfile(data_path, dtype=dtype).astype(np.float32)
         n_complex = int(raw.size // 2)
-        n_windows = n_complex // window
+        # Same per-capture cap as load_oracle_records (first k contiguous windows) -> aligned indices.
+        n_windows = min(_ORACLE_WINDOWS_PER_CAPTURE, n_complex // window)
         if n_windows == 0:
             continue
         frames = raw[: n_windows * window * 2].reshape(n_windows, window, 2)

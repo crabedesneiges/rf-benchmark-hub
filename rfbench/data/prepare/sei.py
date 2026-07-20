@@ -507,8 +507,9 @@ def load_oracle_records(
 
     One record is emitted per IQ *capture window* of ``window`` complex samples in each
     ``.sigmf-data`` file (``float32`` interleaved I/Q, so ``2 * window`` floats per window),
-    in sorted file order. numpy is imported lazily; never called in unit tests (needs real
-    data + numpy).
+    in sorted file order, capped at the FIRST :data:`_ORACLE_WINDOWS_PER_CAPTURE` windows per
+    capture (the ORACLE captures are long; an uncapped tiling blows up the split index + dataset).
+    numpy is imported lazily; never called in unit tests (needs real data + numpy).
     """
     import json  # stdlib
 
@@ -536,7 +537,7 @@ def load_oracle_records(
         dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
         iq = np.fromfile(data_path, dtype=dtype)
         n_complex = iq.size // 2
-        n_windows = n_complex // window
+        n_windows = min(_ORACLE_WINDOWS_PER_CAPTURE, n_complex // window)
         records.extend((tx_id, None, None) for _ in range(n_windows))
     if not records:
         raise FileNotFoundError(
@@ -672,6 +673,15 @@ def extract_powder_records(frame_counts: Sequence[tuple[object, object, int]]) -
 #: ORACLE capture-window length (complex samples per record); matches the reference
 #: IEEE802.11a burst length used to slice each raw-IQ ``.sigmf-data`` file.
 _ORACLE_WINDOW = 128
+
+#: Max windows kept PER CAPTURE (the first ``k`` contiguous windows). ORACLE ``.sigmf-data`` files
+#: are long (~40M complex samples each), so tiling every 128-sample window uncapped yields ~16.5M
+#: windows -- an impractically large training set AND a >240 MB split index (over GitHub's file
+#: limit). Capping to a fixed budget per capture keeps the split index committable (~5 MB, like
+#: WiSig) and the dataset tractable, while every transmitter/distance still contributes equally.
+#: BOTH the record loader (:func:`load_oracle_records`) and the array loader
+#: (``rfbench.tasks.sei.dataset._load_oracle_arrays``) MUST apply this same cap so indices align.
+_ORACLE_WINDOWS_PER_CAPTURE = 1024
 
 
 def _require_seq(dataset: Mapping[str, object], key: str) -> Sequence[object]:

@@ -2032,7 +2032,11 @@ def test_foundation_ranking_excludes_baselines_from_medals(tmp_path: Path) -> No
     _write(
         results / "amc" / "f2.json",
         _foundation_row(
-            "row-f2", "amc", "wirelessjepa-paper", "linear_probe", 0.75,
+            "row-f2",
+            "amc",
+            "wirelessjepa-paper",
+            "linear_probe",
+            0.75,
             status="from_paper_uncertain",
         ),
     )
@@ -2100,7 +2104,7 @@ def test_global_podium_caps_one_medal_per_task_across_groups(tmp_path: Path) -> 
     generate.build_site(results, out)
     foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
 
-    podium_start = foundation_html.index('global-podium')
+    podium_start = foundation_html.index("global-podium")
     podium_end = foundation_html.index("</section>", podium_start)
     podium = foundation_html[podium_start:podium_end]
     trs = re.findall(r"<tr>.*?</tr>", podium.split("<tbody>", 1)[1], re.S)
@@ -2135,7 +2139,7 @@ def test_global_podium_treats_each_result_row_as_its_own_competitor(tmp_path: Pa
     generate.build_site(results, out)
     foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
 
-    podium_start = foundation_html.index('global-podium')
+    podium_start = foundation_html.index("global-podium")
     podium_end = foundation_html.index("</section>", podium_start)
     podium = foundation_html[podium_start:podium_end]
     trs = re.findall(r"<tr>.*?</tr>", podium.split("<tbody>", 1)[1], re.S)

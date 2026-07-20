@@ -139,7 +139,7 @@ def test_task_declares_protocol_surface() -> None:
     dataset_names = [ds.name for ds in task.datasets()]
     assert dataset_names == ["tprime_wifi4"]
     assert task.default_split() == "test"
-    assert task.tracks() == ["closed_set"]
+    assert task.tracks() == ["closed_set", "cross_room"]
     metric_keys = [m.primary_key for m in task.metrics()]
     assert metric_keys[0] == "accuracy_overall"  # primary is first
     assert set(metric_keys) == {"accuracy_overall", "macro_f1"}

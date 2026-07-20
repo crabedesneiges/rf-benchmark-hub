@@ -1,0 +1,57 @@
+{
+  "created_at": "2026-07-20T00:00:00Z",
+  "dataset": {
+    "name": "tprime_wifi4"
+  },
+  "eval": {
+    "conditions": {
+      "track": "cross_room"
+    },
+    "n_samples": 210497
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "uncertainty": {
+      "accuracy_overall": {
+        "ci_high": 0.9862954131853559,
+        "ci_low": 0.9073958789888121,
+        "method": "multi_seed_std",
+        "note": "method='multi_seed_std' is the closest schema enum: here it is the descriptive across-FOLD std over the 3 leave-one-location-out folds (RM_142/RM_572C/RM_573C), not seeds -- NOT a 95% CI."
+      },
+      "macro_f1": {
+        "ci_high": 0.9874596467335531,
+        "ci_low": 0.9085601125370094,
+        "method": "multi_seed_std",
+        "note": "method='multi_seed_std' is the closest schema enum: here it is the descriptive across-FOLD std over the 3 leave-one-location-out folds (RM_142/RM_572C/RM_573C), not seeds -- NOT a 95% CI."
+      }
+    },
+    "values": {
+      "accuracy_overall": 0.946845646087084,
+      "macro_f1": 0.9480098796352813
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "n_params": 1580164,
+    "name": "tprime"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "protocol-tprime-crossroom-cv-tprimewifi4",
+  "schema_version": "1.2.0",
+  "split": {
+    "canonical_split_id": "proto-tprime-wifi4-crossroom-locv-v1",
+    "checksum": "sha256:7538e1da9b0919f2323621a72b4e0945b529a8815d644305c522523224c66feb",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "protocol_tech_id",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Cross-room = the paper's SCENARIO-SPLIT (leave-one-location-out cross-validation): the corrected tprime (official recipe lr=2e-4, batch 128) is trained on all locations but one and tested on the held-out location IN FULL (unseen in training), for each of the 3 locations. accuracy_overall is the CV MEAN over the 3 folds (per-fold, held-out: 142 0.9642; 572C 0.9841; 573C 0.8922). Reproduces the paper's finding that the scenario-split is HARDER than within-distribution (0.947 mean cross-room vs 0.995 within-distribution closed_set) and that RM_573C is the most challenging location (0.892). PER-WINDOW on our recording-level location splits (no window leaks across the location boundary). Fold splits: proto-tprime-wifi4-crossroom-heldout-142-v1 (sha256:ae084f9cd0d63...), proto-tprime-wifi4-crossroom-heldout-572c-v1 (sha256:ee9c84d2f147c...), proto-tprime-wifi4-crossroom-heldout-573c-v1 (sha256:ef4e82346f898...). self_reported (a faithful in-repo run, not maintainer-verified).",
+    "status": "self_reported"
+  }
+}

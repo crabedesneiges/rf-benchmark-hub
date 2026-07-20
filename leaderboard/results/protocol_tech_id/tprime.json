@@ -11,7 +11,9 @@
   },
   "eval": {
     "batch_size": 128,
-    "conditions": {},
+    "conditions": {
+      "track": "closed_set"
+    },
     "n_samples": 21024
   },
   "metrics": {

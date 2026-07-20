@@ -164,7 +164,7 @@
       "status": "implemented",
       "priority": "P2",
       "scope": "terrestrial_iq",
-      "blurb": "Recognise the WiFi 802.11 standard (b/g/n/ax) from raw IQ (T-PRIME). Baseline tprime (config matched to the official code) reproduces the paper: 0.995 accuracy per-window on our within-distribution split, shown alongside the from-paper reference.",
+      "blurb": "Recognise the WiFi 802.11 standard (b/g/n/ax) from raw IQ (T-PRIME). Baseline tprime (config matched to the official code) reproduces the paper on both tracks: 0.995 within-distribution (closed_set) and 0.947 cross-room (leave-one-location-out scenario-split, RM_573C hardest).",
       "description": "Recognize the WiFi 802.11 standard (b/g/n/ax) from raw IQ, identifying the protocol/technology rather than the modulation. It matters for spectrum inventory and standard-aware coexistence.",
       "dataset": {
         "name": "tprime-wifi4 (T-PRIME)",

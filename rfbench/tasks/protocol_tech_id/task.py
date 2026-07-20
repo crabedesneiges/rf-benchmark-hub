@@ -76,8 +76,9 @@ class ProtocolTechIdTask(Task):
         return "test"
 
     def tracks(self) -> list[Track]:
-        """Return the single closed-set track (protocol-tech-ID never blends tracks)."""
-        return ["closed_set"]
+        """Return the evaluation tracks, never blended: ``closed_set`` (within-distribution, rooms
+        mixed) and ``cross_room`` (the paper's scenario-split: leave-one-location-out)."""
+        return ["closed_set", "cross_room"]
 
     def build_targets(self, batch: Batch) -> Tensor:
         """Extract the class targets from a collated batch (the ``label`` field).

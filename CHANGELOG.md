@@ -60,6 +60,17 @@ par salle T-PRIME tenue à l'écart (RM_142 / RM_572C / RM_573C), seed 42, pour 
 scenario-split (cross-room) du papier T-PRIME — plus dur que notre `tprime` `self_reported` actuel
 (within-distribution, salles mélangées train/test). Aucune ligne de board pour ce track pour l'instant
 (entraînement d'une baseline dessus = run GPU, hors scope de cette passe).
+### Added — piste `cross_room` (scenario-split) sur `protocol_tech_id` : CV leave-one-location-out
+
+Reproduit le scenario-split du papier T-PRIME. Split groupé par LOCATION (`prepare_crossroom`,
+anti-fuite : la location de test n'apparaît jamais en train), CV sur les 3 locations
+(RM_142/RM_572C/RM_573C tenues en test à tour de rôle), recette officielle (lr=2e-4). Résultats
+per-fenêtre : **RM_572C 0.984, RM_142 0.964, RM_573C 0.892** → **moyenne 0.947 ± 0.039**.
+Reproduit deux constats du papier : le scenario-split est plus dur que le within-distribution
+(**0.947 cross_room vs 0.995 closed_set**), et **RM_573C est la location la plus difficile**. Le
+board affiche deux pistes distinctes : `closed_set` (within-dist, `tprime` 0.995 + réf.
+`tprime-paper` 0.99) et `cross_room` (`tprime` 0.947, moyenne CV). `tracks()` déclare désormais
+les deux ; les résultats within-dist portent `track=closed_set`.
 
 ### Added — `tprime` corrigé reproduit le papier sur `protocol_tech_id` (0.995 per-fenêtre)
 

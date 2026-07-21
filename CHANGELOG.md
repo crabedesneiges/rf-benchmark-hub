@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — 1re baseline réelle sur RadioML 2018.01a : `mcldnn` 0.606 (AMC 24-class)
+
+Train GPU from_scratch (seed 42, 30 ep, GB200, job 98771) sur le split canonique 2018 (2.04M
+fenêtres train, test 255 216) : **`accuracy_overall = 0.6064`** (macro_f1 0.624), courbe
+accuracy_vs_snr complète (-20..+30 dB). Cohérent avec la littérature du groupe (MoEformer 0.642,
+TLDNN 0.633 `from_paper`) — notre mcldnn (408k params, 30 ep) est ~2-3 pts sous les SOTA
+spécialisés, comme sur 2016.10a. Grâce au groupement par dataset, la colonne 2018 est rendue
+séparément de 2016 (jamais mélangées). `self_reported` ; multi-seed + verify à suivre.
+
 ### Added — board groupé par dataset + 4 lignes littérature SOTA (AMC MoEformer/TLDNN, SEI ORACLE)
 
 `generate.py` groupe désormais aussi par DATASET (clé `(dataset, regime, k_shot, track)`, `data-dataset`

@@ -741,12 +741,16 @@ anything weaker → not addable.
 Note on the mid-tier AMC lines (validated decision, 2026-07): several 2016.10a/2018.01a baseline
 figures (LSTM2, MCformer, LSTM-DAE, PET-CGDNN, TCN-GRU…) are cited from a **secondary source** —
 another paper's Table II (TLDNN arXiv:2401.01056 / TCN-GRU *Sensors* 2024), not each primary PDF.
-Board rows seeded from these are tagged **`from_paper_uncertain`** (not `from_paper`): the figure is a
-third-party reimplementation, so the split/preprocessing is not confirmed identical to ours and the
-provenance is one step removed from the model's own paper. The single exception is **TCN-GRU** itself,
-whose 0.6156 is self-reported in the authors' *own* Table III (a primary figure) and so stays
-`from_paper`. §A.1 marks the provenance in the "source" column; none of these are primary-verified
-(Tier-2 `verified`) numbers.
+Board rows seeded from these are tagged **`from_paper`** (same tier as tldnn_paper / iqfm_paper /
+moeformer_paper): they are on the **same dataset + same full-SNR `accuracy_overall` protocol** as our
+canonical split. The split is *never* byte-confirmed for ANY RadioML literature row — no RadioML paper
+publishes its sample indices, and ratios differ (typically 60/20/20 vs our 80/10/10) — so split
+uncertainty is universal and does **not** downgrade the tier (`from_paper_uncertain` is reserved for
+rows where the *dataset/protocol itself* is unconfirmed, e.g. ORACLE's pooled-multi-distance split,
+GNSS, WiFi-OTA). What IS weaker here is **provenance**: these figures are re-mined from a *third-party
+reimplementation* table, not each model's own paper, so the reimplementation may be under-tuned — that
+caveat lives explicitly in every row's `verification.note`, not in the tier. §A.1 marks the provenance
+in the "source" column; none are primary-verified (Tier-2 `verified`) numbers.
 
 ---
 

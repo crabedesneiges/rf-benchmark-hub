@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — 11 lignes AMC mid-tier : `from_paper_uncertain` → `from_paper` (correction de doctrine)
+
+Correction d'une sur-correction de la veille. Le downgrade des 11 lignes re-minées d'une réimplémentation
+tierce s'appuyait sur l'écart de split — **mais ce critère est faux** : aucune ligne littérature RadioML
+n'a de split byte-confirmé (les papiers ne publient pas leurs indices ; ratios 60/20/20 vs notre
+80/10/10), y compris tldnn_paper / iqfm_paper / moeformer_paper qui restent `from_paper`. Le tier encode
+la **comparabilité dataset+protocole**, pas la certitude du split (jamais atteinte). `from_paper_uncertain`
+est réservé aux cas où le **dataset/protocole lui-même** n'est pas confirmé (ORACLE poolé multi-distance,
+GNSS, WiFi-OTA). Les 11 lignes (même RadioML + même full-SNR `accuracy_overall`) repassent donc en
+`from_paper` ; le caveat de **provenance** (chiffre re-miné d'une réimpl tierce, potentiellement
+sous-optimisé) reste explicite dans chaque `verification.note`, pas dans le badge. `docs/BIBLIOGRAPHY.md`
+et la note de doctrine ajustés.
+
 ### Added — scaffold tâche `spectrum_sensing` (DeepSense, détection d'occupation pd@pfa)
 
 Nouvelle tâche downstream `spectrum_sensing` (détection binaire d'occupation spectrale), code prêt

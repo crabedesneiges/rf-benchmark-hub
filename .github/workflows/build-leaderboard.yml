@@ -11,6 +11,7 @@ name: Build leaderboard
     paths:
       - "leaderboard/results/**"
       - "leaderboard/site/**"
+      - "leaderboard/tasks.json"
       - "schemas/**"
       - ".github/workflows/build-leaderboard.yml"
   workflow_dispatch:

@@ -1,0 +1,28 @@
+{
+  "title": "RF-Benchmark-Hub",
+  "description": "Reproducible benchmarks and a leaderboard for downstream machine-learning tasks on terrestrial RF signals (automatic modulation classification, specific emitter identification / RF fingerprinting, SNR estimation, interference identification, WiFi protocol/technology identification), comparing specialized baselines against fine-tuned foundation models under a common, canonical protocol. Datasets are never redistributed; only deterministic split indices and checksums are versioned.",
+  "upload_type": "software",
+  "license": "Apache-2.0",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Albert, Maxence"
+    }
+  ],
+  "keywords": [
+    "radio-frequency",
+    "benchmark",
+    "modulation-classification",
+    "RF-fingerprinting",
+    "specific-emitter-identification",
+    "foundation-models",
+    "reproducibility"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/crabedesneiges/rf-benchmark-hub",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

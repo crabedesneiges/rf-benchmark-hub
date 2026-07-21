@@ -33,9 +33,12 @@ before they are widely known. Preferred channels, in order:
 
 1. **GitHub private vulnerability reporting** — open a report via the repository's
    *Security* tab → *Report a vulnerability* (GitHub Security Advisories). This
-   keeps the discussion private with the maintainers.
-2. **Email** — if private reporting is unavailable, email the maintainers at
-   `<MAINTAINER_CONTACT>` with the details below.
+   keeps the discussion private with the maintainers and is the preferred channel.
+2. **Private message to a maintainer** — if private reporting is not yet enabled on
+   the repository, contact a maintainer privately through their GitHub profile and
+   ask them to open a private advisory. Do **not** put vulnerability details in a
+   public issue; a short public note asking a maintainer to enable private reporting
+   is acceptable only if you have no other channel.
 
 Please **do not** open a public issue or pull request for a vulnerability until
 a fix (or a mitigation) has been agreed with the maintainers.

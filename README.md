@@ -164,6 +164,16 @@ rf-benchmark-hub/
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — engineering details of the harness
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — master spec, work packages, milestones
 
+## Community & governance
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute code, tasks, or scores
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — Contributor Covenant 2.1; expected behaviour and enforcement
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability **privately** (do not open a public issue)
+- [`CITATION.cff`](CITATION.cff) — how to cite this project (GitHub renders a "Cite this repository" button)
+
+Bug reports, feature requests, and score submissions go through the structured
+[issue templates](.github/ISSUE_TEMPLATE/).
+
 ## License
 
 Code is licensed under **Apache-2.0** (see `LICENSE`). Datasets retain their upstream licences

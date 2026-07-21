@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — préparation ouverture publique (non-dataset) : Pages, gouvernance, citation/DOI
+
+Volet Cat. 3 sans téléchargement de dataset.
+- **CI Pages** (`.github/workflows/build-leaderboard.yml`) : `leaderboard/tasks.json` ajouté au filtre
+  `paths` du trigger — le site lit ce fichier (inventaire/statuts des tâches), donc un retag comme
+  `wideband_detection` → `wip` doit redéployer Pages. Il était absent → correctif de fiabilité.
+- **Gouvernance / community** : README gagne une section « Community & governance » liant
+  `CONTRIBUTING`, `CODE_OF_CONDUCT`, `SECURITY`, `CITATION.cff` + les templates d'issues.
+  Placeholders `<MAINTAINER_CONTACT>` résolus **sans email public** (décision) : CoC + SECURITY
+  pointent vers le reporting privé natif GitHub (onglet Security / profil mainteneur).
+  `.github/ISSUE_TEMPLATE/config.yml` : `contact_links` (Security → SECURITY.md, Discussions) remplis
+  avec l'URL réelle du repo.
+- **Citation / DOI** : `CITATION.cff` gagne `version: 0.1.0`, l'URL du site, et un gabarit commenté pour
+  le DOI Zenodo. Nouveau `.zenodo.json` (métadonnées d'archivage : titre, description à jour des 5
+  tâches live, license, créateur, mots-clés) pour minter un DOI au 1er tag GitHub.
+
 ### Added — backlog sans-GPU : 12 lignes littérature AMC, garde-fous `submit --check`, docs vitrine, hygiène repo
 
 Lot exécuté en parallèle (domaines de fichiers disjoints), sans GPU, en préparation de l'ouverture

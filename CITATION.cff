@@ -8,14 +8,22 @@ abstract: >-
   fine-tuned foundation models under a common, canonical protocol. Datasets are never
   redistributed; only deterministic split indices are versioned.
 type: software
+version: "0.1.0"
 authors:
   - family-names: Albert
     given-names: Maxence
 license: Apache-2.0
 repository-code: "https://github.com/crabedesneiges/rf-benchmark-hub"
+url: "https://crabedesneiges.github.io/rf-benchmark-hub/"
 keywords:
   - radio-frequency
   - benchmark
   - modulation-classification
   - RF-fingerprinting
   - foundation-models
+# When the first tagged release is archived on Zenodo, add the minted DOI here so
+# GitHub's "Cite this repository" shows it, e.g.:
+# identifiers:
+#   - type: doi
+#     value: 10.5281/zenodo.XXXXXXX
+#     description: "Concept DOI (all versions)"

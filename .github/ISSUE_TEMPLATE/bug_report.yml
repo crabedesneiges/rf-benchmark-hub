@@ -1,0 +1,113 @@
+name: Bug report
+description: Report a defect in the code, CLI, schemas, data-prep, or the leaderboard site.
+title: "[bug] <short summary>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. This template is for **defects** (something is broken
+        or behaves incorrectly). For proposing a leaderboard result use the
+        *Leaderboard submission* template, and for a new task/dataset/metric or an
+        enhancement use *Feature request* / *Task proposal*.
+
+        Reminder: **never attach raw datasets or model weights** — only paste the
+        minimal command, config, and traceback needed to reproduce (D3).
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the repo is affected?
+      options:
+        - CLI (rfbench)
+        - data prepare / download (split indices)
+        - core contracts (task / dataset / metric / evaluate)
+        - a task or baseline model
+        - schemas / result validation
+        - leaderboard site (generate.py)
+        - SLURM / cluster scripts
+        - docs
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: task
+    attributes:
+      label: Task (if applicable)
+      description: The affected benchmark task (leaderboard/tasks.json). Leave blank if not task-specific.
+      options:
+        - amc
+        - sei
+        - wideband_detection
+        - spectrum_sensing
+        - interference_id
+        - protocol_tech_id
+        - snr_mobility_recognition
+        - beam_prediction
+        - direction_finding
+        - los_nlos
+        - positioning
+        - har
+        - channel_estimation
+        - not task-specific
+    validations:
+      required: false
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: A clear description of the bug and how it differs from what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The exact command(s) and, if relevant, the config/dataset/regime. Paste the full
+        traceback or error output.
+      placeholder: |
+        1. rfbench eval amc --model mcldnn --regime from_scratch --dataset radioml_2016_10a --seed 42
+        2. ...
+        <traceback>
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen instead.
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Output of `rfbench --version` (or the commit SHA), Python version, OS/arch, and how
+        you installed (`pip install -e ".[dev]"`, cluster venv, etc.).
+      placeholder: |
+        rfbench: <commit sha>
+        python: 3.11
+        os/arch: linux aarch64
+        install: pip install -e ".[dev,data,tasks,torch]"
+      render: yaml
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I have not attached any raw dataset or weights file (only commands / configs / tracebacks).
+          required: true

@@ -16,8 +16,8 @@
 #   e.g. sbatch slurm/train_sei_multiseed_arm.sh complex_cnn 100 "closed_set cross_receiver cross_day" 43
 #
 #SBATCH --job-name=sei_ms
-#SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/rfbench_sei_ms_%j.out
-#SBATCH --error=/lustre/work/pdl16831/udl79f933/logs/rfbench_sei_ms_%j.err
+#SBATCH --output=logs/rfbench_sei_ms_%j.out
+#SBATCH --error=logs/rfbench_sei_ms_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
@@ -25,12 +25,23 @@
 #SBATCH --time=08:00:00
 
 set -uo pipefail
-WORK=/lustre/work/pdl16831/udl79f933
+# --- Portable config (override via environment; see slurm/README.md) -----------------
+#   WORK                Lustre work root (REQUIRED; usually pre-set by the cluster).
+#   RFBENCH_REPO        repo/worktree checkout to run       (default: $WORK/projets/rf-benchmark-hub[...]).
+#   RFBENCH_VENV_CPU    CPU venv  .[dev,data]               (default: $WORK/envs/rfbench-arm).
+#   RFBENCH_VENV_GPU    GPU venv  .[dev,data,tasks,torch]   (default: $WORK/envs/rfbench-arm-gpu).
+#   RFBENCH_VENV_DETECTION  detection venv .[dev,detection] (default: $WORK/envs/rfbench-arm-detection).
+#   RFBENCH_UV          uv binary for this arch             (default: $WORK/envs/uv-arm/uv).
+#   RFBENCH_CACHE       dataset cache root                  (default: $WORK/data/rfbench_cache).
+# SLURM logs go to logs/ relative to the submit dir: create it first (mkdir -p logs) or
+# override with `sbatch --output=... --error=...`.
+# ------------------------------------------------------------------------------------
+WORK="${WORK:?set \$WORK to your Lustre work dir (e.g. /lustre/work/<project>/<user>)}"
 # The GPU venv is editable-installed against the MAIN repo, where the SEI code (models + training_sei
 # + sei-train CLI) now lives after the J3 merge — so point REPO at main (override with RFBENCH_REPO).
 REPO="${RFBENCH_REPO:-$WORK/projets/rf-benchmark-hub}"
-VENV="$WORK/envs/rfbench-arm-gpu"
-UV="$WORK/envs/uv-arm/uv"
+VENV="${RFBENCH_VENV_GPU:-$WORK/envs/rfbench-arm-gpu}"
+UV="${RFBENCH_UV:-$WORK/envs/uv-arm/uv}"
 MODEL="${1:-wisig_cnn_paper}"
 EPOCHS="${2:-100}"
 TRACKS="${3:-closed_set cross_receiver cross_day}"
@@ -38,7 +49,7 @@ SEED="${4:-42}"
 DATASET="${5:-wisig}"
 
 OUT_DIR="$WORK/logs/multiseed/sei"
-export RFBENCH_CACHE="$WORK/data/rfbench_cache"
+export RFBENCH_CACHE="${RFBENCH_CACHE:-$WORK/data/rfbench_cache}"
 export RFBENCH_HARDWARE="1x NVIDIA GB200"
 export UV_PROJECT_ENVIRONMENT="$VENV"
 export UV_CACHE_DIR="$WORK/.uv_cache_arm"

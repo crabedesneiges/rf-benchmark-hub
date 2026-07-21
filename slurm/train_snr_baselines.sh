@@ -18,8 +18,8 @@
 #   result.json → $WORK/logs/multiseed/snr_estimation/<model>-seed42.json
 #
 #SBATCH --job-name=rfbench_snr
-#SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/rfbench_snr_%j.out
-#SBATCH --error=/lustre/work/pdl16831/udl79f933/logs/rfbench_snr_%j.err
+#SBATCH --output=logs/rfbench_snr_%j.out
+#SBATCH --error=logs/rfbench_snr_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
@@ -28,12 +28,23 @@
 # NB: Dalia forbids --mem (RAM auto-allocated proportional to cores).
 
 set -uo pipefail
-WORK=/lustre/work/pdl16831/udl79f933
+# --- Portable config (override via environment; see slurm/README.md) -----------------
+#   WORK                Lustre work root (REQUIRED; usually pre-set by the cluster).
+#   RFBENCH_REPO        repo/worktree checkout to run       (default: $WORK/projets/rf-benchmark-hub[...]).
+#   RFBENCH_VENV_CPU    CPU venv  .[dev,data]               (default: $WORK/envs/rfbench-arm).
+#   RFBENCH_VENV_GPU    GPU venv  .[dev,data,tasks,torch]   (default: $WORK/envs/rfbench-arm-gpu).
+#   RFBENCH_VENV_DETECTION  detection venv .[dev,detection] (default: $WORK/envs/rfbench-arm-detection).
+#   RFBENCH_UV          uv binary for this arch             (default: $WORK/envs/uv-arm/uv).
+#   RFBENCH_CACHE       dataset cache root                  (default: $WORK/data/rfbench_cache).
+# SLURM logs go to logs/ relative to the submit dir: create it first (mkdir -p logs) or
+# override with `sbatch --output=... --error=...`.
+# ------------------------------------------------------------------------------------
+WORK="${WORK:?set \$WORK to your Lustre work dir (e.g. /lustre/work/<project>/<user>)}"
 # Derive REPO from SLURM_SUBMIT_DIR so the submitting worktree's code is used (override with
 # RFBENCH_REPO); strip a trailing /slurm if sbatch was run from the slurm/ subdirectory.
 REPO="${RFBENCH_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
 REPO="${REPO%/slurm}"
-VENV="$WORK/envs/rfbench-arm-gpu"          # .[dev,data,tasks,torch] — numpy + sklearn present
+VENV="${RFBENCH_VENV_GPU:-$WORK/envs/rfbench-arm-gpu}"          # .[dev,data,tasks,torch] — numpy + sklearn present
 MODEL="${1:-snr_moment_ridge}"             # mean_snr | snr_moment_ridge; override as $1
 DATASET="radioml_2016_10a"
 SEED=42                                     # deterministic baselines — a single seed-42 run suffices
@@ -42,7 +53,7 @@ OUT_DIR="$WORK/logs/multiseed/snr_estimation"
 OUT="$OUT_DIR/${MODEL}-seed${SEED}.json"
 
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
-export RFBENCH_CACHE="$WORK/data/rfbench_cache"
+export RFBENCH_CACHE="${RFBENCH_CACHE:-$WORK/data/rfbench_cache}"
 export RFBENCH_HARDWARE="CPU (DSP/regression baseline)"
 
 echo "=== node=$(hostname) arch=$(uname -m) model=$MODEL seed=$SEED date=$(date -Is) ==="

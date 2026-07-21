@@ -1,0 +1,94 @@
+name: Feature request
+description: Suggest an enhancement to the code, CLI, schemas, metrics, or the leaderboard site.
+title: "[feature] <short summary>"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Propose an enhancement to RF-Benchmark-Hub. For a **new benchmark task**
+        (new dataset + metric + canonical split) use the *Task proposal* template
+        instead — this one is for improvements to existing code, tooling, metrics,
+        or the site.
+
+        Keep in mind the project's non-negotiables (see `CLAUDE.md`): frozen core
+        contracts, declared regimes, full-protocol evaluation, and **no raw data in
+        git**. Proposals that would change a core contract signature need an explicit
+        review + version bump.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the project would this touch?
+      options:
+        - CLI (rfbench)
+        - data prepare / download (split indices)
+        - core contracts (task / dataset / metric / evaluate)
+        - an existing task or baseline model
+        - foundation-model wrappers
+        - schemas / result validation
+        - leaderboard site (generate.py)
+        - metrics / evaluation protocol
+        - SLURM / cluster scripts
+        - docs
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: task
+    attributes:
+      label: Related task (if applicable)
+      description: The task this enhancement relates to (leaderboard/tasks.json). Leave blank if cross-cutting.
+      options:
+        - amc
+        - sei
+        - wideband_detection
+        - spectrum_sensing
+        - interference_id
+        - protocol_tech_id
+        - snr_mobility_recognition
+        - beam_prediction
+        - direction_finding
+        - los_nlos
+        - positioning
+        - har
+        - channel_estimation
+        - not task-specific
+    validations:
+      required: false
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What is missing or awkward today, and who does it affect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you would like to see. Sketch the CLI/API/schema change if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you weighed, and why you prefer the proposal.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: If this changes a core contract signature, I understand it needs an explicit review + version bump.
+          required: false

@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — backlog sans-GPU : 12 lignes littérature AMC, garde-fous `submit --check`, docs vitrine, hygiène repo
+
+Lot exécuté en parallèle (domaines de fichiers disjoints), sans GPU, en préparation de l'ouverture
+publique.
+
+**Lignes littérature AMC mid-tier (12 nouveaux `result.json`, aucune reproduite).** Chiffres
+`accuracy_overall` full-SNR minés verbatim depuis `docs/BIBLIOGRAPHY.md`.
+- 2016.10a (7) : `lstm2-paper` 0.6102, `lstm-dae-paper` 0.6142, `mcformer-paper` 0.6054,
+  `vtcnn2-paper` 0.5698 (~), `cldnn-paper` 0.6056, `mcldnn-paper` 0.6101, `tcn-gru-paper` 0.6156.
+- 2018.01a (5) : `mcldnn-paper` 0.6192, `resnet-paper` 0.6091, `lstm2-paper` 0.6252, `fea-t-paper`
+  0.6237, `lstm-dae-paper` 0.6132.
+- **Doctrine tier (décision validée 2026-07-21)** : les 11 figures re-minées d'une **réimplémentation
+  tierce** (tables TLDNN arXiv:2401.01056 / TCN-GRU *Sensors* 2024) sont `from_paper_uncertain` — la
+  provenance est à un cran du papier d'origine et le split n'est pas confirmé identique. Seul
+  `tcn-gru-paper` reste `from_paper` (auto-report primaire dans la Table III des auteurs). `model.name`
+  en `-paper` distinct des repros internes (`mcldnn-paper` ≠ `mcldnn`), jamais fusionnés. Chaque
+  `verification.note` explicite la source secondaire + l'écart de split (60/20/20 vs notre 80/10/10).
+
+**`rfbench submit --check` — 3 garde-fous full-protocol/comparabilité** (`rfbench/cli/__init__.py`,
+promis par `CONTRIBUTING.md`) : (a) AMC exige `eval.conditions.full_snr_range == true` (rejette le
+cherry-pick high-SNR) ; (b) anti-doublon `(task, model, regime[, k_shot], dataset, split, track)` vs
+les frères committés ; (c) `split.checksum` doit matcher l'index canonique committé s'il existe. +6
+tests.
+
+### Fixed — `mcldnn-radioml2018.json` : `snr_db_max` 18 → 30
+
+La courbe `accuracy_vs_snr` couvre -20..+30 dB (RadioML 2018.01a) mais `eval.conditions.snr_db_max`
+était figé à 18. Corrigé à 30 (aucun impact sur `accuracy_overall`, la valeur scorée est déjà full-range).
+
+### Changed — docs vitrine synchronisées sur l'état réel du board
+
+- `leaderboard/tasks.json` : entrée `snr_estimation` ajoutée (status `implemented`, 3 rows verified) ;
+  cartes RadioML 2018.01a (amc) et ORACLE (sei) ; `wideband_detection` retagué `implemented` → `wip`
+  (0 split committé). `tests/test_site.py::_CANONICAL_TASKS` complété avec `snr_estimation`.
+- `README.md` réécrit contre le board réel (table des tâches exacte, doctrine 4 tiers, data policy,
+  layout). `docs/DOWNSTREAM_TASKS.md` : `snr_estimation` + table de statuts miroir de `tasks.json`.
+- `docs/NEXT_STEPS.md` refondu (état 2026-07-21, mentions de coût/facturation retirées).
+  `docs/SOTA_REFERENCE.md` → **stub redirect** vers `BIBLIOGRAPHY.md` (source de vérité unique ; les
+  références SOTA_REFERENCE dans les entrées CHANGELOG historiques ci-dessous restent, elles décrivent
+  l'état d'alors). `docs/LICENSES.md` : RadioML 2018.01a + ORACLE passés « prepared, split committé ».
+  `docs/BIBLIOGRAPHY.md` : audit 2026-07-20 intégré, MoEformer ajouté, note tier `from_paper_uncertain`.
+
+### Changed — hygiène repo pour ouverture publique + micro-dette code
+
+- Community : `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `SECURITY.md`, templates d'issues
+  (`bug_report`/`feature_request`/`config`, `submission` mis à jour), placeholders `<MAINTAINER_CONTACT>`.
+- `slurm/*.sh` (21 scripts) génériciés : chemins IDRIS en dur → variables d'env documentées
+  (`WORK`, `RFBENCH_REPO`, `RFBENCH_VENV_*`, `RFBENCH_CACHE`), `slurm/README.md` ajouté. 0 username/projet
+  en dur restant.
+- Micro-dette : `tprime.py` `_iq_to_tensor` collate via `np.stack` (supprime le UserWarning perf torch) ;
+  TODO périmés tranchés dans `protocol.py` (tuilage post-split, pas de fuite) et `interference_id/dataset.py`.
+
 ### Added — 1re baseline réelle sur RadioML 2018.01a : `mcldnn` 0.606 (AMC 24-class)
 
 Train GPU from_scratch (seed 42, 30 ep, GB200, job 98771) sur le split canonique 2018 (2.04M

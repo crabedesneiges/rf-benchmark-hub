@@ -19,12 +19,21 @@ body:
     id: task
     attributes:
       label: Task
-      description: Which benchmark task (docs/EVALUATION_PROTOCOL.md).
+      description: Which benchmark task (leaderboard/tasks.json / docs/EVALUATION_PROTOCOL.md).
       options:
         - amc
         - sei
         - wideband_detection
         - spectrum_sensing
+        - interference_id
+        - protocol_tech_id
+        - snr_mobility_recognition
+        - beam_prediction
+        - direction_finding
+        - los_nlos
+        - positioning
+        - har
+        - channel_estimation
     validations:
       required: true
 
@@ -41,7 +50,7 @@ body:
     id: dataset
     attributes:
       label: Dataset
-      description: Concrete dataset variant, e.g. `radioml_2018_01a`, `sig53`, `wisig`, `wbsig53`.
+      description: Concrete dataset variant, e.g. `radioml_2016_10a`, `radioml_2018_01a`, `wisig`, `interf_gnss6`, `tprime_wifi4`.
       placeholder: radioml_2016_10a
     validations:
       required: true

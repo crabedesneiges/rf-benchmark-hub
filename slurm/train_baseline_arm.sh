@@ -14,8 +14,8 @@
 #   checkpoint   → $WORK/checkpoints/multiseed/<model>-seed<seed>.pt
 #
 #SBATCH --job-name=rfbench_train
-#SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/rfbench_train_mcldnn_%j.out
-#SBATCH --error=/lustre/work/pdl16831/udl79f933/logs/rfbench_train_mcldnn_%j.err
+#SBATCH --output=logs/rfbench_train_mcldnn_%j.out
+#SBATCH --error=logs/rfbench_train_mcldnn_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
@@ -25,13 +25,24 @@
 # (confirmé via `sinfo -o "%P %f %c %G"`, seule feature reportée: location=local)
 
 set -uo pipefail
-WORK=/lustre/work/pdl16831/udl79f933
+# --- Portable config (override via environment; see slurm/README.md) -----------------
+#   WORK                Lustre work root (REQUIRED; usually pre-set by the cluster).
+#   RFBENCH_REPO        repo/worktree checkout to run       (default: $WORK/projets/rf-benchmark-hub[...]).
+#   RFBENCH_VENV_CPU    CPU venv  .[dev,data]               (default: $WORK/envs/rfbench-arm).
+#   RFBENCH_VENV_GPU    GPU venv  .[dev,data,tasks,torch]   (default: $WORK/envs/rfbench-arm-gpu).
+#   RFBENCH_VENV_DETECTION  detection venv .[dev,detection] (default: $WORK/envs/rfbench-arm-detection).
+#   RFBENCH_UV          uv binary for this arch             (default: $WORK/envs/uv-arm/uv).
+#   RFBENCH_CACHE       dataset cache root                  (default: $WORK/data/rfbench_cache).
+# SLURM logs go to logs/ relative to the submit dir: create it first (mkdir -p logs) or
+# override with `sbatch --output=... --error=...`.
+# ------------------------------------------------------------------------------------
+WORK="${WORK:?set \$WORK to your Lustre work dir (e.g. /lustre/work/<project>/<user>)}"
 # Derive REPO from SLURM_SUBMIT_DIR so that the correct worktree's code is used regardless of
 # which rfbench editable install is registered in the venv's .pth.
 REPO="${SLURM_SUBMIT_DIR:-$WORK/projets/rf-benchmark-hub}"
 # Strip trailing /slurm if sbatch was run from the slurm/ subdirectory.
 REPO="${REPO%/slurm}"
-VENV="$WORK/envs/rfbench-arm-gpu"          # .[dev,data,tasks,torch] — torch + CUDA present
+VENV="${RFBENCH_VENV_GPU:-$WORK/envs/rfbench-arm-gpu}"          # .[dev,data,tasks,torch] — torch + CUDA present
 MODEL="${1:-mcldnn}"                        # baseline registry name; override as $1
 EPOCHS="${2:-50}"                          # small-but-real default; override as $2
 SEED="${3:-42}"                            # RNG seed; override as $3 (use 42/43/44)
@@ -46,7 +57,7 @@ CKPT="$CKPT_DIR/${MODEL}-seed${SEED}.pt"
 
 # Garantir que le code du repo de soumission précède le .pth de l'install editable.
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
-export RFBENCH_CACHE="$WORK/data/rfbench_cache"
+export RFBENCH_CACHE="${RFBENCH_CACHE:-$WORK/data/rfbench_cache}"
 export RFBENCH_HARDWARE="1x NVIDIA GB200"
 
 echo "=== node=$(hostname) arch=$(uname -m) model=$MODEL epochs=$EPOCHS seed=$SEED date=$(date -Is) ==="

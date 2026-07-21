@@ -1,0 +1,44 @@
+{
+  "created_at": "2026-07-21T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2018_01a",
+    "version": "01a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 30,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.6192
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "mcldnn-paper",
+    "url": "https://doi.org/10.1109/LWC.2020.2999453"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "amc-mcldnn-paper-radioml2018-fullsnr",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2018-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:a6dcde164f5a3974990747c08b1ad48c0be2a05b41f15fc33a071627a3ad6d94",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "MCLDNN (Xu, Luo, Chen, Luo, Wu, IEEE WCL 9(10):1629-1632, 2020, DOI 10.1109/LWC.2020.2999453). Chiffre reporte via la Table II du papier SECONDAIRE TLDNN (Qu, Lu, Zeng, Wang, Wang, 'Enhancing Automatic Modulation Recognition through Robust Global Feature Extraction', IEEE TVT 2024, arXiv:2401.01056), NON lu a la source primaire; c'est la baseline MCLDNN re-implementee et re-evaluee par les auteurs de TLDNN sur RadioML 2018.01a. 0.6192 = full-SNR accuracy_overall (moyenne sur -20..+30 dB, 24 classes), a NE PAS confondre avec le peak ~95% haut-SNR souvent cite; c'est bien la moyenne full-range. Meme dataset (RadioML 2018.01a) que notre split committe. Ratio train/test 60/20/20 (TLDNN) vs notre 80/10/10, indices non publies -> aucun recouvrement byte-level confirme avec amc-radioml2018-strat-snr-8010-seed42-v1, seuls le dataset et le protocole full-SNR/metric coincident. 'from_paper_uncertain' : chiffre re-mine d'une reimplementation TIERCE dans la table d'un AUTRE papier (pas le papier d'origine du modele), donc provenance/split/preprocessing NON confirmes identiques a notre split committe. DISTINCT des lignes own-paper (tldnn_paper/iqfm_paper/moeformer_paper) qui restent 'from_paper' car auto-rapportees par le papier du modele lui-meme. DISTINCT de notre MCLDNN reproduit en interne sur 2018 (board row 'mcldnn-radioml2018', 0.606 self_reported): meme architecture cible, provenance et modele.name differents, jamais fusionnes. Point de reference litterature.",
+    "status": "from_paper_uncertain"
+  }
+}

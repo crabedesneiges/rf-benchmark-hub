@@ -12,8 +12,8 @@
 #              retrain, e.g. `sbatch slurm/diagnose_cldnn_arm.sh 12 norm 0,7,42,123`)
 #
 #SBATCH --job-name=cldnn_diag
-#SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/cldnn_diag_%j.out
-#SBATCH --error=/lustre/work/pdl16831/udl79f933/logs/cldnn_diag_%j.err
+#SBATCH --output=logs/cldnn_diag_%j.out
+#SBATCH --error=logs/cldnn_diag_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
@@ -23,15 +23,26 @@
 # (confirmé via `sinfo -o "%P %f %c %G"`, seule feature reportée: location=local)
 
 set -uo pipefail
-WORK=/lustre/work/pdl16831/udl79f933
-REPO="$WORK/projets/rf-benchmark-hub-cldnn"   # the fix/cldnn-collapse worktree
-VENV="$WORK/envs/rfbench-arm-gpu"             # .[dev,data,tasks,torch] — torch + CUDA present
-UV="$WORK/envs/uv-arm/uv"
+# --- Portable config (override via environment; see slurm/README.md) -----------------
+#   WORK                Lustre work root (REQUIRED; usually pre-set by the cluster).
+#   RFBENCH_REPO        repo/worktree checkout to run       (default: $WORK/projets/rf-benchmark-hub[...]).
+#   RFBENCH_VENV_CPU    CPU venv  .[dev,data]               (default: $WORK/envs/rfbench-arm).
+#   RFBENCH_VENV_GPU    GPU venv  .[dev,data,tasks,torch]   (default: $WORK/envs/rfbench-arm-gpu).
+#   RFBENCH_VENV_DETECTION  detection venv .[dev,detection] (default: $WORK/envs/rfbench-arm-detection).
+#   RFBENCH_UV          uv binary for this arch             (default: $WORK/envs/uv-arm/uv).
+#   RFBENCH_CACHE       dataset cache root                  (default: $WORK/data/rfbench_cache).
+# SLURM logs go to logs/ relative to the submit dir: create it first (mkdir -p logs) or
+# override with `sbatch --output=... --error=...`.
+# ------------------------------------------------------------------------------------
+WORK="${WORK:?set \$WORK to your Lustre work dir (e.g. /lustre/work/<project>/<user>)}"
+REPO="${RFBENCH_REPO:-$WORK/projets/rf-benchmark-hub-cldnn}"   # the fix/cldnn-collapse worktree
+VENV="${RFBENCH_VENV_GPU:-$WORK/envs/rfbench-arm-gpu}"             # .[dev,data,tasks,torch] — torch + CUDA present
+UV="${RFBENCH_UV:-$WORK/envs/uv-arm/uv}"
 EPOCHS="${1:-20}"
 VARIANTS="${2:-broken,norm,init,norm_init}"
 SEEDS="${3:-42}"
 
-export RFBENCH_CACHE="$WORK/data/rfbench_cache"
+export RFBENCH_CACHE="${RFBENCH_CACHE:-$WORK/data/rfbench_cache}"
 export UV_PROJECT_ENVIRONMENT="$VENV"          # reuse the prebuilt GPU venv (no re-sync)
 export UV_CACHE_DIR="$WORK/.uv_cache_arm"
 # The GPU venv is editable-installed against the MAIN repo, so force this worktree's rfbench onto

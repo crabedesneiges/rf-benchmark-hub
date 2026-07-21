@@ -13,7 +13,7 @@
     "batch_size": 512,
     "conditions": {
       "full_snr_range": true,
-      "snr_db_max": 18,
+      "snr_db_max": 30,
       "snr_db_min": -20
     },
     "n_samples": 255216

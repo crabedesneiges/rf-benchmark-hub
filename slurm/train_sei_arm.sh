@@ -22,8 +22,8 @@
 #        ORACLE:      sbatch slurm/train_sei_arm.sh oracle_cnn 100 closed_set oracle
 #
 #SBATCH --job-name=sei_train
-#SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/rfbench_sei_%j.out
-#SBATCH --error=/lustre/work/pdl16831/udl79f933/logs/rfbench_sei_%j.err
+#SBATCH --output=logs/rfbench_sei_%j.out
+#SBATCH --error=logs/rfbench_sei_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
@@ -31,12 +31,23 @@
 #SBATCH --time=08:00:00
 
 set -uo pipefail
-WORK=/lustre/work/pdl16831/udl79f933
+# --- Portable config (override via environment; see slurm/README.md) -----------------
+#   WORK                Lustre work root (REQUIRED; usually pre-set by the cluster).
+#   RFBENCH_REPO        repo/worktree checkout to run       (default: $WORK/projets/rf-benchmark-hub[...]).
+#   RFBENCH_VENV_CPU    CPU venv  .[dev,data]               (default: $WORK/envs/rfbench-arm).
+#   RFBENCH_VENV_GPU    GPU venv  .[dev,data,tasks,torch]   (default: $WORK/envs/rfbench-arm-gpu).
+#   RFBENCH_VENV_DETECTION  detection venv .[dev,detection] (default: $WORK/envs/rfbench-arm-detection).
+#   RFBENCH_UV          uv binary for this arch             (default: $WORK/envs/uv-arm/uv).
+#   RFBENCH_CACHE       dataset cache root                  (default: $WORK/data/rfbench_cache).
+# SLURM logs go to logs/ relative to the submit dir: create it first (mkdir -p logs) or
+# override with `sbatch --output=... --error=...`.
+# ------------------------------------------------------------------------------------
+WORK="${WORK:?set \$WORK to your Lustre work dir (e.g. /lustre/work/<project>/<user>)}"
 # REPO defaults to the feat/sei-complete worktree; override with RFBENCH_REPO to run this recipe
 # from another worktree (e.g. the ecstatic integration branch, which carries the open_set track).
 REPO="${RFBENCH_REPO:-$WORK/projets/rf-benchmark-hub-sei}"
-VENV="$WORK/envs/rfbench-arm-gpu"              # .[dev,data,tasks,torch] — torch + CUDA present
-UV="$WORK/envs/uv-arm/uv"
+VENV="${RFBENCH_VENV_GPU:-$WORK/envs/rfbench-arm-gpu}"              # .[dev,data,tasks,torch] — torch + CUDA present
+UV="${RFBENCH_UV:-$WORK/envs/uv-arm/uv}"
 MODEL="${1:-wisig_cnn_paper}"
 EPOCHS="${2:-100}"
 TRACKS="${3:-closed_set cross_receiver cross_day}"
@@ -45,7 +56,7 @@ TRACKS="${3:-closed_set cross_receiver cross_day}"
 # download for both -- see rfbench.data.download.sei_{oracle,powder}).
 if [ -n "${4:-}" ]; then DATASET="$4"; elif [ "$MODEL" = "oracle_cnn" ]; then DATASET="oracle"; else DATASET="wisig"; fi
 
-export RFBENCH_CACHE="$WORK/data/rfbench_cache"
+export RFBENCH_CACHE="${RFBENCH_CACHE:-$WORK/data/rfbench_cache}"
 export RFBENCH_HARDWARE="1x NVIDIA GB200"
 export UV_PROJECT_ENVIRONMENT="$VENV"           # reuse the prebuilt GPU venv (no re-sync)
 export UV_CACHE_DIR="$WORK/.uv_cache_arm"

@@ -48,6 +48,7 @@ FM papers mined (9):
 | `interference_id`        | Interference / jamming detection and classification (e.g. multi-class GNSS jamming-condition recognition). Distinct from `spectrum_sensing` (occupancy) and `wideband_detection` (time-frequency localization). |
 | `protocol_tech_id`       | Wireless technology / standard / protocol recognition (e.g. IEEE 802.11 ax/b/n/g variant). Distinct from `amc`: identifies the protocol/standard, not the modulation. |
 | `snr_mobility_recognition` | Joint SNR-bin x mobility/Doppler-regime classification into a single combined (SNR, mobility) label space (classification, F1/accuracy — not a regression MAE). New id from LWM-Spectro Task 2; distinct from a pure SNR-estimation regression. |
+| `snr_estimation`         | Per-window signal-to-noise-ratio **regression** (predict `snr_db` in dB from IQ), scored by `rmse_db` (primary, lower is better) / `mae_db`. Distinct from `snr_mobility_recognition` (a joint SNR-bin x mobility *classification*, not a scalar regression). Added 2026-07 as a board track from the RadioML 2016.10a `snr_db` field — not part of the FM mining. |
 | `wideband_detection`     | Signal detection / localization in time-frequency (spectrogram): boxes or per-pixel semantic segmentation locating/identifying signals (e.g. noise/NR/LTE segmentation). Distinct from `spectrum_sensing`. |
 | `spectrum_sensing`       | Per-subband spectrum occupancy / presence detection under a target false-alarm rate (pd@pfa). Distinct from `wideband_detection` (occupancy vs time-frequency localization). |
 | `source_separation`      | Blind multi-source RF separation: reconstruct each component waveform from a single-channel mixture of 2+ unknown standard-compliant sources (permutation-invariant, per-source ground truth). Distinct from `spectrum_sensing`/`wideband_detection` (presence/localization, not reconstruction) and from interference *cancellation* (known desired signal). Added 2026-07 from RFSS (arXiv:2604.00398) — not part of the FM mining. |
@@ -72,8 +73,12 @@ FM papers mined (9):
 | `wideband_detection`      |     |     |     |     |     |     |     | X   |     | P2 (1)    |
 | `spectrum_sensing`        |     |     |     |     |     |     |     |     |     | P3 (0)    |
 | `source_separation`       |     |     |     |     |     |     |     |     |     | P3 (0)*   |
+| `snr_estimation`          |     |     |     |     |     |     |     |     |     | P3 (0)†   |
 
 \* `source_separation` added from RFSS (arXiv:2604.00398, not an FM paper); no FM evaluates it.
+† `snr_estimation` is a board regression track on RadioML 2016.10a's `snr_db` field, not an
+FM-mined task; no FM paper evaluates scalar SNR regression. It is nonetheless **live on the
+board** (committed split + verified baseline) — see the P3 section below.
 
 Per-paper canonical-task counts: WirelessJEPA 5, IQFM 4, LatentWave 4, WavesFM 4, LWM-base 2,
 LWM-Spectro 2, 6G-MSM 2, RIS-MAE 1, TorchSig-XCiT 1.
@@ -231,9 +236,11 @@ LWM-Spectro 2, 6G-MSM 2, RIS-MAE 1, TorchSig-XCiT 1.
 
 - **Data/metric**: 6G-MSM Spectrogram Segmentation (noise / NR / LTE, 3-class per-pixel), 97.6%
   mean segmentation accuracy (ViT-M).
-- **Status in rfbench**: **EXISTS** as a task (`rfbench/tasks/wideband_detection/`) with a
-  detection-flavored protocol: `EVALUATION_PROTOCOL.md` §Wideband uses **RadDet** (real, published),
-  primary `mAP` (+ `mAR`, `IoU`). Note the ONE FM evaluator here does **segmentation**, not box
+- **Status in rfbench**: **SCAFFOLDED, WIP on the board.** The task package
+  (`rfbench/tasks/wideband_detection/`) and a detection-flavored protocol exist
+  (`EVALUATION_PROTOCOL.md` §Wideband uses **RadDet**, real/published, primary `mAP` + `mAR`, `IoU`),
+  but there is **no committed split and no baseline row** yet — so `leaderboard/tasks.json` declares
+  it `wip`, not `implemented`. Note the ONE FM evaluator here does **segmentation**, not box
   detection — a different sub-form of the same time-frequency-localization task.
 - **Recommended**: keep RadDet + `mAP` as the board protocol (`detect-raddet-<track>-v1`); if a
   segmentation FM baseline is added, report per-pixel accuracy / mIoU as a separate segmentation
@@ -269,6 +276,48 @@ LWM-Spectro 2, 6G-MSM 2, RIS-MAE 1, TorchSig-XCiT 1.
   Baselines: Conv-TasNet (−12.34 dB co-channel 2-src) and DPRNN, checkpoints announced.
   **Blocked: dataset NOT released as of 2026-07-03** (HF release announced in the paper, nothing published yet). **Scope-fit**: raw-IQ
   terrestrial signals — in scope; synthetic-but-downloadable (allowed, like `interf_gnss6`).
+
+### `snr_estimation` — per-window SNR regression (0 FM papers, live board track)
+
+- **FM coverage**: **NONE** of the 9 FM papers evaluate scalar SNR regression. LWM-Spectro's Task 2
+  is `snr_mobility_recognition` — a joint (SNR-bin x mobility) *classification*, not a regression to
+  `snr_db` — so it does not count here. A board regression track here is orthogonal to the FM-eval
+  landscape.
+- **Status in rfbench**: **EXISTS + live on the board.** `rfbench/tasks/snr_estimation/` is
+  implemented; `docs/EVALUATION_PROTOCOL.md` §"Regression metric (`snr_estimation`)" defines it on
+  RadioML 2016.10a with primary `rmse_db` (lower is better) + secondary `mae_db`. The board carries a
+  **verified** `snr_cnn` baseline (~5.73 dB RMSE) plus `mean_snr` and `snr_moment_ridge` references.
+  Declared `implemented` in `leaderboard/tasks.json`.
+- **Recommended**: keep RadioML 2016.10a on the single `all_snr` track over the **full SNR range**
+  (−20…+18 dB, no cherry-picking), split `snr-radioml2016-strat-snr-8010-seed42-v1` (byte-identical
+  indices to the AMC 2016 split `amc-radioml2016-strat-snr-8010-seed42-v1`, so SNR and AMC score the
+  exact same held-out signals). The leaderboard ranks `snr_estimation` **ascending** and inverts the
+  score bar (lower `rmse_db` is better). **Scope-fit**: raw-IQ terrestrial-signal regression — in
+  scope; it is the board's first regression track and the reference for how a regression metric is
+  represented (see `positioning` / `channel_estimation`, which will need the same treatment).
+
+---
+
+## Task inventory vs FM taxonomy (build status)
+
+The buckets above are the **FM-coverage** priority (how many FM papers evaluate a task). Build status
+in the repo is tracked separately in [`leaderboard/tasks.json`](../leaderboard/tasks.json) (the site
+renders from it) and must stay in sync. Snapshot (2026-07):
+
+| Canonical task | tasks.json status | On the board? |
+|---|---|---|
+| `amc` | implemented | yes — RadioML 2016.10a + 2018.01a columns |
+| `sei` | implemented | yes — WiSig (closed/cross-rx/cross-day/open) + ORACLE (closed) |
+| `snr_estimation` | implemented | yes — RadioML 2016.10a, verified `snr_cnn` |
+| `interference_id` | implemented | yes — interf-gnss6 |
+| `protocol_tech_id` | implemented | yes — tprime-wifi4 (within-dist + cross-room) |
+| `wideband_detection` | wip | no — protocol frozen, no committed split/baseline |
+| `spectrum_sensing` | wip | no — protocol frozen, no committed split/baseline |
+| `snr_mobility_recognition` | wip | no — dataset + baseline pending |
+| `beam_prediction` / `direction_finding` / `los_nlos` / `positioning` / `har` / `channel_estimation` | planned | no — CSI/channel-domain, out of current scope |
+
+`source_separation` is in the taxonomy but not yet declared as a `tasks.json` entry (blocked on the
+unreleased RFSS dataset).
 
 ---
 

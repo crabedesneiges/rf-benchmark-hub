@@ -1,5 +1,5 @@
 {
-  "$comment": "Declared downstream tasks for the RF-Benchmark-Hub leaderboard. The site generator (leaderboard/site/generate.py) renders EVERY task listed here: tasks with valid result JSONs render full leaderboard tables/plots; tasks without results render a WIP card + a minimal WIP page. Canonical task ids, titles, priority (P1/P2/P3) and scope buckets mirror docs/DOWNSTREAM_TASKS.md. 'scope' is 'terrestrial_iq' (raw-IQ signal tasks, the board's current focus) or 'csi_sensing' (CSI/channel-domain tasks, a separate out-of-scope track) -- optional, defaults to 'terrestrial_iq' if absent; it drives the site's homepage/sidebar section grouping. 'status' is the declared build state: implemented (has or will have results), wip (task/track defined, baseline pending), planned (blocked / out-of-current-scope, e.g. CSI/channel-domain). Each entry ALSO carries educational content rendered as an explanatory header on the task page: 'description' (one-paragraph what/why), a 'dataset' card ({name, source, n_classes, modality, real_or_synthetic, conditions, license, split}), and metric definitions ('primary_metric' = {name, definition}; 'secondary_metrics' = list of {name, definition}). These educational fields are OPTIONAL: an entry without them renders the same generic header minus the missing pieces. Keep this list in sync with docs/DOWNSTREAM_TASKS.md.",
+  "$comment": "Declared downstream tasks for the RF-Benchmark-Hub leaderboard. The site generator (leaderboard/site/generate.py) renders EVERY task listed here: tasks with valid result JSONs render full leaderboard tables/plots; tasks without results render a WIP card + a minimal WIP page. Canonical task ids, titles, priority (P1/P2/P3) and scope buckets mirror docs/DOWNSTREAM_TASKS.md. 'scope' is 'terrestrial_iq' (raw-IQ signal tasks, the board's current focus) or 'csi_sensing' (CSI/channel-domain tasks, a separate out-of-scope track) -- optional, defaults to 'terrestrial_iq' if absent; it drives the site's homepage/sidebar section grouping. 'status' is the declared build state: implemented (has or will have results), wip (task/track defined, baseline pending), planned (blocked / out-of-current-scope, e.g. CSI/channel-domain). Each entry ALSO carries educational content rendered as an explanatory header on the task page: 'description' (one-paragraph what/why), a 'dataset' card ({name, source, n_classes, modality, real_or_synthetic, conditions, license, split}), and metric definitions ('primary_metric' = {name, definition}; 'secondary_metrics' = list of {name, definition}). These educational fields are OPTIONAL: an entry without them renders the same generic header minus the missing pieces. The site generator renders exactly ONE dataset card (the 'dataset' object). Tasks scored on more than one dataset (amc: RadioML 2016.10a + 2018.01a; sei: WiSig + ORACLE) ALSO carry a 'datasets' array documenting every board dataset with the same card fields; 'dataset' stays the primary card and the generator ignores the extra array (informational + provenance). Note 'snr_estimation' is a lower-is-better REGRESSION track (primary rmse_db, secondary mae_db): the leaderboard ranks it ascending and inverts the score bar (see docs/EVALUATION_PROTOCOL.md 'Regression metric'). Keep this list in sync with docs/DOWNSTREAM_TASKS.md.",
   "tasks": [
     {
       "id": "amc",
@@ -7,8 +7,8 @@
       "status": "implemented",
       "priority": "P1",
       "scope": "terrestrial_iq",
-      "blurb": "Predict the modulation scheme of a raw-IQ window (RadioML 2016.10a, full SNR range). The board's most mature track.",
-      "description": "Predict the modulation scheme of a short raw-IQ window (e.g. BPSK, QPSK, QAM, FM). It is the foundational RF classification task and the board's most mature track, used to compare specialized baselines against fine-tuned foundation models.",
+      "blurb": "Predict the modulation scheme of a raw-IQ window across the full SNR range. Two board datasets: RadioML 2016.10a (11 cl., primary) and RadioML 2018.01a (24 cl.). The board's most mature track.",
+      "description": "Predict the modulation scheme of a short raw-IQ window (e.g. BPSK, QPSK, QAM, FM). It is the foundational RF classification task and the board's most mature track, used to compare specialized baselines against fine-tuned foundation models. Scored on two datasets with committed splits: RadioML 2016.10a (11 classes, primary) and RadioML 2018.01a (24 classes); each dataset is a separate board column (never blended).",
       "dataset": {
         "name": "RadioML 2016.10a",
         "source": "DeepSig / O'Shea et al. (canonical id amc-radioml2016-strat-snr-8010-seed42-v1)",
@@ -19,6 +19,28 @@
         "license": "unstated in repo docs (standard community AMC benchmark)",
         "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split)"
       },
+      "datasets": [
+        {
+          "name": "RadioML 2016.10a",
+          "source": "DeepSig / O'Shea et al. (canonical id amc-radioml2016-strat-snr-8010-seed42-v1)",
+          "n_classes": "11",
+          "modality": "raw IQ (2,128)",
+          "real_or_synthetic": "synthetic-but-standard",
+          "conditions": "full SNR range -20..+18 dB (no cherry-picking)",
+          "license": "unstated in repo docs (standard community AMC benchmark)",
+          "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split); split id amc-radioml2016-strat-snr-8010-seed42-v1"
+        },
+        {
+          "name": "RadioML 2018.01a",
+          "source": "DeepSig / O'Shea et al. (opendata.deepsig.io 2018.01 OSC 1024x2M; canonical id amc-radioml2018-strat-snr-8010-seed42-v1)",
+          "n_classes": "24",
+          "modality": "raw IQ (2,1024)",
+          "real_or_synthetic": "synthetic-but-standard",
+          "conditions": "full SNR range -20..+30 dB (no cherry-picking)",
+          "license": "unstated in repo docs (standard community AMC benchmark)",
+          "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split); split id amc-radioml2018-strat-snr-8010-seed42-v1"
+        }
+      ],
       "primary_metric": {
         "name": "accuracy_overall",
         "definition": "Top-1 classification accuracy over the FULL SNR range (all -20..+18 dB pooled, no high-SNR cherry-picking)."
@@ -40,18 +62,40 @@
       "status": "implemented",
       "priority": "P1",
       "scope": "terrestrial_iq",
-      "blurb": "Identify the transmitting device from hardware imperfections (WiSig), with closed-set / cross-receiver / cross-day tracks.",
-      "description": "Identify the specific transmitting device from hardware imperfections (RF fingerprint), predicting emitter identity rather than modulation. It matters for device authentication and spoofing detection, and is reported on separate closed-set / cross-receiver / cross-day tracks.",
+      "blurb": "Identify the transmitting device from hardware imperfections. Two board datasets: WiSig (ManyTx, closed-set / cross-receiver / cross-day / open-set tracks) and ORACLE (16-tx, closed-set only).",
+      "description": "Identify the specific transmitting device from hardware imperfections (RF fingerprint), predicting emitter identity rather than modulation. It matters for device authentication and spoofing detection, and is reported on separate closed-set / cross-receiver / cross-day / open-set tracks (never blended). Scored on two datasets with committed splits: WiSig (ManyTx) and ORACLE (16 USRP X310 transmitters, single receiver -> closed-set only).",
       "dataset": {
         "name": "WiSig (ManyTx)",
         "source": "Hanna, Karunaratne, Cabric, IEEE Access 10:22808-22818, 2022 (DOI 10.1109/ACCESS.2022.3154488; arXiv:2112.15363; data cores.ee.ucla.edu/downloads/datasets/wisig/)",
         "n_classes": "up to 150 transmitters (ManyTx)",
         "modality": "raw IQ (256,2) \u2014 first 256 preamble samples, non-equalized, unit-average-power normalized",
         "real_or_synthetic": "real (over-the-air WiFi captures)",
-        "conditions": "closed-set / cross-receiver / cross-day tracks reported separately",
+        "conditions": "closed-set / cross-receiver / cross-day / open-set tracks reported separately",
         "license": "unstated in repo docs",
-        "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closed-8010-seed42-v1), plus cross_receiver / cross_day tracks"
+        "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closedset-strat-tx-8010-seed42-v1), plus cross_receiver / cross_day (grouped) and open_set (held-out tx) tracks"
       },
+      "datasets": [
+        {
+          "name": "WiSig (ManyTx)",
+          "source": "Hanna, Karunaratne, Cabric, IEEE Access 10:22808-22818, 2022 (DOI 10.1109/ACCESS.2022.3154488; arXiv:2112.15363; data cores.ee.ucla.edu/downloads/datasets/wisig/)",
+          "n_classes": "up to 150 transmitters (ManyTx)",
+          "modality": "raw IQ (256,2) \u2014 first 256 preamble samples, non-equalized, unit-average-power normalized",
+          "real_or_synthetic": "real (over-the-air WiFi captures)",
+          "conditions": "closed-set / cross-receiver / cross-day / open-set tracks reported separately",
+          "license": "unstated in repo docs",
+          "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closedset-strat-tx-8010-seed42-v1); grouped cross_receiver / cross_day and held-out-tx open_set tracks"
+        },
+        {
+          "name": "ORACLE (16-tx)",
+          "source": "Sankhe et al. 2019 (ORACLE, GENESYS Lab / Northeastern; genesys-lab.org/oracle) \u2014 16 identical USRP X310 SDRs, single receiver",
+          "n_classes": "16 transmitters",
+          "modality": "raw IQ",
+          "real_or_synthetic": "real (over-the-air, bit-similar frames from 16 identical radios)",
+          "conditions": "closed_set only (single receiver -> no cross-receiver / cross-day track)",
+          "license": "unstated in repo docs",
+          "split": "80/10/10 stratified by tx, seed 42 (sei-oracle-closedset-strat-tx-8010-seed42-v1)"
+        }
+      ],
       "primary_metric": {
         "name": "rank1_accuracy",
         "definition": "Closed-set top-1 (rank-1) accuracy of predicting the correct transmitting device."
@@ -68,12 +112,41 @@
       ]
     },
     {
-      "id": "wideband_detection",
-      "title": "Wideband detection",
+      "id": "snr_estimation",
+      "title": "SNR estimation",
       "status": "implemented",
       "priority": "P2",
       "scope": "terrestrial_iq",
-      "blurb": "Locate and identify signals in time-frequency (RadDet), primary mAP with mAR and IoU.",
+      "blurb": "Regress the per-window signal-to-noise ratio (dB) from raw IQ over the full RadioML 2016.10a SNR range. Primary rmse_db (lower is better); the board ranks ascending. Baseline snr_cnn on the board (5.73 dB RMSE).",
+      "description": "Estimate the signal-to-noise ratio (in dB) of a short raw-IQ window as a regression, rather than classifying modulation. It matters for link adaptation, quality monitoring and as a conditioning signal for downstream receivers. Scored over the full RadioML 2016.10a SNR range with no cherry-picking (the same full-SNR-range invariant as AMC). Both metrics are lower-is-better (0 dB is a perfect estimate); the leaderboard ranks snr_estimation ascending and inverts the score bar.",
+      "dataset": {
+        "name": "RadioML 2016.10a",
+        "source": "DeepSig / O'Shea et al. (canonical id snr-radioml2016-strat-snr-8010-seed42-v1)",
+        "n_classes": "N/A (regression to snr_db)",
+        "modality": "raw IQ (2,128)",
+        "real_or_synthetic": "synthetic-but-standard",
+        "conditions": "full SNR range -20..+18 dB (no cherry-picking); target = per-window snr_db field",
+        "license": "unstated in repo docs (standard community AMC benchmark)",
+        "split": "byte-identical indices to the AMC split amc-radioml2016-strat-snr-8010-seed42-v1 (derived from it, own id snr-radioml2016-strat-snr-8010-seed42-v1) so the SNR and AMC boards score the exact same held-out signals"
+      },
+      "primary_metric": {
+        "name": "rmse_db",
+        "definition": "Root-mean-square error (in dB) between estimated and true per-window SNR over the FULL SNR range (-20..+18 dB, no cherry-picking). Lower is better; chosen as primary for its sensitivity to outliers, relevant for catching estimation failures at low SNR."
+      },
+      "secondary_metrics": [
+        {
+          "name": "mae_db",
+          "definition": "Mean absolute error (in dB) between estimated and true per-window SNR. Lower is better."
+        }
+      ]
+    },
+    {
+      "id": "wideband_detection",
+      "title": "Wideband detection",
+      "status": "wip",
+      "priority": "P2",
+      "scope": "terrestrial_iq",
+      "blurb": "Locate and identify signals in time-frequency (RadDet), primary mAP with mAR and IoU. Track + protocol defined; no split committed and no baseline submitted yet.",
       "description": "Locate and identify signals in the time-frequency plane, drawing boxes over a spectrogram to detect where and what signals are present. It matters for wideband spectrum monitoring where many emitters coexist.",
       "dataset": {
         "name": "RadDet",

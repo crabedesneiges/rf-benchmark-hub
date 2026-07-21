@@ -719,6 +719,7 @@ _CANONICAL_TASKS: tuple[str, ...] = (
     "spectrum_sensing",
     "interference_id",
     "protocol_tech_id",
+    "snr_estimation",
     "beam_prediction",
     "direction_finding",
     "los_nlos",

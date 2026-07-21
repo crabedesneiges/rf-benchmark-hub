@@ -191,13 +191,15 @@ def _load_interference_arrays(name: str) -> tuple[list[Any], list[str]]:
     and within each class the IQ files are read in sorted-path order (the same order the label
     loader enumerates). Cluster-only.
 
-    The extracted ``Raw_IQ_Dataset.zip`` ships per-class MATLAB ``.mat`` files under
-    ``Raw_IQ_Dataset/{Training,Testing}/<Class>/``; each is read (lazy scipy) into a ``(2, L)``
-    window, I on row 0 / Q on row 1, to match the model's channel-first layout.
+    The extracted ``Raw_IQ_Dataset.zip`` layout is CONFIRMED (Zenodo 4629685): per-class MATLAB
+    ``.mat`` files under ``Raw_IQ_Dataset/{Training,Testing}/<Class>/`` (see
+    ``rfbench.data.prepare.interference``). Each is read (lazy scipy) into a ``(2, L)`` window,
+    I on row 0 / Q on row 1, to match the model's channel-first layout.
 
-    TODO (cluster): once scipy is available, confirm the ``.mat`` variable name/shape holds the
-    complex IQ vector this reader expects (a single non-``__`` variable); adjust if the archive
-    stores I/Q as separate real arrays.
+    OPEN (cluster, needs scipy): the folder layout is pinned, but the ``.mat`` INTERNAL structure
+    is not documented by the record -- this reader assumes a single non-``__`` variable holding the
+    complex IQ vector. Confirm that assumption on the first real load; if the archive instead stores
+    I/Q as two separate real arrays, split the ``next(...)`` pick below into an I/Q pair here.
     """
     if name != "interf_gnss6":
         raise NotImplementedError(f"on-disk array loading for {name!r} is not wired.")

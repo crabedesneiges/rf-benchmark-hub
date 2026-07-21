@@ -1,0 +1,14 @@
+# Disable "blank" issues so contributors pick one of the structured templates
+# (bug_report / feature_request / submission / task_proposal).
+blank_issues_enabled: false
+
+# Optional: once the repo is public, add contact links here. GitHub requires
+# ABSOLUTE https URLs, so fill in the real repo URL before uncommenting — e.g.:
+#
+# contact_links:
+#   - name: Security vulnerability
+#     url: https://github.com/<org>/<repo>/blob/main/SECURITY.md
+#     about: Do NOT open a public issue for security problems — follow SECURITY.md (private reporting).
+#   - name: Question / discussion
+#     url: https://github.com/<org>/<repo>/discussions
+#     about: For usage questions or open-ended discussion, use the Discussions tab.

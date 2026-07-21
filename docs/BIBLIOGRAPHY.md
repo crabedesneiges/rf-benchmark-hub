@@ -39,9 +39,10 @@ figures (~90% @ +18 dB) are a different metric and are NOT used here.
 | MCformer | 60.54% (TLDNN T2) | — | not run | Missing |
 | LSTM-DAE | 61.42% (TLDNN T2) | — | not run | Missing |
 | TCN-GRU (Sensors 2024) | 61.56% (own T3) | — | not run | Missing |
-| **TLDNN** (Qu 2024) — SOTA | **62.83%** (+SS 63.35%) | — | not run (own repro); `from_paper` board row (`tldnn_paper`, 2026-07) citing 62.83% | Missing (target ceiling, unimplemented) |
+| **TLDNN** (Qu 2024) | **62.83%** (+SS 63.35%) | — | not run (own repro); `from_paper` board row (`tldnn_paper`, 2026-07) citing 62.83% | Missing (unimplemented) |
+| **MoEformer** (Wang 2026) — SOTA | **63.74%** (T2, full SNR) | — | not run (own repro); `from_paper` board row (`moeformer_paper-2016`, 2026-07) citing 63.74% | Missing (current literature ceiling, unimplemented) |
 
-Honest ceiling on 2016.10a is ~61–63% (11 classes). The 2026-06 recipe fix (val-accuracy checkpoint +
+Honest ceiling on 2016.10a is ~61–64% (11 classes). The 2026-06 recipe fix (val-accuracy checkpoint +
 LR schedule + early stopping — Part B item 1, now addressed) closed the gap: MCLDNN now sits **above**
 its paper target (61.71 vs 61.01) and ResNet within 0.7 pt. CLDNN's chance-collapse under the final
 recipe was root-caused (2026-07) to an input-scale init fragility — RadioML's ~1e-2-RMS IQ fed to a
@@ -60,27 +61,41 @@ Primary papers:
   (Original paper targets **2018.01a / 24-class**, peak ~95%; the 57.32% is the community 2016.10a number.)
 - **PET-CGDNN** — Zhang, Luo, Xu, Luo, *IEEE Comm. Lett.* 25(10), 2021. arXiv:2110.04980.
   Code: https://github.com/Richardzhangxx/PET-CGDNN. Headline is param-efficiency (~71–75k params).
-- **TLDNN** (SOTA + source of Table II baselines) — Qu, Lu, Zeng, Wang, Wang, "Enhancing Automatic
+- **TLDNN** (source of Table II baselines) — Qu, Lu, Zeng, Wang, Wang, "Enhancing Automatic
   Modulation Recognition through Robust Global Feature Extraction," *IEEE TVT* 2024. arXiv:2401.01056.
   Clean recipe worth adopting board-wide: **AdamW lr=1e-3, ReduceLROnPlateau (×0.1, patience 10),
   ≤150 epochs, batch 128, split 6:2:2, A/P input transform** (amplitude min-max→[0,1], phase→[−1,1] rad).
+- **MoEformer** (current SOTA) — Wang, Xie, Mu, Liu, Zhao, Zhang, "Mixture-of-Experts Transformer for
+  Automatic Modulation Recognition," arXiv:2606.09085 (Jun 2026). Full-SNR-range `accuracy_overall`
+  **63.74% on 2016.10a** and **64.22% on 2018.01a** (verbatim from its results table, NOT high-SNR
+  peaks) — the current leading literature figure on both, above TLDNN. `from_paper` board rows
+  (`moeformer_paper-2016`, `moeformer_paper-2018`, 2026-07). Paper uses a 60/20/20 split (ours 80/10/10),
+  no published indices → dataset + protocol match, byte-level split overlap not confirmed. Not
+  reproduced (authors contacted; see Part C / §A.5-adjacent note — MoEformer is NOT on our reproduction
+  roadmap).
 - **TCN-GRU** (source of second baseline table) — "Robust AMC via a Lightweight Temporal Hybrid Neural
   Network," *Sensors* 24(24):7908, 2024. DOI 10.3390/s24247908.
 
-### A.2 AMC — RadioML 2018.01a (24 classes, −20…+30 dB, len=1024) — *dataset blocked on cluster*
+### A.2 AMC — RadioML 2018.01a (24 classes, −20…+30 dB, len=1024) — *prepared; first board column landed*
 
-| Model | Overall (full SNR) | Peak / high-SNR | Source |
-|---|---|---|---|
-| ResNet (O'Shea 2018) | 60.91% | ~95.7% (SNR>8 dB) | TLDNN T2 / orig. |
-| MCLDNN | 61.92% | — | TLDNN T2 |
-| LSTM2 | 62.52% | — | TLDNN T2 |
-| FEA-T | 62.37% | — | TLDNN T2 |
-| LSTM-DAE | 61.32% | — | TLDNN T2 |
-| TLDNN (+SS) | 63.32% (63.42%) | — | TLDNN T2 |
-| **RIS-MAE** (1% labels) | **48.41%** (κ 0.4616) | — | RIS-MAE T2 |
+Dataset is no longer blocked: split `amc-radioml2018-strat-snr-8010-seed42-v1` is committed and our
+first real 24-class baseline (**MCLDNN 0.606** full-SNR, `from_scratch`) is on the board.
 
-Note: papers most often quote peak ~95% on 2018.01a; full-range overall is only ~61–63% due to the deep
-negative-SNR floor. Match our board metric to the full-range column.
+| Model | Overall (full SNR) | Peak / high-SNR | Our score | Source |
+|---|---|---|---|---|
+| **MoEformer** (Wang 2026) — SOTA | **64.22%** | — | not run; `from_paper` row (`moeformer_paper-2018`) | arXiv:2606.09085 T2 |
+| TLDNN (+SS) | 63.32% (63.42%) | — | not run; `from_paper` row (`tldnn_paper-2018`) | TLDNN T2 |
+| LSTM2 | 62.52% | — | not run | TLDNN T2 |
+| FEA-T | 62.37% | — | not run | TLDNN T2 |
+| **MCLDNN** | 61.92% | — | **0.606** (`self_reported`, `mcldnn-radioml2018`) | TLDNN T2 |
+| LSTM-DAE | 61.32% | — | not run | TLDNN T2 |
+| ResNet (O'Shea 2018) | 60.91% | ~95.7% (SNR>8 dB) | not run | TLDNN T2 / orig. |
+| **RIS-MAE** (1% labels) | **48.41%** (κ 0.4616) | — | not run | RIS-MAE T2 |
+
+Note: papers most often quote peak ~95% on 2018.01a; full-range overall is only ~61–64% due to the deep
+negative-SNR floor. Match our board metric to the full-range column. Our MCLDNN 0.606 sits ~1.3 pt below
+the paper's 61.92% — consistent with the 2016.10a repro; a same-recipe CLDNN/ResNet pass would fill out
+the 24-class column.
 
 ### A.3 SEI / RF fingerprinting
 
@@ -689,10 +704,49 @@ Papers/models/datasets to add (deduped).
   LICENSE file ships** in the repo and the README frontmatter has `#license: mit` commented out
   (config.json has no license field; `/raw/main/LICENSE` 404s). Effective status: **MIT declared, no
   LICENSE file present** — permissive (commercial use allowed, attribution via the paper citation). Verify
-  and record in the model registry before publishing a public leaderboard row (consistent with
-  `docs/SOTA_REFERENCE.md` "license unstated → verify").
+  and record in the model registry before publishing a public leaderboard row (see `docs/LICENSES.md`,
+  which flags LWM-Spectro and every dataset's declared/unstated license).
 - **WavesFM** — keep paper-only: no public weights/code URL found; its 86.05% is on a private 20-class
   spectrogram set, not RadioML. Do not list weights as obtainable until a repo is confirmed.
+
+### C.6 Candidate audit — 2026-07-20 (additions accepted / rejected)
+
+Screening pass on new/pending candidates. Verdicts follow the board's `from_paper` doctrine: a
+literature row is addable only when the paper reports **the same dataset + the same protocol + the
+board's metric** (Tier 3); same model *family* on a different dataset → `from_paper_uncertain`;
+anything weaker → not addable.
+
+**Accepted (now `from_paper` board rows):**
+- **MoEformer** (Wang, Xie, Mu, Liu, Zhao, Zhang, arXiv:2606.09085, Jun 2026) — **new SOTA AMC on both
+  RadioML 2016.10a (63.74%) and 2018.01a (64.22%)**, full-SNR-range `accuracy_overall`, same metric as
+  the board. Added as `moeformer_paper-2016` / `moeformer_paper-2018`. NOT reproduced (authors
+  contacted; a reproduction is out of scope — the row is a literature ceiling only, never presented as
+  ours). See §A.1 / §A.2.
+
+**Rejected (not addable — reason logged so we don't re-screen):**
+- **CBADNN** — **paywalled**; the primary text could not be obtained, so the reported figure, dataset,
+  split and full-SNR-vs-peak metric are all unverifiable. No `from_paper` row can be justified without
+  the source PDF (the board never cites a number from a secondary mention alone for a paper we can't
+  read). Re-screen only if an open-access version appears.
+- **Swinney & Woods** (the `interf_gnss6` source, Zenodo 4629685) as an AMC/detection *baseline model* —
+  **not addable**: the paper's classifier operates on a **spectrogram** modality, not the raw-IQ board
+  input, so its number is not board-comparable as a specialized baseline. (The dataset itself is already
+  adopted for `interference_id` — this rejection is only about adding a *model* row from it.)
+- **RadDet / DeepSense / Sig53** as `from_paper` rows — **not addable**: none publishes committed sample
+  indices / a fixed split we can align to, so we cannot assert a same-split literature row (only their
+  own detection/sensing/generation protocols, which don't map to a committed board split). RadDet and
+  DeepSense remain on the roadmap as **reproduction** targets (train a model on our own committed split,
+  `self_reported`), not as `from_paper` citations; Sig53 stays excluded by the generation-only policy.
+
+Note on the mid-tier AMC lines (validated decision, 2026-07): several 2016.10a/2018.01a baseline
+figures (LSTM2, MCformer, LSTM-DAE, PET-CGDNN, TCN-GRU…) are cited from a **secondary source** —
+another paper's Table II (TLDNN arXiv:2401.01056 / TCN-GRU *Sensors* 2024), not each primary PDF.
+Board rows seeded from these are tagged **`from_paper_uncertain`** (not `from_paper`): the figure is a
+third-party reimplementation, so the split/preprocessing is not confirmed identical to ours and the
+provenance is one step removed from the model's own paper. The single exception is **TCN-GRU** itself,
+whose 0.6156 is self-reported in the authors' *own* Table III (a primary figure) and so stays
+`from_paper`. §A.1 marks the provenance in the "source" column; none of these are primary-verified
+(Tier-2 `verified`) numbers.
 
 ---
 
@@ -705,6 +759,9 @@ Papers/models/datasets to add (deduped).
   10.1109/JSTSP.2018.2797022.
 - PET-CGDNN: Zhang et al., 2021, arXiv:2110.04980 — repo github.com/Richardzhangxx/PET-CGDNN.
 - TLDNN (Table II baseline source): Qu et al., *IEEE TVT* 2024, arXiv:2401.01056.
+- MoEformer (current AMC SOTA, from_paper): Wang, Xie, Mu, Liu, Zhao, Zhang, "Mixture-of-Experts
+  Transformer for Automatic Modulation Recognition," arXiv:2606.09085 (Jun 2026) — 63.74% (2016.10a) /
+  64.22% (2018.01a) full-SNR overall. Not reproduced (authors contacted).
 - TCN-GRU (Table 3 baseline source): *Sensors* 24(24):7908, 2024, DOI 10.3390/s24247908.
 - VT-CNN2/CNN2: O'Shea et al., 2016, arXiv:1602.04105.
 - WiSig: Hanna et al., *IEEE Access* 10:22808–22818, 2022, DOI 10.1109/ACCESS.2022.3154488,

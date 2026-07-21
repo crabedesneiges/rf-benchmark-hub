@@ -1,0 +1,44 @@
+{
+  "created_at": "2026-07-21T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2016_10a",
+    "version": "10a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 18,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.5698
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "vtcnn2-paper",
+    "url": "https://doi.org/10.3390/s24247908"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "amc-vtcnn2-paper-radioml2016-fullsnr",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "VT-CNN2 / CNN2 (O'Shea, Corgan, Clancy, 'Convolutional Radio Modulation Recognition Networks', 2016), la CNN de reference historique de RadioML. Chiffre reporte via la Table III du papier SECONDAIRE TCN-GRU ('Robust Automatic Modulation Classification via a Lightweight Temporal Hybrid Neural Network', Sensors 24(24):7908, 2024, DOI 10.3390/s24247908), NON lu a la source primaire; c'est la baseline re-implementee et re-evaluee par les auteurs de TCN-GRU. 0.5698 (~56.98%, valeur APPROXIMATIVE telle que consolidee dans docs/BIBLIOGRAPHY.md sec.A.1) = full-SNR accuracy_overall (moyenne sur -20..+18 dB, 11 classes), meme dataset (RadioML 2016.10a) que notre split committe. Split du papier non publie au niveau indices; ratio non 80/10/10 -> aucun recouvrement byte-level confirme avec amc-radioml2016-strat-snr-8010-seed42-v1, seuls le dataset et le protocole full-SNR/metric coincident. 'from_paper_uncertain' : chiffre re-mine d'une reimplementation TIERCE dans la table d'un AUTRE papier (pas le papier d'origine du modele), donc provenance/split/preprocessing NON confirmes identiques a notre split committe (valeur en outre APPROXIMATIVE). DISTINCT des lignes own-paper (tldnn_paper/iqfm_paper/moeformer_paper) qui restent 'from_paper' car auto-rapportees par le papier du modele lui-meme. Point de reference litterature, jamais confondu avec un chiffre reproduit en interne.",
+    "status": "from_paper_uncertain"
+  }
+}

@@ -23,7 +23,12 @@ implementations:
 * ``submit --check`` -> validate a ``result.json`` against ``schemas/result.schema.json`` plus a
   manifest-completeness gate: any manifest supplied via ``--manifest`` or referenced by the result's
   ``submission_ref`` is validated for completeness against ``submission.schema.json`` and
-  cross-checked for consistency with the result it reproduces.
+  cross-checked for consistency with the result it reproduces. On top of schema shape it enforces
+  the full-protocol / comparability gates promised by CONTRIBUTING.md: AMC must record the full SNR
+  range (``eval.conditions.full_snr_range == true``, no cherry-picking); no committed sibling may
+  already occupy the same ``(task, model, regime, dataset, split, track)`` cell (anti-doublon); and
+  the row's ``split.checksum`` must match the committed split index under
+  ``leaderboard/splits/<dataset>/`` when one exists.
 * ``leaderboard build`` -> :func:`leaderboard.site.generate.build_site`.
 * ``verify`` -> :mod:`rfbench.verify` (WP-53): compares a re-run's metrics against the manifest's
   ``expected_metrics`` within ``tolerance`` and, on a match, writes a NEW result.json with
@@ -1183,6 +1188,122 @@ def _resolve_manifest_path(
     return None
 
 
+def _row_identity(document: dict[str, Any]) -> tuple[str, str, str, str, str, str, int | None]:
+    """The comparability key of a leaderboard row (CONTRIBUTING.md 'One result per ...').
+
+    A row is unique per ``(task, model, regime[, k_shot], dataset, split, track)``. Two committed
+    results that agree on this tuple are the SAME cell of the board -- an accidental duplicate. The
+    ``track`` defaults to the empty string so single-track tasks (AMC/sensing, which omit it)
+    compare cleanly against each other.
+    """
+    task = document.get("task") if isinstance(document.get("task"), dict) else {}
+    model = document.get("model") if isinstance(document.get("model"), dict) else {}
+    regime = document.get("regime") if isinstance(document.get("regime"), dict) else {}
+    dataset = document.get("dataset") if isinstance(document.get("dataset"), dict) else {}
+    split = document.get("split") if isinstance(document.get("split"), dict) else {}
+    k_shot = regime.get("k_shot")
+    return (
+        str(task.get("name", "")),
+        str(model.get("name", "")),
+        str(regime.get("name", "")),
+        str(dataset.get("name", "")),
+        str(split.get("name", "")),
+        str(split.get("track", "")),
+        int(k_shot) if isinstance(k_shot, int) else None,
+    )
+
+
+def _amc_full_snr_errors(document: dict[str, Any]) -> list[str]:
+    """AMC full-protocol gate: the row MUST record the full SNR range (no cherry-picking).
+
+    Enforces the hard rule ``eval.conditions.full_snr_range == true`` for AMC results
+    (CONTRIBUTING.md / docs/EVALUATION_PROTOCOL.md). A high-SNR-only cherry-pick -- a missing or
+    falsy flag -- is rejected so the board never blends a partial-SNR score into the AMC column.
+    Non-AMC tasks are untouched.
+    """
+    task = document.get("task") if isinstance(document.get("task"), dict) else {}
+    if task.get("name") != "amc":
+        return []
+    ev = document.get("eval") if isinstance(document.get("eval"), dict) else {}
+    conditions = ev.get("conditions") if isinstance(ev.get("conditions"), dict) else {}
+    if conditions.get("full_snr_range") is not True:
+        return [
+            "AMC requires the full SNR range: set eval.conditions.full_snr_range=true "
+            "(no high-SNR cherry-picking; see docs/EVALUATION_PROTOCOL.md)"
+        ]
+    return []
+
+
+def _duplicate_row_errors(document: dict[str, Any], result_path: Path) -> list[str]:
+    """Anti-doublon gate: reject a row that duplicates a COMMITTED sibling's comparability key.
+
+    Scans the sibling ``leaderboard/results/<task>/*.json`` next to the submitted result (skipping
+    the file under check itself, matched by resolved path). If any sibling shares the full row
+    identity -- same ``(task, model, regime[, k_shot], dataset, split, track)`` -- it is the same
+    board cell and the submission is an accidental duplicate. Unreadable/invalid siblings are
+    skipped (they fail their own validation elsewhere), so this never false-positives on garbage.
+    """
+    sibling_dir = result_path.parent
+    if not sibling_dir.is_dir():
+        return []
+    identity = _row_identity(document)
+    try:
+        this_path = result_path.resolve()
+    except OSError:  # pragma: no cover - defensive
+        this_path = result_path
+    clashes: list[str] = []
+    for sibling in sorted(sibling_dir.glob("*.json")):
+        try:
+            if sibling.resolve() == this_path:
+                continue
+        except OSError:  # pragma: no cover - defensive
+            if sibling == result_path:
+                continue
+        try:
+            other = json.loads(sibling.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(other, dict) and _row_identity(other) == identity:
+            clashes.append(sibling.name)
+    if clashes:
+        return [
+            "duplicate leaderboard row: this (task, model, regime, dataset, split, track) already "
+            f"exists in {', '.join(clashes)} -- one result per cell (CONTRIBUTING.md)"
+        ]
+    return []
+
+
+def _split_checksum_match_errors(document: dict[str, Any]) -> list[str]:
+    """Split-checksum lint: the row's ``split.checksum`` must match the COMMITTED split index.
+
+    When ``leaderboard/splits/<dataset>/<canonical_split_id>.idx.json`` exists, its stored
+    ``checksum`` is the source of truth. A result whose ``split.checksum`` disagrees was scored on
+    a different (or stale) partition than the versioned indices claim -- exactly the drift the tie
+    between ``canonical_split_id`` + ``checksum`` and ``leaderboard/splits/`` guards against. When
+    no committed index exists yet the check is silent (the split lands in a later PR).
+    """
+    split = document.get("split") if isinstance(document.get("split"), dict) else {}
+    dataset = document.get("dataset") if isinstance(document.get("dataset"), dict) else {}
+    dataset_name = dataset.get("name")
+    split_id = split.get("canonical_split_id")
+    result_checksum = split.get("checksum")
+    if not (isinstance(dataset_name, str) and isinstance(split_id, str)):
+        return []
+    idx = _repo_root() / "leaderboard" / "splits" / dataset_name / f"{split_id}.idx.json"
+    if not idx.is_file():
+        return []
+    try:
+        committed_checksum = json.loads(idx.read_text(encoding="utf-8")).get("checksum")
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"could not read committed split index {idx.name}: {exc}"]
+    if isinstance(committed_checksum, str) and result_checksum != committed_checksum:
+        return [
+            f"split.checksum {result_checksum} does not match the committed split index "
+            f"{split_id}.idx.json ({committed_checksum}); the row was scored on a different split"
+        ]
+    return []
+
+
 def _manifest_consistency_errors(
     document: dict[str, Any], manifest_doc: dict[str, Any]
 ) -> list[str]:
@@ -1273,6 +1394,11 @@ def _cmd_submit(args: argparse.Namespace) -> int:
 
     errors = _validate_result(document)
     errors.extend(_manifest_completeness_errors(document, args.manifest, result_path))
+    # Full-protocol / comparability gates promised by CONTRIBUTING.md (beyond schema shape):
+    # AMC full-SNR range, one-row-per-cell (anti-doublon), split-checksum tie to committed indices.
+    errors.extend(_amc_full_snr_errors(document))
+    errors.extend(_duplicate_row_errors(document, result_path))
+    errors.extend(_split_checksum_match_errors(document))
     if errors:
         print(f"error: [submit --check] {result_path} is NOT PR-ready:", file=sys.stderr)
         for err in errors:

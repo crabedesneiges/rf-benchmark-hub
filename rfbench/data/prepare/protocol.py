@@ -166,12 +166,12 @@ def load_protocol_labels(
     Returns one class-name string per item, ready to hand to :func:`prepare_protocol` as
     ``labels=``. Never called in unit tests (needs the real data + heavy deps).
 
-    TODO (cluster): the T-PRIME README documents per-protocol capture folders but NOT an
-    on-disk window granularity; confirm on Lustre whether each ``.bin`` file is already one
-    fixed-length window or a long recording to be tiled into ``N``-sample windows
-    (:data:`rfbench.models.baselines.tprime.SM_SEQUENCE_LEN`). If it is a long recording, the
-    label loader and the array loader must tile with the SAME window length + stride so the
-    committed split indices stay aligned.
+    On-disk window granularity (CONFIRMED on Lustre, 2026-07): each DS 3.0 ``.bin`` is a LONG
+    recording (~198k interleaved-IQ samples), not a pre-cut fixed-length window. This is why the
+    split is RECORDING-level (one label per capture here) and the tiling into ``N``-sample windows
+    (:data:`rfbench.models.baselines.tprime.SM_SEQUENCE_LEN`) happens AFTER the split, in the array
+    loader, via the shared :func:`_iter_recording_files` order + :func:`_window_offsets` geometry --
+    so windows from one recording never straddle train/test and the committed indices stay aligned.
     """
     cache_dir = resolve_cache_dir(cache)
     return _load_tprime_wifi4_labels(cache_dir)

@@ -194,6 +194,14 @@ def _iq_to_tensor(iq_batch: object, device: torch.device, sequence_len: int) -> 
     normalisation), not by any preprocessing here. A mis-shaped batch (channel axis not 2) fails
     loudly rather than silently mis-classifying.
     """
+    # Collapse the per-sample list into ONE contiguous array before torch.as_tensor: building a
+    # tensor straight from a list of np.ndarrays copies element-by-element and torch warns it is
+    # "extremely slow" (np.stack/np.asarray does the collate in one C-level copy). np.asarray keeps
+    # an already-array batch (or nested lists) as-is, so the coercion + dtype are unchanged.
+    if isinstance(iq_batch, (list, tuple)):
+        import numpy as np
+
+        iq_batch = np.stack([np.asarray(w) for w in iq_batch]) if iq_batch else np.empty((0,))
     tensor = torch.as_tensor(iq_batch, dtype=torch.float32, device=device)
     if tensor.ndim == 2:  # a single unbatched (2, L) sample -> add the batch axis
         tensor = tensor.unsqueeze(0)

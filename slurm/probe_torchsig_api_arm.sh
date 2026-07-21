@@ -5,8 +5,8 @@
 #
 # Usage: sbatch slurm/probe_torchsig_api_arm.sh
 #SBATCH --job-name=rfbench_tsig_api
-#SBATCH --output=/lustre/work/pdl16831/udl79f933/logs/rfbench_tsig_api_%j.out
-#SBATCH --error=/lustre/work/pdl16831/udl79f933/logs/rfbench_tsig_api_%j.err
+#SBATCH --output=logs/rfbench_tsig_api_%j.out
+#SBATCH --error=logs/rfbench_tsig_api_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
@@ -15,8 +15,19 @@
 # (confirmé via `sinfo -o "%P %f %c %G"`, seule feature reportée: location=local)
 
 set -uo pipefail
-WORK=/lustre/work/pdl16831/udl79f933
-VENV="$WORK/envs/rfbench-arm-detection"
+# --- Portable config (override via environment; see slurm/README.md) -----------------
+#   WORK                Lustre work root (REQUIRED; usually pre-set by the cluster).
+#   RFBENCH_REPO        repo/worktree checkout to run       (default: $WORK/projets/rf-benchmark-hub[...]).
+#   RFBENCH_VENV_CPU    CPU venv  .[dev,data]               (default: $WORK/envs/rfbench-arm).
+#   RFBENCH_VENV_GPU    GPU venv  .[dev,data,tasks,torch]   (default: $WORK/envs/rfbench-arm-gpu).
+#   RFBENCH_VENV_DETECTION  detection venv .[dev,detection] (default: $WORK/envs/rfbench-arm-detection).
+#   RFBENCH_UV          uv binary for this arch             (default: $WORK/envs/uv-arm/uv).
+#   RFBENCH_CACHE       dataset cache root                  (default: $WORK/data/rfbench_cache).
+# SLURM logs go to logs/ relative to the submit dir: create it first (mkdir -p logs) or
+# override with `sbatch --output=... --error=...`.
+# ------------------------------------------------------------------------------------
+WORK="${WORK:?set \$WORK to your Lustre work dir (e.g. /lustre/work/<project>/<user>)}"
+VENV="${RFBENCH_VENV_DETECTION:-$WORK/envs/rfbench-arm-detection}"
 echo "=== node=$(hostname) arch=$(uname -m) date=$(date -Is) ==="
 
 "$VENV/bin/python" - <<'PY'

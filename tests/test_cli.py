@@ -15,8 +15,9 @@ Covers, per WP-42 acceptance:
     coupling (exit 2 either way it is violated), with the regime routed through
     ``rfbench.regimes``;
   * ``leaderboard build`` renders the sample results into ``tmp_path``;
-  * ``submit --check`` passes on a valid ``result.json`` and fails on an invalid one and on
-    the all-zero placeholder checksum;
+  * ``submit --check`` passes on a valid ``result.json`` and fails on an invalid one, on
+    the all-zero placeholder checksum, and on each full-protocol / comparability gate
+    (AMC full-SNR range, one-row-per-cell anti-doublon, split-checksum tie to committed indices);
   * importing the CLI pulls in no heavy dependency (checked in a clean subprocess).
 """
 
@@ -430,8 +431,18 @@ def test_submit_check_missing_file(tmp_path: Path, capsys: pytest.CaptureFixture
 # --- verify (maintainer pipeline, WP-53) ---------------------------------------------
 
 
+# A synthetic canonical split id that is NOT committed under leaderboard/splits/, so the
+# split-checksum lint stays silent for the tmp_path fixtures (which never prepare a real index).
+_SYNTH_SPLIT_ID = "amc-radioml2016-synthfixture-8010-seed42-v9"
+
+
 def _self_reported_result_file(path: Path) -> Path:
-    """Write a minimal schema-valid self_reported AMC result and return its path."""
+    """Write a minimal schema-valid self_reported AMC result and return its path.
+
+    Carries the AMC full-SNR conditions and a synthetic (non-committed) split id so the
+    full-protocol gates in ``submit --check`` (full_snr_range, split-checksum match) pass on the
+    fixture as a genuine PR-ready row.
+    """
     doc = {
         "schema_version": "1.0.0",
         "task": {"name": "amc", "version": "v1"},
@@ -439,7 +450,7 @@ def _self_reported_result_file(path: Path) -> Path:
         "regime": {"name": "full_finetune"},
         "dataset": {"name": "radioml_2016_10a"},
         "split": {
-            "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+            "canonical_split_id": _SYNTH_SPLIT_ID,
             "name": "test",
             "seed": 42,
             "checksum": "sha256:" + "3b" * 32,
@@ -448,6 +459,7 @@ def _self_reported_result_file(path: Path) -> Path:
             "primary": "accuracy_overall",
             "values": {"accuracy_overall": 0.6123, "macro_f1": 0.5987},
         },
+        "eval": {"conditions": {"full_snr_range": True, "snr_db_min": -20, "snr_db_max": 18}},
         "verification": {"status": "self_reported"},
     }
     dest = path / "result.json"
@@ -484,7 +496,7 @@ def _rerun_result_file(path: Path, accuracy: float) -> Path:
         "regime": {"name": "full_finetune"},
         "dataset": {"name": "radioml_2016_10a"},
         "split": {
-            "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+            "canonical_split_id": _SYNTH_SPLIT_ID,
             "name": "test",
             "seed": 42,
             "checksum": "sha256:" + "3b" * 32,
@@ -662,6 +674,106 @@ def test_submit_check_manifest_task_mismatch_fails(
     rc = main(["submit", "--check", str(result), "--manifest", str(manifest)])
     assert rc == EXIT_FAILURE
     assert "does not match result.task" in capsys.readouterr().err
+
+
+# --- submit --check full-protocol / comparability gates (CONTRIBUTING.md) --------------
+
+# The real committed AMC split index + its checksum, so the split-checksum lint has a concrete
+# source of truth to match/mismatch against (leaderboard/splits/radioml_2016_10a/).
+_COMMITTED_AMC_SPLIT_ID = "amc-radioml2016-strat-snr-8010-seed42-v1"
+_COMMITTED_AMC_SPLIT_IDX = (
+    _REPO_ROOT
+    / "leaderboard"
+    / "splits"
+    / "radioml_2016_10a"
+    / f"{_COMMITTED_AMC_SPLIT_ID}.idx.json"
+)
+
+
+def test_submit_check_rejects_amc_cherry_picked_snr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An AMC row without full_snr_range (a high-SNR cherry-pick) fails the full-protocol gate."""
+    result = _self_reported_result_file(tmp_path)
+    doc = json.loads(result.read_text(encoding="utf-8"))
+    # Cherry-pick: only high-SNR bins, flag dropped.
+    doc["eval"] = {"conditions": {"snr_db_min": 10, "snr_db_max": 18}}
+    result.write_text(json.dumps(doc), encoding="utf-8")
+    rc = main(["submit", "--check", str(result)])
+    assert rc == EXIT_FAILURE
+    assert "full SNR range" in capsys.readouterr().err
+
+
+def test_submit_check_amc_full_snr_passes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The full-SNR AMC fixture (flag set) clears the full-protocol gate."""
+    result = _self_reported_result_file(tmp_path)
+    rc = main(["submit", "--check", str(result)])
+    assert rc == EXIT_OK
+    assert "PR-ready" in capsys.readouterr().out
+
+
+def test_submit_check_rejects_duplicate_row(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A second row with the same (task, model, regime, dataset, split, track) is a duplicate."""
+    result = _self_reported_result_file(tmp_path)  # writes <tmp>/result.json
+    # A committed sibling in the SAME dir with the identical comparability key.
+    twin = tmp_path / "mcldnn_again.json"
+    twin.write_text(result.read_text(encoding="utf-8"), encoding="utf-8")
+    rc = main(["submit", "--check", str(result)])
+    assert rc == EXIT_FAILURE
+    err = capsys.readouterr().err
+    assert "duplicate leaderboard row" in err
+    assert "mcldnn_again.json" in err
+
+
+def test_submit_check_allows_distinct_dataset_sibling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sibling that differs only by dataset is a SEPARATE cell, not a duplicate."""
+    result = _self_reported_result_file(tmp_path)
+    sibling = json.loads(result.read_text(encoding="utf-8"))
+    sibling["dataset"] = {"name": "radioml_2018_01a"}  # different cell
+    (tmp_path / "mcldnn_2018.json").write_text(json.dumps(sibling), encoding="utf-8")
+    rc = main(["submit", "--check", str(result)])
+    assert rc == EXIT_OK
+    assert "PR-ready" in capsys.readouterr().out
+
+
+def test_submit_check_rejects_split_checksum_mismatch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A row citing a committed split id but a wrong checksum is rejected by the split lint."""
+    if not _COMMITTED_AMC_SPLIT_IDX.is_file():
+        pytest.skip("committed AMC split index not present in this checkout")
+    result = _self_reported_result_file(tmp_path)
+    doc = json.loads(result.read_text(encoding="utf-8"))
+    doc["split"]["canonical_split_id"] = _COMMITTED_AMC_SPLIT_ID
+    doc["split"]["checksum"] = "sha256:" + "de" * 32  # deliberately wrong
+    result.write_text(json.dumps(doc), encoding="utf-8")
+    rc = main(["submit", "--check", str(result)])
+    assert rc == EXIT_FAILURE
+    err = capsys.readouterr().err
+    assert "does not match the committed split index" in err
+
+
+def test_submit_check_split_checksum_match_passes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A row whose checksum equals the committed split index clears the split lint."""
+    if not _COMMITTED_AMC_SPLIT_IDX.is_file():
+        pytest.skip("committed AMC split index not present in this checkout")
+    committed = json.loads(_COMMITTED_AMC_SPLIT_IDX.read_text(encoding="utf-8"))["checksum"]
+    result = _self_reported_result_file(tmp_path)
+    doc = json.loads(result.read_text(encoding="utf-8"))
+    doc["split"]["canonical_split_id"] = _COMMITTED_AMC_SPLIT_ID
+    doc["split"]["checksum"] = committed
+    result.write_text(json.dumps(doc), encoding="utf-8")
+    rc = main(["submit", "--check", str(result)])
+    assert rc == EXIT_OK
+    assert "PR-ready" in capsys.readouterr().out
 
 
 # --- import purity (clean subprocess, no heavy deps) ---------------------------------

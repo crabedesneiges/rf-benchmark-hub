@@ -76,7 +76,7 @@ CANONICAL_SPLIT_IDS: dict[str, dict[str, str]] = {
         "closed_set": "sei-lora-closedset-strat-dev-8010-seed42-v1",
     },
     "powder": {
-        "closed_set": "sei-powder-wifi4-closedset-strat-dev-8010-seed42-v1",
+        "closed_set": "sei-powder-closedset-strat-site-8010-seed42-v1",
     },
 }
 
@@ -597,31 +597,64 @@ def extract_lora_records(labels: Sequence[int]) -> list[SeiRecord]:
     return [(int(dev), None, None) for dev in labels]
 
 
+#: Max frames kept PER POWDER capture (the first ``k`` contiguous ``window``-sample frames).
+#: A GlobecomPOWDER capture is ~5.3M complex samples, so at ``window=256`` an uncapped tiling
+#: yields ~20.7k frames/capture x 120 captures = ~2.5M frames -- an impractically large training
+#: set AND a bloated split index. Capping to a fixed budget per capture keeps the index
+#: committable (~few MB, like ORACLE/WiSig) and the dataset balanced, while every base station
+#: still contributes equally. BOTH the record loader (:func:`load_powder_records`) and the array
+#: loader (``rfbench.tasks.sei.dataset._load_powder_arrays``) MUST apply this same cap so indices
+#: align element-for-element.
+_POWDER_WINDOWS_PER_CAPTURE = 1024
+
+
+def _powder_capture_files(root: Path) -> list[Path]:
+    """Sorted POWDER capture data files under ``root`` in a stable, loader-shared order.
+
+    Supports both distributions seen in the wild: the GlobecomPOWDER release ships raw ``.bin``
+    IQ files with a sibling ``.json`` SigMF-style header; older SigMF exports ship ``.sigmf-data``
+    + ``.sigmf-meta``. Prefers ``.bin`` (the published GlobecomPOWDER layout) and falls back to
+    ``.sigmf-data`` only if no ``.bin`` capture is present, so the two are never mixed.
+    """
+    files = sorted(root.rglob("*.bin"))
+    if not files:
+        files = sorted(root.rglob("*.sigmf-data"))
+    return files
+
+
+def _powder_meta_path(data_path: Path) -> Path:
+    """Sidecar metadata path for a POWDER capture (``.json`` for ``.bin``, else ``.sigmf-meta``)."""
+    if data_path.suffix == ".bin":
+        return data_path.with_suffix(".json")
+    return data_path.with_suffix(".sigmf-meta")
+
+
 def load_powder_records(
     cache: str | Path | None = None,
     *,
     window: int = 256,
 ) -> list[SeiRecord]:
-    """Extract per-item ``(device_id, None, day_id)`` records from the POWDER SigMF captures.
+    """Extract per-item ``(device_id, None, day_id)`` records from the POWDER captures.
 
     POWDER RF Fingerprinting (Reus-Muns, Jaisinghani, Sankhe, Chowdhury, "Trust in 5G Open RANs
     through Machine Learning: RF Fingerprinting on the POWDER PAWR Platform", IEEE GLOBECOM 2020)
-    is the 4-base-station WiFi hardware-fingerprinting set used by the two FM SEI evaluators
-    (WirelessJEPA arXiv:2601.20190, IQFM arXiv:2506.06718). It is distributed as SigMF captures
-    (a ``.sigmf-data`` raw-IQ file + a ``.sigmf-meta`` JSON header per recording) named
-    ``[Waveform]_[Day]_[TransmitterBS]_[RecordingSet]`` -- the transmitter base station (field 3)
-    is the fingerprint identity, and the day (field 2) is carried so a future cross-day track is
-    possible (the closed-set track pools both days, matching the FM evals).
+    is a 4-base-station hardware-fingerprinting set (base stations ``bes``/``browning``/``honors``/
+    ``meb``), captured over multiple waveforms (4G/5G/WiFi) and two days. The published
+    GlobecomPOWDER release ships one raw ``.bin`` IQ file (interleaved ``cf32``) + a sibling
+    ``.json`` header per recording, named ``<waveform>_Day_<day>_<baseStation>_s<set>`` -- the
+    transmitter base station is the fingerprint identity, and the day is carried so a future
+    cross-day track is possible (the closed-set track pools all waveforms and both days, matching
+    the FM SEI evaluators WirelessJEPA / IQFM).
 
-    Each recording is sliced into non-overlapping ``window``-sample frames (the FM papers use 256;
-    the origin paper used 512), emitting one ``(device_id, None, day_id)`` record per frame in
-    sorted file order. numpy is imported lazily; never called in unit tests (needs real data +
-    numpy). See :func:`extract_powder_records` for the pure-Python frame-count -> record mapping.
+    Each recording is sliced into non-overlapping ``window``-sample frames (the FM papers use 256),
+    **capped at** :data:`_POWDER_WINDOWS_PER_CAPTURE` frames per capture, emitting one
+    ``(device_id, None, day_id)`` record per kept frame in sorted file order. numpy is imported
+    lazily; never called in unit tests (needs real data + numpy). See
+    :func:`extract_powder_records` for the pure-Python frame-count -> record mapping.
 
-    NOTE (download): the POWDER DRS host anti-scrapes programmatic fetches, so the raw captures
-    must be placed under ``$RFBENCH_CACHE/powder/`` manually -- see
-    :mod:`rfbench.data.download.sei_powder` for the exact procedure. This loader only reads what
-    is already there.
+    NOTE (download): the POWDER host anti-scrapes programmatic fetches, so the raw captures must be
+    placed under ``$RFBENCH_CACHE/powder/`` manually -- see :mod:`rfbench.data.download.sei_powder`
+    for the exact procedure. This loader only reads what is already there.
     """
     import json  # stdlib
 
@@ -636,22 +669,22 @@ def load_powder_records(
     root = cache_dir / "powder"
     if not root.is_dir():
         raise FileNotFoundError(
-            f"POWDER not found at {root}; place the SigMF captures there first "
+            f"POWDER not found at {root}; place the captures there first "
             "(see rfbench.data.download.sei_powder for the manual-download procedure)."
         )
 
     frame_counts: list[tuple[str, str, int]] = []
-    for data_path in sorted(root.rglob("*.sigmf-data")):
+    for data_path in _powder_capture_files(root):
         device_id, day_id = _powder_ids(data_path.name)
-        meta_path = data_path.with_suffix(".sigmf-meta")
+        meta_path = _powder_meta_path(data_path)
         dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
         iq = np.fromfile(data_path, dtype=dtype)
         n_complex = int(iq.size // 2)
-        n_frames = n_complex // window
+        n_frames = min(_POWDER_WINDOWS_PER_CAPTURE, n_complex // window)
         frame_counts.append((device_id, day_id, n_frames))
     if not frame_counts:
         raise FileNotFoundError(
-            f"no POWDER .sigmf-data captures found under {root}; check the manual extraction."
+            f"no POWDER .bin/.sigmf-data captures found under {root}; check the manual extraction."
         )
     return extract_powder_records(frame_counts)
 
@@ -713,15 +746,23 @@ def _oracle_tx_id(filename: str) -> str:
 
 
 def _powder_ids(filename: str) -> tuple[str, str]:
-    """Parse ``(device_id, day_id)`` from a POWDER SigMF capture file name.
+    """Parse ``(device_id, day_id)`` from a POWDER capture file name.
 
-    Expects the reference naming ``[Waveform]_[Day]_[TransmitterBS]_[RecordingSet]`` (e.g.
-    ``WiFi_Day1_MEB_1.sigmf-data``): the transmitter base station (field 3, index 2) is the
-    fingerprint identity and the day (field 2, index 1) is carried for provenance / a future
-    cross-day track. Falls back to ``(stem, "unknown_day")`` if the name deviates.
+    Handles the two naming conventions seen in the wild:
+
+    * GlobecomPOWDER (published ``.bin`` release): ``<waveform>_Day_<day>_<baseStation>_s<set>``
+      (e.g. ``4G_Day_1_bes_s1.bin``) -- the base station (index 3) is the fingerprint identity and
+      the day (index 2) is carried for a future cross-day track. ``Day`` is a separate token.
+    * Legacy SigMF export: ``<waveform>_Day<day>_<baseStation>_<set>`` (e.g. ``WiFi_Day1_MEB_1``)
+      -- base station at index 2, day (``Day<n>``) at index 1.
+
+    Falls back to ``(stem, "unknown_day")`` if neither shape matches.
     """
     stem = filename.rsplit(".", 1)[0].split(".sigmf")[0]
     parts = stem.split("_")
+    # GlobecomPOWDER: the literal token "Day" precedes a separate day number.
+    if len(parts) >= 5 and parts[1] == "Day":
+        return parts[3], parts[2]
     if len(parts) >= 3:
         return parts[2], parts[1]
     return stem, "unknown_day"
@@ -730,10 +771,10 @@ def _powder_ids(filename: str) -> tuple[str, str]:
 def _sigmf_np_dtype(np_mod: object, meta_path: Path, json_mod: object) -> object:
     """Map a SigMF ``core:datatype`` to a numpy dtype (defaults to interleaved f32)."""
     meta = json_mod.loads(meta_path.read_text(encoding="utf-8"))  # type: ignore[attr-defined]
-    datatype = str(meta.get("global", {}).get("core:datatype", "cf32_le"))
+    datatype = str(meta.get("global", {}).get("core:datatype", "cf32_le")).strip()
     table = {
         "cf32_le": np_mod.float32,  # type: ignore[attr-defined]
-        " cf32": np_mod.float32,  # type: ignore[attr-defined]
+        "cf32": np_mod.float32,  # GlobecomPOWDER headers use the un-suffixed spelling.
         "ci16_le": np_mod.int16,  # type: ignore[attr-defined]
         "cf64_le": np_mod.float64,  # type: ignore[attr-defined]
     }

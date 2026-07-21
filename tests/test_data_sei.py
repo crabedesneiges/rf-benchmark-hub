@@ -608,7 +608,12 @@ def test_load_lora_records_reads_real_hdf5(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_powder_ids_parses_device_and_day() -> None:
-    """_powder_ids extracts (device, day) from [Waveform]_[Day]_[TransmitterBS]_[Set] names."""
+    """_powder_ids extracts (device, day) from both POWDER naming conventions."""
+    # GlobecomPOWDER published .bin release: <waveform>_Day_<day>_<baseStation>_s<set>.
+    assert _powder_ids("4G_Day_1_bes_s1.bin") == ("bes", "1")
+    assert _powder_ids("5G_Day_2_honors_s5.bin") == ("honors", "2")
+    assert _powder_ids("WiFi_Day_1_browning_s3.bin") == ("browning", "1")
+    # Legacy SigMF export: <waveform>_Day<day>_<baseStation>_<set>.
     assert _powder_ids("WiFi_Day1_MEB_1.sigmf-data") == ("MEB", "Day1")
     assert _powder_ids("WiFi_Day2_Browning_3.sigmf-data") == ("Browning", "Day2")
     # A deviating name falls back to (stem, unknown_day) rather than raising.

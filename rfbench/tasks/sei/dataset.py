@@ -344,11 +344,11 @@ def _load_powder_arrays(
 ) -> tuple[list[Any], list[SeiRecord]]:  # pragma: no cover - cluster-only
     """Load flat ``(iq_rows, records)`` from the cached POWDER SigMF captures (lazy numpy).
 
-    Walks ``$RFBENCH_CACHE/powder/*.sigmf-data`` in sorted file order (the SAME order
-    :func:`rfbench.data.prepare.sei.load_powder_records` uses), reading each recording's
+    Walks the cached POWDER captures in sorted file order (the SAME order + the SAME per-capture
+    cap :func:`rfbench.data.prepare.sei.load_powder_records` uses), reading each recording's
     interleaved I/Q, slicing it into non-overlapping ``_POWDER_WINDOW``-sample frames and emitting
-    one ``(window, 2)`` row + one ``(device_id, None, day_id)`` record per frame -- so ``iq[k]``
-    corresponds to ``records[k]`` and both align with the committed split indices.
+    one ``(window, 2)`` row + one ``(device_id, None, day_id)`` record per kept frame -- so
+    ``iq[k]`` corresponds to ``records[k]`` and both align with the committed split indices.
     """
     import json  # stdlib
 
@@ -360,25 +360,32 @@ def _load_powder_arrays(
         ) from exc
 
     from rfbench.data.prepare._common import resolve_cache_dir
-    from rfbench.data.prepare.sei import _powder_ids, _sigmf_np_dtype
+    from rfbench.data.prepare.sei import (
+        _POWDER_WINDOWS_PER_CAPTURE,
+        _powder_capture_files,
+        _powder_ids,
+        _powder_meta_path,
+        _sigmf_np_dtype,
+    )
 
     cache_dir = resolve_cache_dir(None)
     root = cache_dir / name
     if not root.is_dir():
         raise FileNotFoundError(
-            f"POWDER not found at {root}; place the SigMF captures there first "
+            f"POWDER not found at {root}; place the captures there first "
             "(see rfbench.data.download.sei_powder for the manual-download procedure)."
         )
     window = _POWDER_WINDOW
     iq: list[Any] = []
     records: list[SeiRecord] = []
-    for data_path in sorted(root.rglob("*.sigmf-data")):
+    for data_path in _powder_capture_files(root):
         device_id, day_id = _powder_ids(data_path.name)
-        meta_path = data_path.with_suffix(".sigmf-meta")
+        meta_path = _powder_meta_path(data_path)
         dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32
         raw = np.fromfile(data_path, dtype=dtype).astype(np.float32)
         n_complex = int(raw.size // 2)
-        n_frames = n_complex // window
+        # Same per-capture cap as load_powder_records (first k frames) -> aligned indices.
+        n_frames = min(_POWDER_WINDOWS_PER_CAPTURE, n_complex // window)
         if n_frames == 0:
             continue
         frames = raw[: n_frames * window * 2].reshape(n_frames, window, 2)

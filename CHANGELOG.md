@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — câblage dataset POWDER (SEI, identification de site émetteur)
+
+Le loader POWDER attendait un nommage SigMF (`WiFi_Day1_MEB_1.sigmf-data`) qui ne correspond pas à
+la release publiée **GlobecomPOWDER** (`4G_Day_1_bes_s1.bin` + sidecar `.json`, dtype `cf32`, 120
+captures : 4 stations de base `bes`/`browning`/`honors`/`meb` × 3 formes d'onde 4G/5G/WiFi × 2 jours).
+Corrigé de bout en bout :
+- `rfbench/data/prepare/sei.py` : `_powder_ids` parse les deux conventions (`_Day_<d>_<site>_` vs
+  legacy `_Day<d>_<site>_`) ; `load_powder_records` lit `.bin`+`.json` (helpers `_powder_capture_files`
+  / `_powder_meta_path`), dtype `cf32` ajouté, **cap `_POWDER_WINDOWS_PER_CAPTURE=1024`** (comme ORACLE :
+  sinon ~2.5M fenêtres / index ingérable). Split id renommé `sei-powder-wifi4-…` →
+  `sei-powder-closedset-strat-site-8010-seed42-v1` (le dataset pool 4G/5G/WiFi, pas « wifi4 »).
+- `rfbench/tasks/sei/dataset.py` : `_load_powder_arrays` aligné (même format, même cap, même ordre de
+  fichiers → indices alignés élément par élément).
+- `rfbench/cli/__init__.py` : `rfbench data download powder` câblé.
+- Tests : `_powder_ids` couvre désormais le format GlobecomPOWDER.
+
+Split committé + colonne board à suivre (job CPU `prepare powder`). Piste `cross_day` (jours 1/2
+présents dans les données) = follow-up.
+
 ### Changed — préparation ouverture publique (non-dataset) : Pages, gouvernance, citation/DOI
 
 Volet Cat. 3 sans téléchargement de dataset.

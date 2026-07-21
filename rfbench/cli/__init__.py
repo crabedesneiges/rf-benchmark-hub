@@ -591,6 +591,10 @@ def _download_dispatch(
         from rfbench.data.download.sei_lora import download_lora
 
         return download_lora(source_url=source_url, cache=cache)
+    if dataset == "powder":
+        from rfbench.data.download.sei_powder import download_powder
+
+        return download_powder(source_url=source_url, cache=cache)
     if dataset == "raddet":
         from rfbench.data.download.detection_wbsig53 import download_raddet
 
@@ -611,8 +615,8 @@ def _download_dispatch(
         )
     raise ValueError(
         f"no download function wired for {dataset!r} yet "
-        "(known: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, lora, raddet, "
-        "wbsig53, interf_gnss6, tprime_wifi4)."
+        "(known: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, lora, powder, "
+        "raddet, wbsig53, interf_gnss6, tprime_wifi4)."
     )
 
 

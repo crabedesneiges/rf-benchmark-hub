@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — scaffold tâche `spectrum_sensing` (DeepSense, détection d'occupation pd@pfa)
+
+Nouvelle tâche downstream `spectrum_sensing` (détection binaire d'occupation spectrale), code prêt
+mais **statut `wip`** (aucune donnée DeepSense sur le cluster → pas de split committé, pas de colonne
+board). Suit les contrats figés + les patterns existants (interference_id / sei open_set).
+- `rfbench/tasks/spectrum_sensing/` : `task.py` (track `occupancy`, primary `pd@pfa=0.1`),
+  `metrics.py` (`PdAtPfa` : `prepare_predictions`→score `P(occupied)`, `pd_at_pfa` par sweep de seuil +
+  interpolation à `pfa=0.1`, réutilise `auroc` de sei ; support d'un seuil gelé pour le protocole
+  calibré-sur-val, dont le câblage dans `evaluate()` reste un follow-up documenté), `dataset.py`.
+- `rfbench/data/download/spectrum_deepsense.py` : blocker manuel façon RadDet (source wineslab,
+  licence **UNSTATED**, layout attendu documenté, layout binaire wineslab **non confirmé** → à vérifier
+  au 1er run cluster). `rfbench/data/prepare/sensing.py` : split 80/10/10 stratifié par occupation.
+- CLI câblé : `_DATASET_FAMILY[deepsense]=sensing`, `_TASK_DATASETS`, `_prepare_sensing`,
+  `data download deepsense`, `_TASK_MODULES[spectrum_sensing]`. 37 tests sur fixtures synthétiques.
+
 ### Added — câblage dataset POWDER (SEI, identification de site émetteur)
 
 Le loader POWDER attendait un nommage SigMF (`WiFi_Day1_MEB_1.sigmf-data`) qui ne correspond pas à

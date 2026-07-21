@@ -113,6 +113,7 @@ _DATASET_FAMILY: dict[str, str] = {
     "powder": "sei",
     "raddet": "detection",
     "wbsig53": "detection",
+    "deepsense": "sensing",
     "interf_gnss6": "interference",
     "tprime_wifi4": "protocol",
 }
@@ -130,6 +131,8 @@ _TASK_DATASETS: dict[str, tuple[str, ...]] = {
     "sei": ("wisig", "oracle", "lora", "powder"),
     "wideband_detection": ("raddet",),
     "detection": ("raddet",),
+    "spectrum_sensing": ("deepsense",),
+    "sensing": ("deepsense",),
     "interference_id": ("interf_gnss6",),
     "protocol_tech_id": ("tprime_wifi4",),
 }
@@ -359,6 +362,8 @@ def _prepare_one(
         return _prepare_sei(dataset, out_dir, payload, seed, cache)
     if family == "detection":
         return _prepare_detection(dataset, out_dir, payload, seed, cache)
+    if family == "sensing":
+        return _prepare_sensing(dataset, out_dir, payload, seed, cache)
     if family == "interference":
         return _prepare_interference(dataset, out_dir, payload, seed, cache)
     if family == "protocol":
@@ -490,6 +495,27 @@ def _prepare_interference(
     return split.canonical_split_id
 
 
+def _prepare_sensing(
+    dataset: str, out_dir: Path, payload: LabelsPayload | None, seed: int, cache: str
+) -> str:
+    from rfbench.data.prepare.sensing import prepare_sensing
+
+    if payload is not None:
+        labels = [int(label) for label in payload["labels"]]
+    else:
+        from rfbench.data.download.spectrum_deepsense import load_deepsense_occupancy
+
+        labels = [int(label) for _iq, label in load_deepsense_occupancy(cache=cache)]
+
+    split, _manifest = prepare_sensing(
+        dataset,
+        out_dir=out_dir,
+        labels=labels,
+        seed=seed,
+    )
+    return split.canonical_split_id
+
+
 def _prepare_protocol(
     dataset: str, out_dir: Path, payload: LabelsPayload | None, seed: int, cache: str
 ) -> str:
@@ -603,6 +629,10 @@ def _download_dispatch(
         from rfbench.data.download.detection_wbsig53 import generate_wbsig53
 
         return generate_wbsig53(cache=cache)
+    if dataset == "deepsense":
+        from rfbench.data.download.spectrum_deepsense import download_deepsense
+
+        return download_deepsense(source_url=source_url, cache=cache)
     if dataset == "interf_gnss6":
         from rfbench.data.download.interference_gnss import download_interference_gnss6
 
@@ -616,7 +646,7 @@ def _download_dispatch(
     raise ValueError(
         f"no download function wired for {dataset!r} yet "
         "(known: radioml_2016_10a, radioml_2018_01a, sig53, wisig, oracle, lora, powder, "
-        "raddet, wbsig53, interf_gnss6, tprime_wifi4)."
+        "raddet, wbsig53, deepsense, interf_gnss6, tprime_wifi4)."
     )
 
 
@@ -830,6 +860,7 @@ _TASK_MODULES: dict[str, str] = {
     "amc": "rfbench.tasks.amc",
     "sei": "rfbench.tasks.sei",
     "wideband_detection": "rfbench.tasks.wideband_detection",
+    "spectrum_sensing": "rfbench.tasks.spectrum_sensing",
     "interference_id": "rfbench.tasks.interference_id",
     "protocol_tech_id": "rfbench.tasks.protocol_tech_id",
     "snr_estimation": "rfbench.tasks.snr_estimation",

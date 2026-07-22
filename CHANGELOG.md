@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Site — leaderboard : rigueur visible + adoption (provenance, tiers, CTA, meta)
+
+Refonte UX du générateur statique (`leaderboard/site/generate.py`), sans nouvelle dépendance
+externe (hors Google Fonts) et **fonctionnelle sans JavaScript** :
+- **Provenance visible** : la `verification.note` (caveats des lignes `from_paper` /
+  `from_paper_uncertain`) est rendue dans un `<details class="provenance">` par groupe, plus un
+  `title=` sur chaque badge de tier — cette info n'apparaissait **nulle part** sur le board.
+- **Légende des tiers** : clé verified / self_reported / from_paper / from_paper_uncertain +
+  famille (baseline/foundation) + contamination, dans le hero de l'index et sur chaque page
+  tâche, construite depuis `_BADGE` / `_FAMILY_CHIP` / `_OVERLAP_BADGE` (jamais codée en dur),
+  avec lien `guide.html#verification`.
+- **Nature de l'IC** exposée en `title` (moyenne ±σ multi-seed = écart-type descriptif, pas un
+  IC à 95%).
+- **Chips regime/track** dans les titres de groupe (réutilise `chip-regime` / `chip-track`).
+- **Adoption** : hero CTA (Submit / How it works / GitHub) ; commande self-serve `rfbench eval`
+  copiable (`<pre class="cmd">`) dans la submit-card ; `<meta description>` page-spécifique +
+  Open Graph/Twitter + favicon SVG inline (data URI) ; ordre mobile ≤900px (leaderboard avant la
+  nav des 14 tâches).
+- Tests : +5 dans `tests/test_site.py`. `ruff` + `pytest` verts.
+
 ### Added — baseline de DÉTECTION wideband RadDet : YOLOv3 (`raddet_yolov3`, from_scratch)
 
 Première baseline de la tâche `wideband_detection` (détection d'objets = boîtes T-F, un stack tout

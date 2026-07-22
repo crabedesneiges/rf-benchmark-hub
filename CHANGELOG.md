@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — split canonique LoRa RFFI committé ; hygiène cluster (~48 Go libérés)
+
+- **LoRa RFFI** (release gxhen 2022, `dataset_training_aug.h5`, 30 devices) : split closed-set committé
+  `sei-lora-closedset-strat-dev-8010-seed42-v1` (30000 packets, 80/10/10 stratifié par device, job CPU
+  ARM). Nouvelle colonne SEI débloquée.
+- **Pas de ligne LoRa `from_paper`** (honnêteté, cf. `docs/BIBLIOGRAPHY.md` §A.3) : le papier Shen 2022
+  TIFS est un framework **k-NN enrollment** (remplace le softmax) ; tous ses chiffres sont
+  **cross-condition** (enroll/eval par jour 71/85/93/**96.40%**, autres types matériels **88.67%**,
+  unseen devices **98.5/98.4%**), aucun n'est un closed-set same-condition sur les 30 devices → non
+  comparable à notre colonne. Catalogué ; colonne peuplée par notre baseline GPU. Même limite que
+  DeepSense : la littérature SEI/RFFI rapporte du metric-learning/cross-condition, pas de l'accuracy
+  closed-set simple.
+- **RadDet mAP par SNR** : non ajoutable — le papier ne tabule que le mAP moyenné (Table III) ; le
+  per-SNR n'existe qu'en figure (Fig 3, SNR -20/-12/-4/4/12/20 dB), sans chiffres. On l'aura via notre
+  propre baseline GPU (courbe `mAP_vs_snr`).
+- **Hygiène** : hint DeepSense périmé corrigé (`.h5` réel, pas de conversion `windows.npy`). Archives
+  sources redondantes supprimées (`_incoming/` ORACLE+POWDER zips + `_incoming_raddet/raddet.tar`,
+  déjà extraites + splits committés) → **~48 Go** libérés sur Lustre.
+
 ### Added — split canonique DeepSense committé (`sensing-deepsense-official-v1`) ; pas de ligne from_paper
 
 Le `.h5` DeepSense réel (LTE-M) décodé et câblé : `load_deepsense_records` lit les `.h5`

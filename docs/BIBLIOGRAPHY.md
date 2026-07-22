@@ -207,6 +207,19 @@ Primary papers:
     `gxhen/LoRa_RFFI` release (30 devices, ResNet + augmentation), NOT the JSAC-2021 data. The
     JSAC-2021 96.40% is **not reproducible** from this file. Cite instead: **Shen et al. 2022, "Towards
     Scalable and Channel-Robust RFFI for LoRa," IEEE TIFS 2022**, IEEE DataPort DOI 10.21227/qqt4-kz19.
+  - Update (2026-07-22): the LoRa **closed-set** split is committed
+    (`sei-lora-closedset-strat-dev-8010-seed42-v1`, 30 devices, 30000 packets from
+    `dataset_training_aug.h5`, 80/10/10 stratified by device). **No LoRa `from_paper` board row**,
+    deliberately: the Shen 2022 TIFS paper is a **k-NN enrollment** framework (it *replaces the
+    softmax*), and every accuracy it tabulates is a **cross-condition** experiment — verbatim (via
+    pdftotext of arXiv:2107.02867): antenna-polarization / cross-day enroll-eval pairs 71.10% /
+    85.50% / 93.40% / **96.40%** (enroll D12 / eval D11), "other LoRa types" (DUT 46-60, different
+    hardware) **88.67%**, and unseen-device scalability **98.50%** (DUTs 1-10) / **98.40%** (DUTs
+    31-40). NONE is a same-condition softmax closed-set accuracy on the 30 training devices, so none
+    is comparable to our closed-set column — putting a cross-day/unseen number there would
+    misrepresent it. Catalogue-only; the column populates via an in-repo LoRa baseline (GPU). Same
+    limitation as DeepSense: SEI/RFFI literature reports metric-learning / cross-condition numbers,
+    not simple closed-set accuracy.
 
 ### A.4 Wideband detection & spectrum sensing
 

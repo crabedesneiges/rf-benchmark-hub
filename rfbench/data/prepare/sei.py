@@ -72,6 +72,12 @@ CANONICAL_SPLIT_IDS: dict[str, dict[str, str]] = {
     "oracle": {
         "closed_set": "sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1",
     },
+    # LoRa RFFI: DEFERRED / OBSOLETE (2026-07-22). The dataset + loader are kept, but this
+    # softmax closed-set framing is NOT how the LoRa RFFI field evaluates -- the field uses k-NN
+    # ENROLLMENT + cross-day/cross-receiver robustness (Shen et al. 2022), which our softmax harness
+    # can't cite. So this closed_set is an isolated same-condition challenge (~99%, uninteresting) and
+    # is not actively benchmarked; revive via an enrollment-based cross-condition reframe. See
+    # docs/BIBLIOGRAPHY.md §A.3.
     "lora": {
         "closed_set": "sei-lora-closedset-strat-dev-8010-seed42-v1",
     },
@@ -580,6 +586,11 @@ def load_lora_records(
     filename: str = "dataset_training_aug.h5",
 ) -> list[SeiRecord]:
     """Extract per-item ``(device_id, None, None)`` records from the LoRa RFFI HDF5.
+
+    DEFERRED / OBSOLETE (2026-07-22): kept as working code + a committed split, but the LoRa RFFI
+    field evaluates with k-NN enrollment + cross-condition robustness, not this softmax closed-set,
+    so it is not actively benchmarked. Revive via an enrollment-based reframe (see
+    :data:`CANONICAL_SPLIT_IDS` note + docs/BIBLIOGRAPHY.md §A.3).
 
     LoRa RFFI (Shen et al., IEEE JSAC 2021) is distributed as a single HDF5 archive
     (``LoRa_RFFI.zip`` on IEEE DataPort, DOI 10.21227/qqt4-kz19) whose training file

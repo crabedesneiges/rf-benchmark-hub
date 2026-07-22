@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — LoRa RFFI marqué DEFERRED/OBSOLETE ; ORACLE cross-distance abandonné (vérif = mismatch)
+
+- **LoRa RFFI → deferred/obsolete** : dataset + loader + split committé gardés, mais **plus activement
+  benchmarké**. Le champ LoRa évalue en k-NN enrollment + cross-condition ; notre softmax closed-set
+  same-condition (~99%) est isolé/trivial et ne cite pas le champ. Marqueurs posés dans
+  `rfbench/data/prepare/sei.py` (`load_lora_records` + `CANONICAL_SPLIT_IDS`) et `docs/BIBLIOGRAPHY.md`
+  §A.3. À réactiver via un reframe enrollment.
+- **ORACLE cross-distance : NON construit.** La vérif verbatim du papier (arXiv:1812.01124, pdftotext)
+  montre que le **87.13% est cross-LOCATION** (l1 vs l3, « two different experimental environments »,
+  Fig 6b/13), **pas cross-distance**. Or nos données KRI-16Devices sont des distances (2–62ft) à **une
+  seule location** (pas de l3) → un split cross-distance ne pourrait PAS citer proprement le 87.13%
+  (mismatch, comme LoRa/DeepSense). ORACLE reste : closed_set single-location 0.986 `from_paper` (fait).
+
 ### Added — POWDER aligné sur le protocole du champ (same-day + cross-day) → 3 lignes `from_paper` vérifiées
 
 Le papier POWDER (Reus-Muns, GLOBECOM 2020) est **ouvert** (genesys-lab.org/papers/Globecom-Fingerprinting.pdf),

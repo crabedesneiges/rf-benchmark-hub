@@ -73,7 +73,7 @@ CANONICAL_SPLIT_IDS: dict[str, dict[str, str]] = {
         "closed_set": "sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1",
     },
     # LoRa RFFI: DEFERRED / OBSOLETE (2026-07-22). The dataset + loader are kept, but this
-    # softmax closed-set framing is NOT how the LoRa RFFI field evaluates -- the field uses k-NN
+    # softmax closed-set framing is NOT how the LoRa RFFI field evaluates -- it uses k-NN
     # ENROLLMENT + cross-day/cross-receiver robustness (Shen et al. 2022), which our softmax harness
     # can't cite. So this closed_set is an isolated same-condition challenge (~99%, uninteresting) and
     # is not actively benchmarked; revive via an enrollment-based cross-condition reframe. See

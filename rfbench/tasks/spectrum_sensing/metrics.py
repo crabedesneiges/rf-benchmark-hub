@@ -1,13 +1,14 @@
-"""Spectrum-sensing metrics -- pure-stdlib streaming accuracy (primary) + Pd@Pfa/AUROC.
+"""Spectrum-sensing metrics -- pure-stdlib streaming F1 (primary) + Pd@Pfa/AUROC.
 
 Spectrum sensing is BINARY occupancy detection per ``docs/EVALUATION_PROTOCOL.md``
 §"Spectrum sensing": each raw-IQ window is either occupied (target ``1``) or vacant
 (target ``0``), and the model emits a scalar ``P(occupied)`` per window. The reported metrics
 are:
 
-* ``accuracy`` -- **primary** (:class:`OccupancyAccuracy`), the hard-label occupancy accuracy the
-  sensing literature (DeepSense and successors) tabulates, so published baselines are
-  board-comparable. It also emits ``precision`` / ``recall`` / ``f1`` over the occupied class.
+* ``f1`` -- **primary** (:class:`OccupancyClassification`), the occupied-class F1 the sensing
+  literature actually reports (DeepSense precision 98% / recall 97%; IPFSCNN calls F1 "the primary
+  metric for overall model accuracy"), so published baselines are board-comparable. The same metric
+  object also emits ``accuracy`` / ``precision`` / ``recall``.
 * ``pd@pfa=0.1`` -- **secondary** (:class:`PdAtPfa`), the classical probability of detection at a
   fixed false-alarm rate of ``0.1`` (the ROC operating point). A detector that never misses an
   occupied window while raising few false alarms scores near ``1.0``; a random detector scores near
@@ -152,20 +153,22 @@ class PdAtPfa(Metric):
 _OCCUPANCY_THRESHOLD = 0.5
 
 
-class OccupancyAccuracy(Metric):
-    """Binary occupancy-detection accuracy (+ precision / recall / F1) -- the sensing PRIMARY.
+class OccupancyClassification(Metric):
+    """Binary occupancy classification metrics -- ``f1`` PRIMARY (+ accuracy/precision/recall).
 
-    The spectrum-sensing literature (DeepSense and successors) reports occupancy performance as
-    hard-label classification (accuracy, precision, recall), so ``accuracy`` is the board's primary
-    metric -- the one most papers tabulate -- while :class:`PdAtPfa` keeps the classical ROC
-    operating point as a secondary. Accumulates ``(score, target)`` pairs where ``score`` is
-    ``P(occupied)`` (via :func:`occupancy_score`), thresholds at :data:`_OCCUPANCY_THRESHOLD`
-    (occupied iff ``score >= 0.5``), and reports ``accuracy`` (primary) plus ``precision`` /
-    ``recall`` / ``f1`` over the occupied class. Pure stdlib; ``primary_key`` is ``"accuracy"``.
+    The spectrum-sensing literature (DeepSense: precision 98% / recall 97%; IPFSCNN and successors)
+    reports occupancy performance with **F1 / precision / recall** (IPFSCNN calls F1 "the primary
+    metric for overall model accuracy") -- never plain accuracy -- so ``f1`` over the occupied class
+    is the board's primary (the metric published baselines actually report, so they are board-
+    comparable), while ``accuracy`` / ``precision`` / ``recall`` ride along and :class:`PdAtPfa`
+    keeps the classical ROC point as secondaries. Accumulates ``(score, target)`` pairs where
+    ``score`` is ``P(occupied)`` (via :func:`occupancy_score`), thresholds at
+    :data:`_OCCUPANCY_THRESHOLD` (occupied iff ``score >= 0.5``). Pure stdlib; ``primary_key`` is
+    ``"f1"``.
     """
 
-    name = "accuracy"
-    primary_key = "accuracy"
+    name = "f1"
+    primary_key = "f1"
 
     def __init__(self, threshold: float = _OCCUPANCY_THRESHOLD) -> None:
         """Bind the hard-label decision threshold on ``P(occupied)`` and reset counters."""
@@ -208,7 +211,7 @@ class OccupancyAccuracy(Metric):
                 self._fn += 1
 
     def compute(self) -> dict[str, float | list[dict[str, float]]]:
-        """Return ``{accuracy (primary), precision, recall, f1}`` over the accumulated stream."""
+        """Return ``{f1 (primary), accuracy, precision, recall}`` over the accumulated stream."""
         accuracy = self._correct / self._n if self._n else 0.0
         precision = self._tp / (self._tp + self._fp) if (self._tp + self._fp) else 0.0
         recall = self._tp / (self._tp + self._fn) if (self._tp + self._fn) else 0.0
@@ -409,7 +412,7 @@ def _downsample(values: list[float], max_points: int) -> list[float]:
 
 __all__ = [
     "DEFAULT_PFA_TARGET",
-    "OccupancyAccuracy",
+    "OccupancyClassification",
     "PdAtPfa",
     "occupancy_score",
     "pd_at_pfa",

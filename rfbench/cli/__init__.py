@@ -161,7 +161,7 @@ _TASK_DEFAULTS: dict[str, dict[str, str]] = {
     },
     "spectrum_sensing": {
         "dataset": "deepsense",
-        "primary": "accuracy",
+        "primary": "f1",
         "canonical_split_id": "sensing-deepsense-8010-seed42-v1",
         "track": "occupancy",
     },

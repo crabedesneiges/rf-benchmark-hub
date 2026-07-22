@@ -121,10 +121,10 @@ Any change here that alters a metric or split is a **breaking change** → bump 
 - **Dataset**: DeepSense (OTA 802.11 a/g + LTE-M).
 - **Split** (per split policy): adopt the official DeepSense split if provided; else **80/10/10**,
   seed 42 → `sensing-deepsense-<split>-v1`.
-- **Metrics**: **primary** = `accuracy` (binary occupancy accuracy, the hard-label metric the
-  sensing literature — DeepSense and successors — tabulates, chosen so published baselines are
-  board-comparable). Secondaries: `precision` / `recall` / `f1` over the occupied class, the classical
-  ROC operating point `pd@pfa=0.1` (+ `auroc`), and inference latency (ms).
+- **Metrics**: **primary** = `f1` over the occupied class (the metric the sensing literature actually
+  reports — DeepSense precision 98% / recall 97% → F1 ≈ 0.975; IPFSCNN uses F1 as its overall metric —
+  chosen so published baselines are board-comparable). Secondaries: `accuracy` / `precision` / `recall`,
+  the classical ROC operating point `pd@pfa=0.1` (+ `auroc`), and inference latency (ms).
 
 ## Common rules
 - **Split policy**: if the dataset ships a split used by the literature, adopt it verbatim and record
@@ -165,7 +165,7 @@ Any change here that alters a metric or split is a **breaking change** → bump 
   older literature that only reports single-IoU AP.
 
 ### Spectrum sensing: threshold calibration
-- The primary `accuracy` (and `precision`/`recall`/`f1`) use a fixed 0.5 decision threshold on
+- The primary `f1` (and `accuracy`/`precision`/`recall`) use a fixed 0.5 decision threshold on
   `P(occupied)`.
 - For the **secondary** `pd@pfa=0.1`: the decision threshold MUST be calibrated on the **val** split
   (pick the threshold achieving `pfa=0.1` on val), then that **same, frozen** threshold is applied
@@ -185,7 +185,7 @@ baseline (closed-form DSP, fixed-seed linear model). Stochastic baselines widen 
 | `sei` (open-set) | `auroc` | ±0.01 absolute |
 | `snr_estimation` | `rmse_db` | ±0.10 dB absolute |
 | `wideband_detection` | `mAP` | ±0.02 absolute |
-| `spectrum_sensing` | `accuracy` | ±0.005 absolute |
+| `spectrum_sensing` | `f1` | ±0.005 absolute |
 | `interference_id` | `accuracy_overall` | ±0.005 absolute |
 | `protocol_tech_id` | `accuracy_overall` | ±0.005 absolute |
 

@@ -7,12 +7,12 @@ target-extraction rule per ``docs/EVALUATION_PROTOCOL.md`` §"Spectrum sensing".
 * ``datasets()`` -> the spectrum-sensing dataset variants (``deepsense``), each a
   :class:`~rfbench.tasks.spectrum_sensing.dataset.SpectrumSensingDataset`. Tests inject a
   synthetic in-memory dataset.
-* ``metrics()`` -> ``[OccupancyAccuracy, PdAtPfa]``; the FIRST is primary, so
-  ``result.json.metrics.primary == "accuracy"`` (the hard-label metric the sensing literature --
-  DeepSense and successors -- tabulates). ``OccupancyAccuracy`` also emits ``precision`` /
-  ``recall`` / ``f1``; ``PdAtPfa`` adds the classical ROC operating point ``pd@pfa=0.1`` plus
-  ``auroc`` / ``pfa_achieved`` / ``roc`` as secondaries -- keeping both the classification and ROC
-  views on the row.
+* ``metrics()`` -> ``[OccupancyClassification, PdAtPfa]``; the FIRST is primary, so
+  ``result.json.metrics.primary == "f1"`` (the occupied-class F1 the sensing literature reports --
+  DeepSense P98/R97, IPFSCNN's overall metric). ``OccupancyClassification`` also emits ``accuracy``
+  / ``precision`` / ``recall``; ``PdAtPfa`` adds the classical ROC operating point ``pd@pfa=0.1``
+  plus ``auroc`` / ``pfa_achieved`` / ``roc`` as secondaries -- keeping both the classification and
+  ROC views on the row.
 * ``default_split()`` -> ``"test"``; ``tracks()`` -> ``["occupancy"]`` (single track).
 * ``build_targets(batch)`` -> the per-sample binary occupancy targets (the ``label`` field).
 
@@ -30,7 +30,7 @@ from rfbench.core.registry import register_task
 from rfbench.core.task import Task
 from rfbench.core.types import Batch, SplitName, Tensor, Track
 from rfbench.tasks.spectrum_sensing.dataset import SpectrumSensingDataset
-from rfbench.tasks.spectrum_sensing.metrics import OccupancyAccuracy, PdAtPfa
+from rfbench.tasks.spectrum_sensing.metrics import OccupancyClassification, PdAtPfa
 
 #: The spectrum-sensing dataset ids in the order ``datasets()`` returns them (first == default).
 SENSING_DATASET_NAMES: tuple[str, ...] = ("deepsense",)
@@ -64,14 +64,14 @@ class SpectrumSensingTask(Task):
         return list(self._datasets)
 
     def metrics(self) -> list[Metric]:
-        """Return ``[OccupancyAccuracy (primary), PdAtPfa]``.
+        """Return ``[OccupancyClassification (primary), PdAtPfa]``.
 
-        The primary metric is first, so ``evaluate`` sets ``metrics.primary`` to ``"accuracy"`` --
-        the hard-label occupancy accuracy the sensing literature tabulates. ``OccupancyAccuracy``
-        also emits ``precision`` / ``recall`` / ``f1``; ``PdAtPfa`` adds the classical
-        ``pd@pfa=0.1`` (+ ``auroc`` / ``pfa_achieved`` / ``roc``) so the ROC view stays on the row.
+        The primary metric is first, so ``evaluate`` sets ``metrics.primary`` to ``"f1"`` -- the
+        occupied-class F1 the sensing literature reports. ``OccupancyClassification`` also emits
+        ``accuracy`` / ``precision`` / ``recall``; ``PdAtPfa`` adds the classical ``pd@pfa=0.1``
+        (+ ``auroc`` / ``pfa_achieved`` / ``roc``) so the ROC view stays on the row.
         """
-        return [OccupancyAccuracy(), PdAtPfa()]
+        return [OccupancyClassification(), PdAtPfa()]
 
     def default_split(self) -> SplitName:
         """Return the partition scored by default (``"test"``)."""

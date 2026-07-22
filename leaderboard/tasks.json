@@ -196,10 +196,14 @@
         "split": "DeepSense official split if provided, else 80/10/10 seed 42 (sensing-deepsense-<split>-v1)"
       },
       "primary_metric": {
-        "name": "accuracy",
-        "definition": "Binary occupancy-detection accuracy (occupied vs vacant), the hard-label metric the sensing literature (DeepSense and successors) tabulates. Chosen as primary so published baselines are board-comparable."
+        "name": "f1",
+        "definition": "F1 over the occupied class (harmonic mean of precision and recall), the metric the sensing literature actually reports (DeepSense precision 98% / recall 97% -> F1 ~0.975; IPFSCNN uses F1 as its overall metric). Chosen as primary so published baselines are board-comparable."
       },
       "secondary_metrics": [
+        {
+          "name": "accuracy",
+          "definition": "Binary occupancy-detection accuracy (occupied vs vacant), fixed 0.5 threshold on P(occupied)."
+        },
         {
           "name": "precision",
           "definition": "Precision over the occupied class (DeepSense reports ~98%)."
@@ -207,10 +211,6 @@
         {
           "name": "recall",
           "definition": "Recall over the occupied class (DeepSense reports ~97%)."
-        },
-        {
-          "name": "f1",
-          "definition": "F1 over the occupied class (harmonic mean of precision and recall)."
         },
         {
           "name": "pd@pfa=0.1",

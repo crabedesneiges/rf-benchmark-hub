@@ -213,6 +213,24 @@ def test_metric_recognition_track_separates_classes() -> None:
     assert out["mAR"] == 0.0
 
 
+def test_metric_detection_track_is_class_agnostic_with_real_labels() -> None:
+    """On the detection track a right-place-wrong-class prediction still matches (mAP = 1.0).
+
+    Real RadDet boxes carry a (hashed) class id, not the ``-1`` sentinel, so this guards that
+    the detection track scores LOCALISATION ONLY -- a pred of class 7 recovers a GT of class 3
+    when the box overlaps exactly. The torchmetrics production path collapses labels to a single
+    class for the same reason (see ``DetectionMetric._compute_torchmetrics``); this locks the
+    stdlib path's matching semantics the two must agree on.
+    """
+    gt = TFBox(0.0, 0.5, 0.0, 0.5, label=3)
+    other_class = TFBox(0.0, 0.5, 0.0, 0.5, label=7, score=0.9)
+    metric = DetectionMetric(track=DETECTION_TRACK)
+    metric.update(pred=[[other_class]], target=[[gt]])
+    out = metric.compute()
+    assert out["mAP"] == pytest.approx(1.0)
+    assert out["mAR"] == pytest.approx(1.0)
+
+
 def test_metric_unknown_track_raises() -> None:
     """Constructing the metric with an unknown track raises a clear error."""
     with pytest.raises(ValueError, match="unknown detection track"):

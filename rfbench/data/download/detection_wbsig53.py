@@ -196,10 +196,13 @@ def load_raddet_annotations(
     one spectrogram ``*.png`` per wideband capture with a sibling YOLO ``*.txt`` label file
     (same stem) holding ``class_id x_center y_center width height`` rows, all normalised to
     ``[0, 1]``. Each returned element is a mapping with a stable ``sample_id`` (``"<split>/
-    <stem>"``) and a ``boxes`` list; every box carries a signal ``class`` (mapped through
-    :data:`RADDET_CLASSES`) plus its time/frequency extent
-    ``(t_start, t_stop, f_low, f_high)`` in normalised ``[0, 1]`` coordinates -- exactly the
-    shape :func:`rfbench.data.prepare.detection.prepare_detection` consumes as ``samples=``.
+    <stem>"``), the ``image_path`` of the spectrogram PNG (a string), and a ``boxes`` list;
+    every box carries a signal ``class`` (mapped through :data:`RADDET_CLASSES`) plus its
+    time/frequency extent ``(t_start, t_stop, f_low, f_high)`` in normalised ``[0, 1]``
+    coordinates -- exactly the shape
+    :func:`rfbench.data.prepare.detection.prepare_detection` consumes as ``samples=`` (the
+    extra ``image_path`` is ignored by prepare/the annotations sidecar, but is what a real
+    detector's ``forward`` reads to load the spectrogram at eval time).
 
     Axis convention (RadDet spectrograms, arXiv:2501.10407): the horizontal image axis is
     **time**, the vertical is **frequency**; YOLO ``y`` is measured from the image top, so a
@@ -230,7 +233,13 @@ def load_raddet_annotations(
             label_file = _raddet_label_path(variant_root, split, png)
             rows = _parse_yolo_label_file(label_file) if label_file.exists() else []
             boxes = [_yolo_row_to_box(row) for row in rows]
-            samples.append({"sample_id": f"{split}/{png.stem}", "boxes": boxes})
+            samples.append(
+                {
+                    "sample_id": f"{split}/{png.stem}",
+                    "image_path": str(png),
+                    "boxes": boxes,
+                }
+            )
     if not samples:
         raise FileNotFoundError(
             f"RadDet tree at {images_root} contained no <split>/*.png captures.\n"

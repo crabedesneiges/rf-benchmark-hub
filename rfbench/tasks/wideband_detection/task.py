@@ -449,6 +449,15 @@ class DetectionMetric(Metric):
             iou_thresholds=[self._iou_threshold],
             class_metrics=False,
         )
+
+        def _label(box: TFBox) -> int:
+            # DETECTION track is class-AGNOSTIC: collapse every box to a single class so
+            # torchmetrics matches on localisation ALONE, exactly like the stdlib path. Real
+            # RadDet GT/pred boxes carry a (hashed) class id, so WITHOUT this collapse
+            # torchmetrics would require class agreement even on the detection track -- silently
+            # scoring recognition instead. Only the RECOGNITION track keeps per-box classes.
+            return 0 if self._class_agnostic else max(box.label, 0)
+
         preds_payload: list[dict[str, Any]] = []
         target_payload: list[dict[str, Any]] = []
         for preds, gts in self._images:
@@ -459,7 +468,7 @@ class DetectionMetric(Metric):
                         dtype=torch.float32,
                     ).reshape(-1, 4),
                     "scores": torch.tensor([b.score for b in preds], dtype=torch.float32),
-                    "labels": torch.tensor([max(b.label, 0) for b in preds], dtype=torch.int64),
+                    "labels": torch.tensor([_label(b) for b in preds], dtype=torch.int64),
                 }
             )
             target_payload.append(
@@ -468,7 +477,7 @@ class DetectionMetric(Metric):
                         [[b.t_start, b.f_low, b.t_stop, b.f_high] for b in gts],
                         dtype=torch.float32,
                     ).reshape(-1, 4),
-                    "labels": torch.tensor([max(b.label, 0) for b in gts], dtype=torch.int64),
+                    "labels": torch.tensor([_label(b) for b in gts], dtype=torch.int64),
                 }
             )
         metric.update(preds_payload, target_payload)
@@ -589,14 +598,30 @@ class WidebandDetectionDataset(Dataset):
         return self._load_from_cache(split, active_track)
 
     def _load_from_cache(self, split: SplitName, track: Track) -> _InMemoryDetectionSplit:
-        """Lazy cluster-only path: read prepared boxes + generated IQ (never in tests)."""
+        """Lazy cluster-only path: read the RadDet split's ``(image_path, boxes)`` samples.
+
+        :func:`~rfbench.data.download.detection_wbsig53.load_raddet_annotations` returns EVERY
+        RadDet capture across all YOLO splits, each tagged ``sample_id = "<split>/<stem>"`` and
+        carrying its spectrogram ``image_path`` (the real pixels a detector's ``forward`` loads)
+        + normalised T-F ``boxes``. We adopt RadDet's OFFICIAL partition verbatim (the committed
+        ``detect-raddet-detection-official-v1`` split), so filtering by the ``<split>`` prefix
+        here yields exactly that split's images: ``evaluate("test", ...)`` therefore scores ONLY
+        the official test set (no train/val leakage into the mAP), directly comparable to a
+        paper's RadDet test number. ``track`` does not change WHICH samples are served (both
+        tracks share the same captures; the metric decides class-agnostic vs per-class matching).
+        """
         from rfbench.data.download.detection_wbsig53 import (  # noqa: PLC0415
             load_raddet_annotations,
         )
 
-        del split, track  # split filtering is applied by the concrete cluster loader
-        samples = cast("list[Batch]", load_raddet_annotations())
-        return _InMemoryDetectionSplit(samples)
+        del track  # both tracks share the same captures; track only steers the metric
+        wanted = str(split)
+        samples = [
+            sample
+            for sample in load_raddet_annotations()
+            if str(sample.get("sample_id", "")).split("/", 1)[0] == wanted
+        ]
+        return _InMemoryDetectionSplit(cast("list[Batch]", samples))
 
 
 # ==================================================================================================
@@ -621,19 +646,25 @@ class WidebandDetectionTask(Task):
         iou_threshold: float = DEFAULT_IOU_THRESHOLD,
         use_torchmetrics: bool = False,
         samples: Sequence[Batch] | None = None,
+        official: bool = False,
     ) -> None:
         """Configure the task for a track + IoU threshold.
 
         ``samples`` (synthetic/tests) is threaded into the dataset adapter so
         :func:`rfbench.core.evaluate.evaluate` can drive an end-to-end run with no heavy
         dependency. ``use_torchmetrics`` opts the metric into the lazy production path.
+        ``official=True`` binds the dataset to RadDet's adopted split id
+        (``detect-<dataset>-<track>-official-v1``) so a cluster eval on the real tree reports
+        the same canonical split the leaderboard commits (see
+        :meth:`WidebandDetectionDataset.__init__`); the synthetic ``samples`` path leaves it
+        ``False``.
         """
         if track not in TRACKS:
             raise ValueError(f"unknown detection track {track!r}; expected one of {list(TRACKS)}")
         self._track = track
         self._iou_threshold = iou_threshold
         self._use_torchmetrics = use_torchmetrics
-        self._dataset = WidebandDetectionDataset(track=track, samples=samples)
+        self._dataset = WidebandDetectionDataset(track=track, samples=samples, official=official)
 
     def datasets(self) -> list[Dataset]:
         """Return the single WBSig53 dataset variant."""

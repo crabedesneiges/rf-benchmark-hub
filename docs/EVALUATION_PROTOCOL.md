@@ -121,7 +121,10 @@ Any change here that alters a metric or split is a **breaking change** → bump 
 - **Dataset**: DeepSense (OTA 802.11 a/g + LTE-M).
 - **Split** (per split policy): adopt the official DeepSense split if provided; else **80/10/10**,
   seed 42 → `sensing-deepsense-<split>-v1`.
-- **Metrics**: ROC (`pd` at fixed `pfa`, **primary** = `pd@pfa=0.1`), inference latency (ms).
+- **Metrics**: **primary** = `accuracy` (binary occupancy accuracy, the hard-label metric the
+  sensing literature — DeepSense and successors — tabulates, chosen so published baselines are
+  board-comparable). Secondaries: `precision` / `recall` / `f1` over the occupied class, the classical
+  ROC operating point `pd@pfa=0.1` (+ `auroc`), and inference latency (ms).
 
 ## Common rules
 - **Split policy**: if the dataset ships a split used by the literature, adopt it verbatim and record
@@ -162,10 +165,12 @@ Any change here that alters a metric or split is a **breaking change** → bump 
   older literature that only reports single-IoU AP.
 
 ### Spectrum sensing: threshold calibration
-- The decision threshold for `pd@pfa=0.1` MUST be calibrated on the **val** split (pick the
-  threshold achieving `pfa=0.1` on val), then that **same, frozen** threshold is applied as-is to
-  the **test** split to measure `pd`. Calibrating the threshold directly on test is contamination
-  and is rejected in review.
+- The primary `accuracy` (and `precision`/`recall`/`f1`) use a fixed 0.5 decision threshold on
+  `P(occupied)`.
+- For the **secondary** `pd@pfa=0.1`: the decision threshold MUST be calibrated on the **val** split
+  (pick the threshold achieving `pfa=0.1` on val), then that **same, frozen** threshold is applied
+  as-is to the **test** split to measure `pd`. Calibrating the threshold directly on test is
+  contamination and is rejected in review.
 
 ### Per-task tolerance for a Tier-2 ("verified") re-run
 
@@ -180,7 +185,7 @@ baseline (closed-form DSP, fixed-seed linear model). Stochastic baselines widen 
 | `sei` (open-set) | `auroc` | ±0.01 absolute |
 | `snr_estimation` | `rmse_db` | ±0.10 dB absolute |
 | `wideband_detection` | `mAP` | ±0.02 absolute |
-| `spectrum_sensing` | `pd@pfa=0.1` | ±0.02 absolute |
+| `spectrum_sensing` | `accuracy` | ±0.005 absolute |
 | `interference_id` | `accuracy_overall` | ±0.005 absolute |
 | `protocol_tech_id` | `accuracy_overall` | ±0.005 absolute |
 

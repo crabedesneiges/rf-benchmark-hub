@@ -1,18 +1,20 @@
-"""Spectrum-sensing metric -- pure-stdlib streaming Pd@Pfa + AUROC.
+"""Spectrum-sensing metrics -- pure-stdlib streaming accuracy (primary) + Pd@Pfa/AUROC.
 
 Spectrum sensing is BINARY occupancy detection per ``docs/EVALUATION_PROTOCOL.md``
 §"Spectrum sensing": each raw-IQ window is either occupied (target ``1``) or vacant
 (target ``0``), and the model emits a scalar ``P(occupied)`` per window. The reported metrics
 are:
 
-* ``pd@pfa=0.1`` -- **primary**, the probability of detection at a fixed false-alarm rate of
-  ``0.1`` (the standard spectrum-sensing operating point). A detector that never misses an
-  occupied window while raising few false alarms scores near ``1.0``; a random detector scores
-  near the false-alarm target itself (``~0.1``).
-* ``auroc`` -- **secondary**, the area under the ROC (reused from :mod:`rfbench.tasks.sei.metrics`
-  to avoid duplication), summarising detection quality across all thresholds.
-* ``roc`` -- the ROC curve as a list of ``{"x": pfa, "y": pd}`` points (a
-  :class:`~rfbench.core.metric.Metric` curve), landing in ``result.json.metrics.curves``.
+* ``accuracy`` -- **primary** (:class:`OccupancyAccuracy`), the hard-label occupancy accuracy the
+  sensing literature (DeepSense and successors) tabulates, so published baselines are
+  board-comparable. It also emits ``precision`` / ``recall`` / ``f1`` over the occupied class.
+* ``pd@pfa=0.1`` -- **secondary** (:class:`PdAtPfa`), the classical probability of detection at a
+  fixed false-alarm rate of ``0.1`` (the ROC operating point). A detector that never misses an
+  occupied window while raising few false alarms scores near ``1.0``; a random detector scores near
+  the false-alarm target itself (``~0.1``).
+* ``auroc`` -- secondary, area under the ROC (reused from :mod:`rfbench.tasks.sei.metrics` to avoid
+  duplication); and ``roc`` -- the ROC curve as ``{"x": pfa, "y": pd}`` points, landing in
+  ``result.json.metrics.curves``.
 
 PROTOCOL / THRESHOLD CALIBRATION: the normative protocol calibrates the decision threshold on
 the **val** split (to hit ``pfa == 0.1`` there) then FREEZES it for **test**, reporting the test
@@ -48,7 +50,7 @@ _MAX_ROC_POINTS = 256
 
 
 class PdAtPfa(Metric):
-    """Probability of detection at a fixed false-alarm rate -- the spectrum-sensing PRIMARY metric.
+    """Probability of detection at a fixed false-alarm rate -- the classical ROC SECONDARY metric.
 
     Accumulates ``(score, target)`` pairs where ``score`` is the model's ``P(occupied)`` for a
     window and ``target`` is ``1`` (occupied) or ``0`` (vacant), then reports the probability of
@@ -144,6 +146,74 @@ class PdAtPfa(Metric):
             "pfa_achieved": pfa_achieved,
             "roc": _roc_curve(self._pos, self._neg),
         }
+
+
+#: Decision threshold on ``P(occupied)`` for the hard-label metrics (occupied iff score >= this).
+_OCCUPANCY_THRESHOLD = 0.5
+
+
+class OccupancyAccuracy(Metric):
+    """Binary occupancy-detection accuracy (+ precision / recall / F1) -- the sensing PRIMARY.
+
+    The spectrum-sensing literature (DeepSense and successors) reports occupancy performance as
+    hard-label classification (accuracy, precision, recall), so ``accuracy`` is the board's primary
+    metric -- the one most papers tabulate -- while :class:`PdAtPfa` keeps the classical ROC
+    operating point as a secondary. Accumulates ``(score, target)`` pairs where ``score`` is
+    ``P(occupied)`` (via :func:`occupancy_score`), thresholds at :data:`_OCCUPANCY_THRESHOLD`
+    (occupied iff ``score >= 0.5``), and reports ``accuracy`` (primary) plus ``precision`` /
+    ``recall`` / ``f1`` over the occupied class. Pure stdlib; ``primary_key`` is ``"accuracy"``.
+    """
+
+    name = "accuracy"
+    primary_key = "accuracy"
+
+    def __init__(self, threshold: float = _OCCUPANCY_THRESHOLD) -> None:
+        """Bind the hard-label decision threshold on ``P(occupied)`` and reset counters."""
+        self.threshold = threshold
+        self._correct = 0
+        self._n = 0
+        self._tp = 0  # predicted occupied & truly occupied
+        self._fp = 0  # predicted occupied & truly vacant
+        self._fn = 0  # predicted vacant & truly occupied
+
+    def reset(self) -> None:
+        """Clear the accumulated confusion counts."""
+        self._correct = self._n = self._tp = self._fp = self._fn = 0
+
+    def prepare_predictions(self, pred: Tensor) -> list[float]:
+        """Reduce a batch of per-sample outputs to scalar ``P(occupied)`` once (bootstrap hook)."""
+        return [occupancy_score(row) for row in pred]
+
+    def update(
+        self,
+        pred: Tensor,
+        target: Tensor,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        """Accumulate hard-label confusion counts for one batch (``pred`` = ``P(occupied)``)."""
+        for prediction, label in zip(pred, target, strict=True):
+            if label not in (0, 1):
+                raise ValueError(
+                    f"spectrum-sensing target must be 0 (vacant) or 1 (occupied), got {label!r}"
+                )
+            predicted = 1 if occupancy_score(prediction) >= self.threshold else 0
+            self._n += 1
+            if predicted == label:
+                self._correct += 1
+            if predicted == 1 and label == 1:
+                self._tp += 1
+            elif predicted == 1 and label == 0:
+                self._fp += 1
+            elif predicted == 0 and label == 1:
+                self._fn += 1
+
+    def compute(self) -> dict[str, float | list[dict[str, float]]]:
+        """Return ``{accuracy (primary), precision, recall, f1}`` over the accumulated stream."""
+        accuracy = self._correct / self._n if self._n else 0.0
+        precision = self._tp / (self._tp + self._fp) if (self._tp + self._fp) else 0.0
+        recall = self._tp / (self._tp + self._fn) if (self._tp + self._fn) else 0.0
+        f1 = 2.0 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+        return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1}
 
 
 # --- pure-stdlib scoring primitives (no numpy) --------------------------------------
@@ -339,6 +409,7 @@ def _downsample(values: list[float], max_points: int) -> list[float]:
 
 __all__ = [
     "DEFAULT_PFA_TARGET",
+    "OccupancyAccuracy",
     "PdAtPfa",
     "occupancy_score",
     "pd_at_pfa",

@@ -192,10 +192,26 @@
         "split": "DeepSense official split if provided, else 80/10/10 seed 42 (sensing-deepsense-<split>-v1)"
       },
       "primary_metric": {
-        "name": "pd@pfa=0.1",
-        "definition": "Probability of detection at a fixed 0.1 false-alarm rate on the occupancy ROC. Note: exact pd@pfa=0.1 not tabulated in the source paper (paper reports precision 98% / recall 97%)."
+        "name": "accuracy",
+        "definition": "Binary occupancy-detection accuracy (occupied vs vacant), the hard-label metric the sensing literature (DeepSense and successors) tabulates. Chosen as primary so published baselines are board-comparable."
       },
       "secondary_metrics": [
+        {
+          "name": "precision",
+          "definition": "Precision over the occupied class (DeepSense reports ~98%)."
+        },
+        {
+          "name": "recall",
+          "definition": "Recall over the occupied class (DeepSense reports ~97%)."
+        },
+        {
+          "name": "f1",
+          "definition": "F1 over the occupied class (harmonic mean of precision and recall)."
+        },
+        {
+          "name": "pd@pfa=0.1",
+          "definition": "Probability of detection at a fixed 0.1 false-alarm rate on the occupancy ROC (the classical spectrum-sensing operating point), kept as a secondary alongside auroc."
+        },
         {
           "name": "inference_latency",
           "definition": "Per-inference latency in milliseconds (paper reports 0.61 ms FPGA in-the-loop)."

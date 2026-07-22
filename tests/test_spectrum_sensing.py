@@ -36,7 +36,11 @@ from rfbench.tasks.spectrum_sensing import (
     SpectrumSensingDataset,
     SpectrumSensingTask,
 )
-from rfbench.tasks.spectrum_sensing.metrics import occupancy_score, pd_at_pfa
+from rfbench.tasks.spectrum_sensing.metrics import (
+    OccupancyAccuracy,
+    occupancy_score,
+    pd_at_pfa,
+)
 
 _SPLITS: tuple[SplitName, SplitName, SplitName] = ("train", "val", "test")
 
@@ -190,10 +194,37 @@ def test_occupancy_score_rejects_empty_row() -> None:
 # PdAtPfa metric update / compute / prepare_predictions
 # --------------------------------------------------------------------------------------
 def test_metric_names_and_primary_key() -> None:
-    """The metric identifies itself as pd@pfa=0.1 (primary)."""
+    """The metric identifies itself as pd@pfa=0.1 (secondary ROC metric)."""
     metric = PdAtPfa()
     assert metric.name == "pd@pfa=0.1"
     assert metric.primary_key == "pd@pfa=0.1"
+
+
+def test_occupancy_accuracy_primary_and_prf() -> None:
+    """OccupancyAccuracy is the 'accuracy' primary and also emits precision/recall/f1."""
+    metric = OccupancyAccuracy()
+    assert metric.name == "accuracy"
+    assert metric.primary_key == "accuracy"
+    # 3 occupied (scores >=0.5) + 2 vacant (scores <0.5), all correct -> perfect.
+    metric.update([0.9, 0.8, 0.6, 0.2, 0.1], [1, 1, 1, 0, 0])
+    out = metric.compute()
+    assert out["accuracy"] == pytest.approx(1.0)
+    assert out["precision"] == pytest.approx(1.0)
+    assert out["recall"] == pytest.approx(1.0)
+    assert out["f1"] == pytest.approx(1.0)
+
+
+def test_occupancy_accuracy_confusion_and_threshold() -> None:
+    """Accuracy/precision/recall reflect the 0.5-threshold confusion counts; bad target raises."""
+    metric = OccupancyAccuracy()
+    # scores -> preds @0.5: [1,1,0,0]; targets [1,0,1,0] -> 1 TP, 1 FP, 1 FN, 1 TN.
+    metric.update([0.7, 0.6, 0.4, 0.3], [1, 0, 1, 0])
+    out = metric.compute()
+    assert out["accuracy"] == pytest.approx(0.5)  # 2/4 correct (TP + TN)
+    assert out["precision"] == pytest.approx(0.5)  # TP / (TP+FP) = 1/2
+    assert out["recall"] == pytest.approx(0.5)  # TP / (TP+FN) = 1/2
+    with pytest.raises(ValueError):
+        OccupancyAccuracy().update([0.9], [2])  # target outside {0,1}
 
 
 def test_metric_compute_self_contained_separable() -> None:
@@ -373,7 +404,8 @@ def test_task_declares_protocol_surface() -> None:
     assert task.default_split() == "test"
     assert task.tracks() == ["occupancy"]
     metric_keys = [m.primary_key for m in task.metrics()]
-    assert metric_keys[0] == "pd@pfa=0.1"  # primary is first
+    assert metric_keys[0] == "accuracy"  # primary is first
+    assert "pd@pfa=0.1" in metric_keys  # ROC operating point kept as a secondary metric
 
 
 def test_canonical_split_id_version_matches_task_version() -> None:
@@ -450,7 +482,9 @@ def test_end_to_end_evaluate_validates_against_schema() -> None:
     Draft202012Validator(_load_schema()).validate(result)
 
     assert result["task"]["name"] == "spectrum_sensing"
-    assert result["metrics"]["primary"] == "pd@pfa=0.1"
+    assert result["metrics"]["primary"] == "accuracy"
     values = result["metrics"]["values"]
+    assert values["accuracy"] == pytest.approx(1.0)
+    # Secondaries stay on the row: the classical ROC operating point + auroc.
     assert values["pd@pfa=0.1"] == pytest.approx(1.0)
     assert values["auroc"] == pytest.approx(1.0)

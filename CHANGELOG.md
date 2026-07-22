@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `spectrum_sensing` : métrique primaire `pd@pfa=0.1` → `accuracy` (aligner sur la littérature)
+
+Décision : la littérature spectrum-sensing (DeepSense et successeurs) rapporte l'occupation en
+métrique de classification (accuracy/precision/recall), pas en `pd@pfa`. Pour que les baselines
+publiées soient board-comparables (ajoutables en `from_paper`), la primaire passe à **`accuracy`**
+(détection binaire occupé/vacant), avec **`precision`/`recall`/`f1`** + le `pd@pfa=0.1` classique
+(+`auroc`/`roc`) conservés en **secondaires**.
+- Nouvelle métrique `OccupancyAccuracy` (`rfbench/tasks/spectrum_sensing/metrics.py`, seuil 0.5 sur
+  `P(occupied)`, réutilise `occupancy_score`) ; `task.metrics()` = `[OccupancyAccuracy, PdAtPfa]`.
+- `docs/EVALUATION_PROTOCOL.md`, `leaderboard/tasks.json`, `_TASK_DEFAULTS` CLI alignés (primaire
+  accuracy, tolérance ±0.005 ; la calibration val→test du seuil ne concerne plus que le `pd@pfa`
+  secondaire). +2 tests. La tâche reste `wip` (loader `.h5` réel + split DeepSense = étape suivante).
+
 ### Added — colonne `wideband_detection` peuplée : split RadDet committé + 4 baselines `from_paper`
 
 Données RadDet arrivées sur le cluster (variantes synthétiques `256_1T`/`256_9T`/`512_9T` ; pas le

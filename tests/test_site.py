@@ -2264,3 +2264,64 @@ def test_foundation_page_css_present() -> None:
     assert ".chip-track {" in css
     assert ".medal { font-size: 1.1rem; }" in css
     assert ".global-podium { margin-bottom: 2rem; }" in css
+
+
+# --- Sprint 2 (adoption) additions ---
+def test_hero_has_cta_row(tmp_path: Path) -> None:
+    """The homepage hero exposes Submit / Guide / GitHub calls-to-action (usable with JS off)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    assert '<div class="hero-cta">' in index_html
+    assert generate._SUBMISSION_GUIDE_URL in index_html
+    assert 'href="guide.html"' in index_html
+    assert generate._REPO_URL in index_html
+
+
+def test_submit_card_shows_real_command(tmp_path: Path) -> None:
+    """The submit card carries the real self-serve command in a selectable <pre> (no JS needed)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    assert '<pre class="cmd">' in amc_html
+    assert "rfbench eval" in amc_html
+
+
+def test_head_has_meta_and_favicon(tmp_path: Path) -> None:
+    """Every page's <head> carries a description, Open Graph title and an inline SVG favicon."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    index_html = (out / "index.html").read_text(encoding="utf-8")
+    assert '<meta name="description"' in index_html
+    assert '<meta property="og:title"' in index_html
+    assert 'rel="icon" href="data:image/svg+xml,' in index_html
+
+
+def test_task_page_meta_description_is_page_specific() -> None:
+    """A declared task's meta description prefers its own blurb over the site tagline."""
+    entry = generate.DeclaredTask(
+        id="amc",
+        title="Automatic modulation classification",
+        status="implemented",
+        priority="P1",
+        blurb="Predict the modulation scheme of a raw-IQ window.",
+    )
+    desc = generate._page_description_for(entry, entry.title)
+    assert desc == entry.blurb
+
+
+def test_mobile_layout_puts_leaderboard_first() -> None:
+    """At <=900px the leaderboard (task-main) is ordered before the task-nav sidebar."""
+    css = generate.render_styles()
+    idx = css.index("@media (max-width: 900px)")
+    block = css[idx : idx + 200]
+    assert ".task-main { order: -1; }" in block

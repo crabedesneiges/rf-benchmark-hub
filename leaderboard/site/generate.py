@@ -80,6 +80,7 @@ import zlib
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
+from urllib.parse import quote
 
 if TYPE_CHECKING:
     from jsonschema import Draft202012Validator
@@ -223,6 +224,29 @@ _OVERLAP_BADGE: dict[str, tuple[str, str]] = {
     "none": ("clean", "badge-overlap-none"),
     "unknown": ("overlap unknown", "badge-overlap-unknown"),
     "confirmed": ("contaminated", "badge-overlap-confirmed"),
+}
+
+#: Short (<=6-word) glosses keyed by verification status, used by the tier legend. The visible
+#: label text still comes from ``_BADGE`` (never hardcoded here); this only adds a one-line hint.
+_BADGE_GLOSS: dict[str, str] = {
+    "verified": "maintainer re-ran the harness",
+    "self_reported": "author-submitted, not re-run",
+    "from_paper": "cited from the paper, split confirmed",
+    "from_paper_uncertain": "cited; split/protocol not confirmed",
+}
+
+#: Short glosses keyed by model family, used by the tier legend (labels come from ``_FAMILY_CHIP``).
+_FAMILY_GLOSS: dict[str, str] = {
+    "baseline": "task-specific specialised model",
+    "foundation": "pretrained, then adapted",
+}
+
+#: Short glosses keyed by ``pretraining.overlap_with_eval``, used by the tier legend (labels come
+#: from ``_OVERLAP_BADGE``).
+_OVERLAP_GLOSS: dict[str, str] = {
+    "none": "eval data disjoint from pretraining",
+    "unknown": "overlap not audited",
+    "confirmed": "known pretrain/eval overlap",
 }
 
 
@@ -409,6 +433,10 @@ _REPO_URL: str = "https://github.com/crabedesneiges/rf-benchmark-hub"
 #: The submission guide on GitHub -- target of the "Submit" top-nav tab and the task-page
 #: "Submit a result" sidebar card. No standalone submit.html page exists on this site.
 _SUBMISSION_GUIDE_URL: str = f"{_REPO_URL}/blob/main/docs/SUBMISSION.md"
+
+#: One-line site tagline, reused as the ``brand-tag`` line and the default ``<meta>`` /
+#: Open Graph description for any page that does not supply a more specific one.
+_SITE_TAGLINE: str = "Reproducible leaderboards for terrestrial RF machine learning"
 
 #: A generic "code repository" glyph (NOT the GitHub Octocat, to avoid any trademark/asset
 #: concern) used as the homepage's repo-link icon.
@@ -1429,6 +1457,22 @@ def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
 
 # --------------------------------------------------------------------------------------------------
 # Table rendering (a column per discovered scalar metric)
+#: Cap for the SHORT badge tooltip (the full note lives in the provenance <details> block).
+_BADGE_NOTE_MAX: int = 160
+
+
+def _shorten(text: str, limit: int = _BADGE_NOTE_MAX) -> str:
+    """Collapse whitespace and truncate ``text`` to a short one-line tooltip (adds an ellipsis).
+
+    Used for the verification-note ``title=`` on a badge: the full, wrapping note is rendered
+    in the provenance block, so the hover tooltip only needs a readable teaser.
+    """
+    flat = " ".join(text.split())
+    if len(flat) <= limit:
+        return flat
+    return flat[: limit - 1].rstrip() + "…"
+
+
 # --------------------------------------------------------------------------------------------------
 def _render_family_chip(family: str | None) -> str:
     """Render the model-family chip (baseline=neutral, foundation=violet)."""
@@ -1438,10 +1482,84 @@ def _render_family_chip(family: str | None) -> str:
     return f'<span class="chip {css_class}">{_esc(text)}</span>'
 
 
-def _render_badge(status: str) -> str:
-    """Render the verification badge span for a status."""
+def _render_badge(status: str, note: str | None = None) -> str:
+    """Render the verification badge span for a status.
+
+    When ``note`` is non-empty it becomes a (short, escaped) ``title=`` tooltip on the badge
+    so the provenance/verification note is discoverable on hover; ``None``/empty leaves the
+    badge byte-identical to before, so every other call site keeps working unchanged.
+    """
     text, css_class = _BADGE.get(status, (status, "badge-self"))
-    return f'<span class="badge {css_class}">{_esc(text)}</span>'
+    title = f' title="{_esc(_shorten(note))}"' if isinstance(note, str) and note.strip() else ""
+    return f'<span class="badge {css_class}"{title}>{_esc(text)}</span>'
+
+
+def _render_tier_legend() -> str:
+    """Render the compact legend decoding the board's verification / family / contamination keys.
+
+    Data-driven: the badge and chip labels come from ``_BADGE`` / ``_FAMILY_CHIP`` /
+    ``_OVERLAP_BADGE`` (never hardcoded), each paired with its short gloss from the ``*_GLOSS``
+    maps and given a ``title=`` for hover. Lists the 4 verification tiers, the 2 model families,
+    and the 3 contamination states, then a trailing "Full guide ->" link to
+    ``guide.html#verification``. Fully usable with JS off (plain spans + an ``<a>``). Rendered in
+    the index hero and under the task-page invariant note.
+
+    The swatches carry a ``legend-swatch`` class (reusing each key's semantic COLOR class only)
+    rather than the live ``badge``/``chip`` class, so a legend sample is never mistaken for a
+    real row badge -- e.g. the contamination legend does not emit a ``class="badge
+    badge-overlap-*"`` row-badge string on a page whose rows declare no pretraining.
+    """
+
+    def _item(label: str, css_class: str, gloss: str) -> str:
+        gloss_attr = f' title="{_esc(gloss)}"' if gloss else ""
+        return (
+            f'<span class="legend-item"{gloss_attr}>'
+            f'<span class="legend-swatch {css_class}">{_esc(label)}</span>'
+            f'<span class="legend-gloss">{_esc(gloss)}</span>'
+            "</span>"
+        )
+
+    badges = "".join(
+        _item(text, css_class, _BADGE_GLOSS.get(key, ""))
+        for key, (text, css_class) in _BADGE.items()
+    )
+    families = "".join(
+        _item(text, css_class, _FAMILY_GLOSS.get(key, ""))
+        for key, (text, css_class) in _FAMILY_CHIP.items()
+    )
+    overlaps = "".join(
+        _item(text, css_class, _OVERLAP_GLOSS.get(key, ""))
+        for key, (text, css_class) in _OVERLAP_BADGE.items()
+    )
+    guide_link = (
+        f'<a class="legend-guide" href="{_GUIDE_SLUG}.html#verification">Full guide &rarr;</a>'
+    )
+    return (
+        '<div class="tier-legend" aria-label="How to read the board">'
+        f'<span class="legend-group">{badges}</span>'
+        f'<span class="legend-group">{families}</span>'
+        f'<span class="legend-group">{overlaps}</span>'
+        f"{guide_link}"
+        "</div>"
+    )
+
+
+def _render_hero_cta() -> str:
+    """Render the homepage hero's call-to-action row (submit / guide / repo).
+
+    The primary action reuses the ``submit-cta`` button and links to the external submission
+    guide; the two secondary actions are outline buttons to the on-site Guide and the GitHub
+    repository. All three are plain ``<a>`` links, so the row is fully usable with JS off.
+    """
+    return (
+        '<div class="hero-cta">'
+        '<a class="submit-cta" target="_blank" rel="noopener" '
+        f'href="{_esc(_SUBMISSION_GUIDE_URL)}">Submit a result</a>'
+        f'<a class="hero-cta-secondary" href="{_GUIDE_SLUG}.html">How it works</a>'
+        '<a class="hero-cta-secondary" target="_blank" rel="noopener" '
+        f'href="{_esc(_REPO_URL)}">GitHub</a>'
+        "</div>"
+    )
 
 
 def _overlap_status(row: dict[str, Any]) -> str | None:
@@ -1477,27 +1595,59 @@ def _render_overlap_badge(row: dict[str, Any]) -> str:
     return f'<span class="badge {css_class}"{title}>{_esc(text)}</span>'
 
 
+def _ci_nature_title(row: dict[str, Any]) -> str:
+    """Explain what the primary interval IS, for the ``.metric-ci`` ``title=`` (empty if none).
+
+    Reads ``metrics.uncertainty[<primary>]`` (schema 1.2.0). A ``multi_seed_std`` interval is a
+    DESCRIPTIVE std over seeds -- NOT a 95% CI -- so we say so explicitly (naming the seed count
+    when present). Any other method falls back to the entry's own ``note``, else a generic
+    "confidence interval [method]" label. Returns ``""`` when there is no uncertainty entry, so
+    the caller adds no ``title=`` and the markup stays unchanged for CI-only rows.
+    """
+    uncertainty = row["metrics"].get("uncertainty")
+    if not isinstance(uncertainty, dict):
+        return ""
+    entry = uncertainty.get(_primary_key(row))
+    if not isinstance(entry, dict):
+        return ""
+    method = entry.get("method")
+    if method == "multi_seed_std":
+        n_seeds = entry.get("n_seeds")
+        scope = f"{n_seeds} seeds" if isinstance(n_seeds, int) else "seeds"
+        return f"±1σ over {scope} (descriptive std, not a 95% CI)"
+    note = entry.get("note")
+    if isinstance(note, str) and note.strip():
+        return " ".join(note.split())
+    if isinstance(method, str) and method:
+        return f"confidence interval [{method}]"
+    return "confidence interval"
+
+
 def _render_ci_note(row: dict[str, Any], overlaps_above: bool) -> str:
     """Render the sub-value CI annotation for the primary cell (empty when no CI).
 
     Shows the primary metric's ``[ci_low, ci_high]`` interval (schema 1.2.0) under the
-    point estimate. When the interval overlaps the row directly above, an ``≈`` marker is
-    added with a tooltip: the two rows are statistically indistinguishable on the primary
-    metric, so the rank gap between them is within confidence-interval noise. The ordering
-    itself is unchanged (see :func:`_sort_rows`).
+    point estimate. A ``title=`` (from :func:`_ci_nature_title`) states what the interval IS
+    (e.g. a descriptive multi-seed std vs a 95% CI) so a skeptic does not misread it. When the
+    interval overlaps the row directly above, an ``≈`` marker is added with a tooltip: the two
+    rows are statistically indistinguishable on the primary metric, so the rank gap between
+    them is within confidence-interval noise. The ordering itself is unchanged (see
+    :func:`_sort_rows`).
     """
     ci = _primary_ci(row)
     if ci is None:
         return ""
     lo, hi = ci
     ci_text = f"[{_fmt_metric(lo)}, {_fmt_metric(hi)}]"
+    nature = _ci_nature_title(row)
+    nature_attr = f' title="{_esc(nature)}"' if nature else ""
     if overlaps_above:
         marker = (
             '<span class="ci-tie" title="Within the confidence interval of the row above'
             ' &mdash; statistically indistinguishable on the primary metric.">&asymp;</span>'
         )
-        return f'<span class="metric-ci overlap">{marker}{_esc(ci_text)}</span>'
-    return f'<span class="metric-ci">{_esc(ci_text)}</span>'
+        return f'<span class="metric-ci overlap"{nature_attr}>{marker}{_esc(ci_text)}</span>'
+    return f'<span class="metric-ci"{nature_attr}>{_esc(ci_text)}</span>'
 
 
 def _render_row(
@@ -1548,7 +1698,7 @@ def _render_row(
         else:
             metric_cells.append(f'<td class="num"{value_attr}>{formatted}</td>')
 
-    badge = _render_badge(_status(row))
+    badge = _render_badge(_status(row), (row.get("verification") or {}).get("note"))
     rank_html = f'<span class="rank-badge">{rank}</span>' if rank == 1 else str(rank)
     family = _family(row)
     family_attr = f' data-family="{_esc(family)}"' if family else ""
@@ -1628,6 +1778,45 @@ def _render_group_table(
     )
 
 
+def _render_provenance(rows: list[dict[str, Any]]) -> str:
+    """Render a ``<details class="provenance">`` block listing every row's verification note.
+
+    Only rows whose ``verification.note`` is non-empty are listed; each entry shows the model
+    name (a clickable link -- ``model.url`` when present, else the in-site methods anchor via
+    :func:`_method_anchor`), its tier badge, and the FULL note text (escaped, wrapping). When
+    no row in the group carries a note, returns ``""`` (renders nothing) so single-baseline /
+    note-free groups stay clean. Rows are shown in the group's ranked order for consistency
+    with the table above.
+    """
+    entries: list[str] = []
+    for row in _sort_rows(rows):
+        note = (row.get("verification") or {}).get("note")
+        if not (isinstance(note, str) and note.strip()):
+            continue
+        model = row["model"]
+        name = _esc(str(model["name"]))
+        url = model.get("url") or _method_anchor(str(model["name"]))
+        name_html = f'<a href="{_esc(url)}">{name}</a>' if isinstance(url, str) and url else name
+        badge = _render_badge(_status(row))
+        entries.append(
+            '<li class="provenance-item">'
+            f'<span class="provenance-head"><span class="provenance-model">{name_html}</span>'
+            f"{badge}</span>"
+            f'<p class="provenance-note">{_esc(note)}</p>'
+            "</li>"
+        )
+    if not entries:
+        return ""
+    count = len(entries)
+    summary = f"Provenance &amp; notes ({count})" if count != 1 else "Provenance &amp; notes"
+    return (
+        '<details class="provenance">'
+        f'<summary class="provenance-summary">{summary}</summary>'
+        f'<ul class="provenance-list">{"".join(entries)}</ul>'
+        "</details>"
+    )
+
+
 def _render_group(
     dataset: str,
     regime: str,
@@ -1648,6 +1837,9 @@ def _render_group(
     """
     scalar_keys = _ordered_scalar_keys(rows, primary_key)
     table = _render_group_table(dataset, regime, track, rows, primary_key, scalar_keys)
+    # Provenance/notes block (empty when no row in the group carries a verification note), placed
+    # right after the table and before the plots so a reader sees the caveats next to the ranking.
+    provenance = _render_provenance(rows)
 
     # One inline-SVG plot per discovered curve metric (skipped gracefully if none).
     plots: list[str] = []
@@ -1670,20 +1862,25 @@ def _render_group(
 
     # A clear label for the group. The dataset is named only on multi-dataset tasks; a single-track
     # task (everything in the default 'all' bucket) is labelled by regime only; multi-track tasks
-    # name the track too.
+    # name the track too. Regime and track render as chips (reusing the foundation page's
+    # .chip-regime / .chip-track classes); the dataset stays plain text so it reads as a title.
     regime_label = _regime_label(rows[0])
     parts = []
     if show_dataset:
-        parts.append(f"Dataset &middot; {_esc(dataset)}")
-    parts.append(f"Regime &middot; {_esc(regime_label)}")
+        parts.append(f'<span class="group-dataset">Dataset &middot; {_esc(dataset)}</span>')
+    parts.append(
+        f'<span class="chip chip-regime">Regime &middot; {_esc(regime_label)}</span>'
+    )
     if track != _DEFAULT_TRACK:
-        parts.append(f"Track &middot; {_esc(_track_label(track))}")
-    heading = " &nbsp;/&nbsp; ".join(parts)
+        parts.append(
+            f'<span class="chip chip-track">Track &middot; {_esc(_track_label(track))}</span>'
+        )
+    heading = "".join(parts)
     return (
         '<section class="group" '
         f'data-dataset="{_esc(dataset)}" data-regime="{_esc(regime)}" data-track="{_esc(track)}">'
         f'<h3 class="group-title">{heading}</h3>'
-        f"{table}{plots_html}"
+        f"{table}{provenance}{plots_html}"
         "</section>"
     )
 
@@ -1903,15 +2100,39 @@ def _render_task_details_card(
 
 
 def _render_submit_card() -> str:
-    """Render the static "Submit a result" sidebar CTA (links to docs/SUBMISSION.md)."""
+    """Render the static "Submit a result" sidebar CTA (links to docs/SUBMISSION.md).
+
+    Shows the real self-serve command flow (docs/SUBMISSION.md) in a selectable ``<pre>``
+    (readable with JavaScript off) so a would-be submitter sees the exact steps in place.
+    """
+    commands = (
+        """# 1. run the eval (emits result.json, marked self_reported)
+rfbench eval <task> --model <name> --regime <regime>
+# 2. add leaderboard/results/<task>/<name>.json, then open a PR"""
+    )
     return (
         '<div class="submit-card"><h3>Submit a result</h3>'
-        "<p>Add a JSON result validated against result.schema.json and open a pull "
-        "request. Rows are auto-ranked on merge.</p>"
+        "<p>Run the eval, add the JSON result (validated against result.schema.json) "
+        "and open a pull request. Rows are auto-ranked on merge.</p>"
+        f'<pre class="cmd">{_esc(commands)}</pre>'
         f'<a class="submit-cta" target="_blank" rel="noopener" '
         f'href="{_esc(_SUBMISSION_GUIDE_URL)}">Submission guide</a>'
         "</div>"
     )
+
+
+def _page_description_for(entry: DeclaredTask | None, title: str) -> str:
+    """Return a page-specific meta description for a task page.
+
+    Prefers the task's committed one-paragraph ``description``, then its short ``blurb``;
+    falls back to a generic, data-driven sentence built from the task ``title`` so an
+    undeclared task still gets a sensible (non-empty) description.
+    """
+    if entry is not None and entry.description:
+        return entry.description
+    if entry is not None and entry.blurb:
+        return entry.blurb
+    return f"{title} leaderboard on RF-Benchmark-Hub — {_SITE_TAGLINE}."
 
 
 def _render_board_controls() -> str:
@@ -2004,7 +2225,9 @@ def render_wip_page(
         "</section>"
     )
     page_title = f"{title} — RF-Benchmark-Hub"
-    return _page(page_title, body, current=entry.id)
+    return _page(
+        page_title, body, current=entry.id, description=_page_description_for(entry, title)
+    )
 
 
 def render_task_page(
@@ -2078,6 +2301,7 @@ def render_task_page(
         f'<p class="note">Each (regime, track) is ranked separately &mdash; a table or plot '
         "never mixes two regimes nor two tracks (protocol invariant). Badges mark "
         "maintainer-verified rows vs self-reported ones.</p>"
+        f"{_render_tier_legend()}"
         f"{controls}"
         f"{''.join(sections)}"
         "</div>"
@@ -2088,10 +2312,12 @@ def render_task_page(
         "</section>"
     )
     page_title = f"{title} — RF-Benchmark-Hub"
+    page_desc = _page_description_for(entry, title)
     return _page(
         page_title,
         body,
         current=task_name,
+        description=page_desc,
         extra_body=f"<script>{render_scripts()}</script>",
     )
 
@@ -2320,8 +2546,11 @@ def render_index(
             '<h1 class="hero-title">RF machine-learning leaderboards</h1>'
             '<p class="hero-lead">Reproducible benchmarks for terrestrial RF '
             "machine-learning tasks, comparing specialised baselines against fine-tuned "
-            "foundation models. Each task ranks submissions by its primary metric; regimes "
-            "and tracks are never mixed in a comparison.</p>"
+            "foundation models. Built for ML and RF researchers: each task ranks submissions "
+            "by its primary metric, and regimes and tracks are never mixed in a "
+            "comparison.</p>"
+            f"{_render_hero_cta()}"
+            f"{_render_tier_legend()}"
             f"{_render_stats_row(stats)}"
             f"{_render_filter_bar()}"
             f"{sections_html}"
@@ -3217,28 +3446,52 @@ _GOOGLE_FONTS_LINK: str = (
 )
 
 
+def _favicon_data_uri() -> str:
+    """Return a ``data:image/svg+xml`` favicon URI reusing the ``_LOGO_SVG`` shape.
+
+    The logo markup is URL-encoded (no binary/external asset), and the theme
+    ``var(--accent)`` strokes are pinned to a concrete colour so the icon renders
+    standalone (outside the page's CSS scope, where custom properties are unavailable).
+    """
+    svg = _LOGO_SVG.replace('class="logo" ', "").replace("var(--accent)", "#2f6fed")
+    return "data:image/svg+xml," + quote(svg, safe="")
+
+
 def _page(
     title: str,
     body: str,
     current: str | None,
     *,
+    description: str = _SITE_TAGLINE,
     extra_body: str = "",
 ) -> str:
     """Assemble a complete standalone HTML page (header + nav + body + footer).
 
     ``current`` drives the site-wide top nav's active state (see ``_top_nav``): the Guide
     slug (``_GUIDE_SLUG``) on the Guide page, or anything else (a task id, or ``None`` for
-    the index) everywhere else. ``extra_body`` renders just before ``</body>`` (homepage-only
+    the index) everywhere else. ``description`` (keyword-only, defaults to the site tagline)
+    fills the ``<meta name="description">`` and Open Graph / Twitter card tags so callers can
+    pass a page-specific blurb. ``extra_body`` renders just before ``</body>`` (homepage-only
     inline filter script, see ``render_index``); it defaults to empty so every other page
     (task pages, WIP pages, the guide) is unaffected.
     """
     task_nav = _top_nav(current)
+    desc = description or _SITE_TAGLINE
+    meta = (
+        f'<meta name="description" content="{_esc(desc)}">\n'
+        f'<meta property="og:title" content="{_esc(title)}">\n'
+        f'<meta property="og:description" content="{_esc(desc)}">\n'
+        '<meta property="og:type" content="website">\n'
+        '<meta name="twitter:card" content="summary">\n'
+        f'<link rel="icon" href="{_esc(_favicon_data_uri())}">\n'
+    )
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en">\n<head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_esc(title)}</title>\n"
+        f"{meta}"
         f"{_GOOGLE_FONTS_LINK}"
         f"<style>{render_styles()}</style>\n"
         "</head>\n<body>\n"
@@ -3247,8 +3500,7 @@ def _page(
         f"{_LOGO_SVG}"
         '<div class="brand-text">'
         '<span class="brand-name">RF-Benchmark-Hub</span>'
-        '<span class="brand-tag">Reproducible leaderboards for terrestrial RF '
-        "machine learning</span>"
+        f'<span class="brand-tag">{_esc(_SITE_TAGLINE)}</span>'
         "</div></div>"
         f"{task_nav}"
         "</header>\n"
@@ -3420,7 +3672,47 @@ main { max-width: 1320px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
 .group-title {
   font-size: 1rem; margin: 0 0 0.75rem; padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--line); font-weight: 600;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
 }
+.group-title > *:first-child { margin-left: 0; }
+.group-dataset { color: var(--fg); }
+
+/* Provenance / verification notes: a collapsed <details> under a group's table. Muted, small,
+   fully readable with JS off; each entry links the model, shows its tier badge, and the note. */
+.provenance { margin: 0.75rem 0 0; }
+.provenance-summary {
+  color: var(--muted); font-size: 0.8rem; cursor: pointer; font-weight: 600;
+  list-style-position: inside;
+}
+.provenance-summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.provenance-list { list-style: none; margin: 0.6rem 0 0; padding: 0; }
+.provenance-item {
+  border-top: 1px solid var(--line); padding: 0.6rem 0 0; margin-top: 0.6rem;
+}
+.provenance-item:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.provenance-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.provenance-head > *:first-child { margin-left: 0; }
+.provenance-model { font-weight: 600; }
+.provenance-note {
+  color: var(--muted); font-size: 0.82rem; line-height: 1.5; margin: 0.35rem 0 0;
+  max-width: 78ch; overflow-wrap: anywhere;
+}
+
+/* Tier legend: a compact strip decoding the board's verification / family / contamination keys.
+   Wraps gracefully; each item pairs a colour swatch (a legend sample, not a live row badge) with
+   a short gloss. Fully static -- no JS needed to read it. */
+.tier-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.9rem;
+  margin: 0 0 1.25rem; font-size: 0.78rem; color: var(--muted);
+}
+.legend-group {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.65rem;
+  padding-right: 0.9rem; border-right: 1px solid var(--line);
+}
+.legend-item { display: inline-flex; align-items: center; gap: 0.32rem; }
+.legend-swatch { font-size: 0.68rem; padding: 0.02rem 0.45rem; }
+.legend-gloss { color: var(--muted); }
+.legend-guide { font-weight: 600; white-space: nowrap; }
 
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 table { border-collapse: collapse; width: 100%; min-width: 480px; font-size: 0.9rem; }
@@ -3461,7 +3753,7 @@ td.num.primary .metric-val { font-weight: 700; }
 }
 .bar-fill { display: block; height: 100%; background: var(--bar-fill); }
 
-.badge, .chip {
+.badge, .chip, .legend-swatch {
   display: inline-block; padding: 0.08rem 0.55rem; border-radius: 999px;
   font-size: 0.74rem; font-weight: 600; white-space: nowrap; border: 1px solid transparent;
 }
@@ -3549,6 +3841,14 @@ td.num.primary .metric-val { font-weight: 700; }
   font-size: 2.1rem; margin: 0 0 0.6rem; letter-spacing: -0.02em;
 }
 .hero-lead { color: var(--muted); font-size: 0.95rem; max-width: 68ch; margin: 0 0 1.5rem; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0 0 1.5rem; }
+.hero-cta-secondary {
+  display: inline-block; font-size: 0.85rem; font-weight: 600; padding: 0.5rem 0.9rem;
+  border-radius: 8px; border: 1px solid var(--line-strong); color: var(--fg);
+}
+.hero-cta-secondary:hover {
+  text-decoration: none; border-color: var(--accent); color: var(--accent);
+}
 
 .stats-row {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -3632,6 +3932,7 @@ td.num.primary .metric-val { font-weight: 700; }
 }
 @media (max-width: 900px) {
   .task-layout { grid-template-columns: 1fr; }
+  .task-main { order: -1; }
 }
 .task-main { min-width: 0; }
 
@@ -3678,6 +3979,11 @@ td.num.primary .metric-val { font-weight: 700; }
   font-size: 0.85rem; padding: 0.5rem 0.9rem; border-radius: 8px;
 }
 .submit-cta:hover { text-decoration: none; opacity: 0.9; }
+.cmd {
+  font-family: var(--font-mono); font-size: 0.74rem; line-height: 1.5; color: var(--fg);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0.6rem 0.7rem; margin: 0 0 0.9rem; overflow-x: auto; white-space: pre;
+}
 
 .empty-state-card {
   display: flex; flex-direction: column; align-items: center; text-align: center;

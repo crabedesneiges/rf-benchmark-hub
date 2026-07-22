@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — baseline TLDNN (AMC) réimplémentée depuis le papier (cible repro #1, arXiv:2401.01056)
+
+Modèle `@register_model("tldnn")` dans `rfbench/models/baselines/tldnn.py` — reprod fidèle de
+TLDNN (Qu et al., IEEE TVT 2024), hybride transformer+LSTM à extraction de features globales
+(62.83% sur RadioML 2016.10a, 63.32% sur 2018.01a d'après le papier ; au-dessus de notre MCLDNN
+61.71%). Archi extraite verbatim (Sec. III + Table I) :
+- **Entrée A/P** (pas d'IQ brut) : amplitude `√(I²+Q²)` min-max→[0,1], phase `atan2(Q,I)/π`→[-1,1].
+  La transformée A/P vit **dans** `TLDNNNet` (la boucle rfbench optimise `.net` directement), pas
+  dans le wrapper — sinon bypassée à l'entraînement (leçon test-eval-end-to-end).
+- **Feature embedding** : K convs stride-2 (K=2 pour 128 samples, K=4 pour 1024), kernel `Ks=4`,
+  `d=64`, + SE block (r=4) + dropout. `L=⌊N/2^K⌋` (32 pour 2016, 64 pour 2018).
+- **Transformer** ×`Mt=2` : positional encoding apprenable, talking-heads MHA (`h=8`), FFN ReGLU
+  (`dffn=2d`), résiduel + LayerNorm.
+- **LSTM** `Ml=4` (`dl=d=64`) → dernier pas → classifieur 3 FC+ReLU. `embed()` = feature 64-d.
+- Variante `+SS` (63.35%, augmentation segment-substitution) **non reproduite** — backbone plain.
+
+Recette : train avec `--lr 2e-4` (l'attention collapse à lr=1e-3 sous la recette rfbench sans
+warmup). Tests `tests/test_tldnn.py` (20, skip si pas de torch) — ruff+black+pytest verts sur nœud
+ARM. Scripts cluster `slurm/train_tldnn_arm.sh` + driver `slurm/train_tldnn.py` (gère num_classes
++ window pour 2018.01a). Le `result.json` d'entraînement n'est PAS encore produit/committé.
+
 ### Added — couverture FM sur POWDER : IQFM 96.05% + WirelessJEPA 90.45% (`from_paper_uncertain`, few_shot)
 
 Les 2 FM (IQFM, WirelessJEPA) évaluent sur POWDER RF-fingerprinting — bloqué avant (pas de POWDER sur

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — sweep littérature (colonnes <5 baselines + WIP) : catalogue biblio, 0 ligne board
+
+Workflow multi-agents (search → vérif adversariale, chaque chiffre re-lu verbatim au PDF/HTML via
+`pdftotext`, rejet par défaut) sur les colonnes à <5 baselines et les tâches WIP. **Aucune ligne board
+créée** (décision : préserver la comparabilité des colonnes). Consigné dans `docs/BIBLIOGRAPHY.md` :
+- **WiSig ManyTx récent** (§A.3, catalogue-only, cibles de repro) : HyDRA(TDSE) 90.22% (Liu 2025,
+  arXiv:2507.12133, **équalisé** MMSE), MobileNet-MCRFF 86.4% (équalisé) ; Hamiltonian-Transformer
+  61.64% / vanilla 59.63% (Singh 2026, arXiv:2605.30364, régime **snapshot-cap** data-starved). Aucun
+  n'est comparable à notre colonne non-équalisée/full-pool → pas de ligne board, documentés comme
+  cibles de reproduction sur NOTRE condition.
+- **Culs-de-sac confirmés** (§A.3 + §C.6) : ORACLE 16-tx, SNR-estimation RadioML 2016.10a,
+  interference_id GNSS-6, protocol_tech_id/T-PRIME — aucune baseline tierce board-comparable ; ces
+  colonnes ne grossiront que par nos repros GPU.
+- RadDet (§A.4) + snr_mobility (LWM-Spectro) : chiffres réels vérifiés mais tâches WIP sans split →
+  catalogue-only. La vérif adversariale a attrapé et corrigé des hallucinations de résumé WebFetch
+  (ex. 93.58/95.67 inexistants → vrai 59.63 re-lu au PDF).
+
 ### Changed — 11 lignes AMC mid-tier : `from_paper_uncertain` → `from_paper` (correction de doctrine)
 
 Correction d'une sur-correction de la veille. Le downgrade des 11 lignes re-minées d'une réimplémentation

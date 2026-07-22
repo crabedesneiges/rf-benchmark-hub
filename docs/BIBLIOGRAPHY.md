@@ -118,6 +118,35 @@ Update (2026-07): `leaderboard/results/sei/wisig_manytx_paper-closed_set.json` n
 paper's own ManyTx ~53% figure (150 tx) as a `from_paper` row, `model.name` `wisig-manytx-paper` —
 distinct from the `self_reported` reproduction `wisig_cnn_paper` on the same track.
 
+Recent WiSig ManyTx literature (2026-07-22 sweep — CATALOGUE ONLY, deliberately **not** board rows).
+A verified web sweep found two recent third-party papers reporting WiSig ManyTx (150 tx) closed-set
+accuracy. Both numbers were re-read verbatim from the source PDFs (`pdftotext`), but **neither is a
+board row** because each evaluates on a different DATASET CONDITION than our canonical
+`sei-wisig-closedset-strat-tx-8010-seed42-v1` (non-equalized, all-rx/all-days pooled, full budget) —
+so a fair comparison requires reproducing them on OUR condition (they are reproduction targets, not
+`from_paper` citations):
+
+- **HyDRA** (Liu et al. 2025, arXiv:2507.12133, Table III), on **equalized** ManyTx preambles (MMSE
+  channel equalization, 256-IQ): **HyDRA(TDSE) 90.22%**, HyDRA(MLFE) 89.34%. Same table cites, on the
+  same equalized ManyTx: WiSigNet 53.1%, WiSigNet-MCRFF 71.6%, MobileNet 84.5%, **MobileNet-MCRFF
+  86.4%** (Zhan et al., MCRFF, MILCOM 2023). Equalization removes the channel that WiSig is designed to
+  test → NOT comparable to our non-equalized column.
+- **Hamiltonian-Inspired Attention** (Singh, Dhanraj, Sheriff 2026, arXiv:2605.30364), non-equalized
+  raw IQ (1×256×2) but under a **"balanced snapshot cap" scaling regime** (per-class budget shrinks as
+  tx-count grows — a deliberately data-starved setup): Table IV @150 tx — Hamiltonian-Transformer
+  **61.64%**, Transformer-vanilla **59.63%**, Cayley variant 79.72%, **CNN baseline 41.77%**; Table III
+  scenarios — same-day 99.12%, cross-rx 52.94%, cross-day 93.73%. Proof of a different operating point:
+  Singh's CNN baseline scores **41.77%** where our own `resnet1d_sei` reaches **89.4%** on the nominally
+  "same" WiSig-ManyTx-150tx-closed-set task → the snapshot-cap regime is not our full-budget pool.
+
+Dead-ends confirmed by the same 2026-07-22 sweep (no board-comparable third-party literature exists,
+so these columns can only grow via our own GPU reproductions, not `from_paper`): **ORACLE 16-tx
+closed-set** (third-party papers only re-cite the ORACLE authors' own 98.6%, already the
+`oracle-cnn-paper` row), **SNR estimation on RadioML 2016.10a** (SNR-regression papers do not use this
+dataset/RMSE protocol), **interference_id GNSS-jamming 6-class raw-IQ** (confirms §A.7), and
+**protocol_tech_id / T-PRIME** (no third-party number on that OTA WiFi set beyond T-PRIME itself and
+WirelessJEPA, both already on file).
+
 Primary papers:
 - **WiSig** — Hanna, Karunaratne, Cabric, "WiSig: A Large-Scale WiFi Signal Dataset...," *IEEE Access*
   10:22808–22818, 2022. **DOI 10.1109/ACCESS.2022.3154790** (IEEE doc 9721895; the earlier `...3154488`
@@ -715,6 +744,17 @@ Screening pass on new/pending candidates. Verdicts follow the board's `from_pape
 literature row is addable only when the paper reports **the same dataset + the same protocol + the
 board's metric** (Tier 3); same model *family* on a different dataset → `from_paper_uncertain`;
 anything weaker → not addable.
+
+**Follow-up sweep (2026-07-22, under-populated columns + WIP tasks).** A verified web sweep (search →
+adversarial re-fetch, every number re-read verbatim from the source PDF/HTML) targeted the columns with
+<5 baselines and the WIP tasks. Outcome: **0 new board rows.** Recent WiSig ManyTx literature (HyDRA
+90.22% equalized; Singh Hamiltonian-Transformer 61.64% / vanilla 59.63% snapshot-cap) was **catalogued
+in §A.3 as reproduction targets, not `from_paper`** — each is on a different dataset condition
+(equalized / data-starved snapshot-cap) than our non-equalized full-pool split, so mixing them into the
+column would break comparability even badged `uncertain`. Confirmed dead-ends (no board-comparable
+third-party number exists): ORACLE 16-tx, SNR-estimation on RadioML 2016.10a, interference_id GNSS-6,
+protocol_tech_id/T-PRIME. RadDet (§A.4) and the LWM-Spectro snr_mobility baselines are real but stay
+catalogue-only (their tasks are WIP with no committed split → no valid `result.json`).
 
 **Accepted (now `from_paper` board rows):**
 - **MoEformer** (Wang, Xie, Mu, Liu, Zhao, Zhang, arXiv:2606.09085, Jun 2026) — **new SOTA AMC on both

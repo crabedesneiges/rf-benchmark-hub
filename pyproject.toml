@@ -26,6 +26,12 @@ configs = ["hydra-core>=1.3"]
 # Loaders import these lazily; unit tests exercise prepare() on pure-stdlib synthetic fixtures.
 data = ["numpy>=1.24", "h5py>=3.10", "requests>=2.31"]
 detection = ["torchsig", "torch>=2.2"]   # WBSig53 generation via TorchSig
+# RadDet wideband-detection baseline (YOLOv3 / RT-DETR). Kept ISOLATED from the torchsig
+# `detection` extra: RadDet is a real published YOLO-format dataset, trained/evaluated with
+# ultralytics (pulls torch + numpy + opencv itself). Imported LAZILY by
+# rfbench.models.baselines.raddet_detector / rfbench.training_detection, so the module tops
+# stay dependency-free and unit-testable without a DL stack.
+raddet = ["ultralytics>=8.1", "torch>=2.2", "numpy>=1.24"]
 foundation = ["torch>=2.2", "huggingface_hub>=0.20", "numpy>=1.24"]  # public-weights FMs (LWM-Spectro)
 dev = ["ruff>=0.5", "black>=24.4", "pytest>=8.0", "mypy>=1.10", "pre-commit>=3.7", "types-jsonschema", "pyyaml>=6.0", "types-pyyaml"]
 

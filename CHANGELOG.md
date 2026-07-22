@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — baseline de DÉTECTION wideband RadDet : YOLOv3 (`raddet_yolov3`, from_scratch)
+
+Première baseline de la tâche `wideband_detection` (détection d'objets = boîtes T-F, un stack tout
+autre que la classif). Choix **YOLOv3 via ultralytics** (justifié) : RadDet (arXiv:2501.10407) cite
+RT-DETR-L / YOLOv3-L ; YOLOv3 est le détecteur one-stage le plus simple à intégrer, RadDet livre des
+labels YOLO + `data.yaml` qu'ultralytics entraîne directement, et la même dépendance expose RT-DETR
+(`arch` paramétrable) — le choix ne verrouille rien.
+
+- **`rfbench/models/baselines/raddet_detector.py`** (`@register_model("raddet_yolov3")`) : import top
+  **dep-free**, ultralytics/torch **lazy** (discipline deps du repo). `forward(batch) -> ` liste
+  par-image de boîtes `{class, t_start, t_stop, f_low, f_high, score}` — exactement ce que la métrique
+  mAP consomme (elle `zip` pred/GT image par image). Axe `x->temps`, `y->fréquence` (aligné sur le
+  loader GT, pas de flip). Seam `predict_fn` injectable → le pont modèle↔métrique est **testé sans
+  stack DL**. `embed` best-effort (backbone), optionnel.
+- **Pont éval adapté** : `load_raddet_annotations` porte désormais `image_path` (les pixels que
+  `forward` lit) ; `WidebandDetectionDataset._load_from_cache` **filtre par split** (préfixe du
+  `sample_id`) → `evaluate("test")` ne score QUE le test set officiel RadDet (pas de fuite train/val).
+  Nouveau flag `official=True` sur la tâche → id de split canonique `detect-raddet-detection-official-v1`.
+- **Bug métrique corrigé** : le chemin torchmetrics de production ignorait le caractère
+  *class-agnostic* de la piste `detection` (il passait les labels par-boîte → RadDet réel = classes
+  hashées → matching par classe = recognition déguisée). Collapse des labels à une classe unique quand
+  class-agnostic ; test de régression stdlib ajouté.
+- **Driver + SLURM** : `rfbench/training_detection.py` (train ultralytics + `evaluate()` officiel,
+  torchmetrics mAP, `result.json` **self_reported non committé**) ; `slurm/train_raddet_detection.py`
+  + `slurm/train_raddet_detection_arm.sh` (ARM/GB200, venv `.[dev,data,tasks,torch,raddet]`). Extra
+  isolé **`raddet = [ultralytics, torch, numpy]`** dans `pyproject`.
+- Tests pytial : conversion boîtes, `forward` (predict_fn injecté), `evaluate()` e2e schema-valide
+  (mAP=1.0 détecteur parfait), loader `image_path` + filtrage split, helpers driver. ruff+black+mypy
+  verts, suite verte. **CI bootstrap détection laissé en TODO** (matching par-image O(n) × 1000
+  resamples trop lourd sur ~20k images du test → `compute_bootstrap_ci=False`, signalé honnêtement).
+
 ### Added — couverture FM sur POWDER : IQFM 96.05% + WirelessJEPA 90.45% (`from_paper_uncertain`, few_shot)
 
 Les 2 FM (IQFM, WirelessJEPA) évaluent sur POWDER RF-fingerprinting — bloqué avant (pas de POWDER sur

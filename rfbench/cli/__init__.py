@@ -453,14 +453,16 @@ def _prepare_detection(
         from rfbench.data.download.detection_wbsig53 import (
             load_raddet_annotations,
             load_wbsig53_annotations,
+            raddet_official_split,
         )
 
-        samples = (
-            load_raddet_annotations(cache=cache)
-            if dataset == "raddet"
-            else load_wbsig53_annotations(cache=cache)
-        )
-        official_split = None
+        if dataset == "raddet":
+            samples = load_raddet_annotations(cache=cache)
+            # Adopt RadDet's published train/val/test partition (policy: official-if-provided).
+            official_split = raddet_official_split(samples)
+        else:
+            samples = load_wbsig53_annotations(cache=cache)
+            official_split = None
         track = "detection"
 
     split, _manifest, _annotations = prepare_detection(

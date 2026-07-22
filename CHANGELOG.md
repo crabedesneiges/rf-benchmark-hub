@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — colonne `wideband_detection` peuplée : split RadDet committé + 4 baselines `from_paper`
+
+Données RadDet arrivées sur le cluster (variantes synthétiques `256_1T`/`256_9T`/`512_9T` ; pas le
+NIST-CBRS réel). Colonne débloquée sans GPU :
+- **Loader adapté** (`detection_wbsig53.py`) au vrai layout de l'archive : nesting par variante
+  (`raddet/<variant>/`, défaut `512_9T`, override `RFBENCH_RADDET_VARIANT`) + labels dans un dossier
+  `labels/<split>/` parallèle (au lieu de `.txt` à côté du `.png`). Compat layout plat/tests préservée.
+- **Split officiel adopté** : `raddet_official_split()` reconstruit la partition train/val/test publiée
+  (14001/6001/20001) → notre test = leur test → chiffres papier directement comparables. Split committé
+  **`detect-raddet-detection-official-v1`** (idx + manifest ; sidecar d'annotations 33M git-ignoré,
+  régénérable via `prepare`).
+- **4 lignes `from_paper`** (RadDet Table III, RadDet-9T @512², métrique board `mAP` = COCO AP@[.5:.95]) :
+  yolov3-l 0.5397, yolov9-m 0.4085, yolov6-m 0.3814, rt-detr-l 0.1990 (+ mAP50 en secondaire). YOLOv3-L /
+  YOLOv9-M re-lus verbatim au PDF (sweep 2026-07-22) ; colonne complète re-lue de la Table III HTML.
+- `wideband_detection` : `wip` → `implemented` ; carte tasks.json honnête (variante synthétique 9T@512,
+  pas NIST-CBRS).
+
 ### Fixed — provenance dataset RadDet : le 95.31 mAP50 était NIST-CBRS, pas RadDet (§A.4)
 
 Erreur de provenance dans `docs/BIBLIOGRAPHY.md` §A.4 (détection wideband). La ligne top

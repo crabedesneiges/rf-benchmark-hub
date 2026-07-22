@@ -35,6 +35,7 @@ On the cluster: run inside the ARM venv, with ``$RFBENCH_CACHE`` pointing at Lus
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from rfbench.data.prepare._common import resolve_cache_dir
@@ -126,6 +127,14 @@ RADDET_CLASSES: tuple[str, ...] = (
 #: RadDet YOLO splits, in canonical order (subdirs of ``images/``).
 RADDET_YOLO_SPLITS: tuple[str, str, str] = ("train", "val", "test")
 
+#: The published RadDet archive nests each dataset variant (resolution + density) under its own
+#: subdir (``raddet/<variant>/{images,labels}/<split>/``). We DON'T have the NIST-CBRS real
+#: captures locally, so the board's canonical RadDet split is a published SYNTHETIC variant. This
+#: default (512 px, 9-target dense) is the variant we hold on the cluster; override with the
+#: ``RFBENCH_RADDET_VARIANT`` env var. A flat ``raddet/images/`` tree (the unit-test fixture and the
+#: original download hint) is still accepted verbatim when present.
+_RADDET_DEFAULT_VARIANT = "512_9T"
+
 _RADDET_INSTALL_HINT = (
     "Downloading/verifying RadDet needs requests (+ numpy for optional checks); "
     "install them with `pip install rfbench[data]`."
@@ -204,8 +213,8 @@ def load_raddet_annotations(
     tree (dummy ``*.png`` + real ``*.txt`` YOLO labels) that mimics the published layout.
     Raises :class:`FileNotFoundError` with the download guidance when the tree is absent.
     """
-    root = resolve_cache_dir(cache) / _RADDET_SUBDIR
-    images_root = root / "images"
+    variant_root = _raddet_variant_root(resolve_cache_dir(cache) / _RADDET_SUBDIR)
+    images_root = variant_root / "images"
     if not images_root.is_dir():
         raise FileNotFoundError(
             f"RadDet not found at {images_root}; run the download step first.\n"
@@ -218,7 +227,7 @@ def load_raddet_annotations(
         if not split_dir.is_dir():
             continue
         for png in sorted(split_dir.glob("*.png")):
-            label_file = png.with_suffix(".txt")
+            label_file = _raddet_label_path(variant_root, split, png)
             rows = _parse_yolo_label_file(label_file) if label_file.exists() else []
             boxes = [_yolo_row_to_box(row) for row in rows]
             samples.append({"sample_id": f"{split}/{png.stem}", "boxes": boxes})
@@ -228,6 +237,56 @@ def load_raddet_annotations(
             + _RADDET_MANUAL_HINT
         )
     return samples
+
+
+def raddet_official_split(
+    samples: list[dict[str, object]],
+) -> dict[str, list[int]]:
+    """Build RadDet's OFFICIAL train/val/test partition from the loaded samples' ids.
+
+    :func:`load_raddet_annotations` tags each sample with ``sample_id = "<split>/<stem>"`` from the
+    published ``images/<split>/`` dirs, so we adopt that partition verbatim (per the split policy's
+    "official-split-if-provided" rule) rather than re-generating an 80/10/10 carve. Adopting it
+    means our test set IS RadDet's test set, so a paper's RadDet number is directly comparable on
+    our split. Returns ``{"train": [idx...], "val": [...], "test": [...]}`` in sample order.
+    """
+    partition: dict[str, list[int]] = {"train": [], "val": [], "test": []}
+    for index, sample in enumerate(samples):
+        name = str(sample.get("sample_id", "")).split("/", 1)[0]
+        if name in partition:
+            partition[name].append(index)
+    return partition
+
+
+def _raddet_variant_root(root: Path) -> Path:
+    """Return the RadDet subtree that actually carries ``images/`` (flat or variant-nested).
+
+    A flat ``raddet/images/`` tree (unit-test fixture / the original single-variant download hint)
+    is returned as-is. The published archive instead nests each variant under
+    ``raddet/<variant>/{images,labels}/``; there we return ``raddet/<variant>`` for the variant
+    named by ``$RFBENCH_RADDET_VARIANT`` (default :data:`_RADDET_DEFAULT_VARIANT`), falling back to
+    ``root`` so the absent-tree error below stays actionable.
+    """
+    if (root / "images").is_dir():
+        return root
+    variant = os.environ.get("RFBENCH_RADDET_VARIANT", _RADDET_DEFAULT_VARIANT)
+    nested = root / variant
+    if (nested / "images").is_dir():
+        return nested
+    return root
+
+
+def _raddet_label_path(variant_root: Path, split: str, png: Path) -> Path:
+    """YOLO label path for one RadDet image: sibling ``.txt`` (flat) else ``labels/<split>/``.
+
+    The synthetic test fixture / original hint place the ``.txt`` next to the ``.png``; the
+    published archive keeps labels in a parallel ``labels/<split>/<stem>.txt`` tree. Prefer the
+    sibling when it exists (keeps the flat layout + tests working), else the parallel labels dir.
+    """
+    sibling = png.with_suffix(".txt")
+    if sibling.exists():
+        return sibling
+    return variant_root / "labels" / split / f"{png.stem}.txt"
 
 
 # --- pure-stdlib YOLO parsing (unit-testable; no numpy/network) ----------------------
@@ -318,8 +377,9 @@ def _clamp01(value: float) -> float:
 
 
 def _looks_populated(root: Path) -> bool:
-    """Cheap idempotency check: a RadDet root with an ``images/`` subtree is populated."""
-    return (root / "images").is_dir() and any((root / "images").iterdir())
+    """Cheap idempotency check: a RadDet root (flat or variant-nested) with images is populated."""
+    images = _raddet_variant_root(root) / "images"
+    return images.is_dir() and any(images.iterdir())
 
 
 __all__ = [
@@ -333,4 +393,5 @@ __all__ = [
     "RADDET_YOLO_SPLITS",
     "download_raddet",
     "load_raddet_annotations",
+    "raddet_official_split",
 ]

@@ -44,3 +44,6 @@ dist/
 *.swp
 .idea/
 .vscode/
+
+# Detection box-annotation sidecars (large, derived; regenerate via `rfbench data prepare`)
+leaderboard/splits/**/*.annotations.json

@@ -143,10 +143,10 @@
     {
       "id": "wideband_detection",
       "title": "Wideband detection",
-      "status": "wip",
+      "status": "implemented",
       "priority": "P2",
       "scope": "terrestrial_iq",
-      "blurb": "Locate and identify signals in time-frequency (RadDet), primary mAP with mAR and IoU. Track + protocol defined; no split committed and no baseline submitted yet.",
+      "blurb": "Locate and identify signals in time-frequency (RadDet-9T @512px), primary mAP (COCO AP@[.5:.95]) with mAR and IoU. Split committed (RadDet's own train/val/test adopted); 4 literature baselines on the board (YOLOv3/v6/v9, RT-DETR), no in-repo run yet.",
       "description": "Locate and identify signals in the time-frequency plane, drawing boxes over a spectrogram to detect where and what signals are present. It matters for wideband spectrum monitoring where many emitters coexist.",
       "dataset": {
         "name": "RadDet",
@@ -156,7 +156,7 @@
         "real_or_synthetic": "synthetic, published/downloadable (11-class RadDet-1T/9T radar spectrograms are the board dataset; NIST-CBRS in the paper is a separate 5-class synthetic comparison set, not part of this board)",
         "conditions": "6 SNR settings, SNR-averaged; detection vs recognition tracks",
         "license": "CC BY-NC-SA 4.0",
-        "split": "RadDet official train/val/test split if provided, else 80/10/10 seed 42 (detect-raddet-<track>-v1)"
+        "split": "RadDet's own published train/val/test partition adopted verbatim (variant RadDet-9T @512px), detect-raddet-detection-official-v1"
       },
       "primary_metric": {
         "name": "mAP",

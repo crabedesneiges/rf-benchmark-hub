@@ -36,6 +36,9 @@ NIST-CBRS réel). Colonne débloquée sans GPU :
   YOLOv9-M re-lus verbatim au PDF (sweep 2026-07-22) ; colonne complète re-lue de la Table III HTML.
 - `wideband_detection` : `wip` → `implemented` ; carte tasks.json honnête (variante synthétique 9T@512,
   pas NIST-CBRS).
+- Provenance : `model.url` = arXiv:2501.10407 sur les 4 lignes → nom du modèle **cliquable vers le
+  papier** RadDet (le site le rendait déjà pour les autres from_paper ; ces 4 l'avaient oublié).
+  `mAP50` ajouté aux secondaires (le papier le rapporte) → colonne affichée à côté du mAP (COCO AP@[.5:.95]).
 
 ### Fixed — provenance dataset RadDet : le 95.31 mAP50 était NIST-CBRS, pas RadDet (§A.4)
 

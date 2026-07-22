@@ -11,7 +11,8 @@
   },
   "model": {
     "family": "baseline",
-    "name": "rt-detr-l-paper"
+    "name": "rt-detr-l-paper",
+    "url": "https://arxiv.org/abs/2501.10407"
   },
   "regime": {
     "name": "from_scratch"

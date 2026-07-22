@@ -160,16 +160,20 @@
       },
       "primary_metric": {
         "name": "mAP",
-        "definition": "Mean average precision (COCO-AP) of detected time-frequency boxes across classes."
+        "definition": "Mean average precision (COCO AP@[.50:.95]) of detected time-frequency boxes across classes."
       },
       "secondary_metrics": [
         {
+          "name": "mAP50",
+          "definition": "Mean average precision at IoU=0.50 (the looser single-threshold AP most detection papers headline)."
+        },
+        {
           "name": "mAR",
-          "definition": "Mean average recall across classes over the detection set."
+          "definition": "Mean average recall across classes over the detection set (not reported by the RadDet paper; filled by in-repo runs)."
         },
         {
           "name": "IoU",
-          "definition": "Intersection-over-union between predicted and ground-truth time-frequency boxes."
+          "definition": "Intersection-over-union between predicted and ground-truth time-frequency boxes (not reported by the RadDet paper; filled by in-repo runs)."
         }
       ]
     },

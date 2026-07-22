@@ -11,7 +11,8 @@
   },
   "model": {
     "family": "baseline",
-    "name": "yolov3-l-paper"
+    "name": "yolov3-l-paper",
+    "url": "https://arxiv.org/abs/2501.10407"
   },
   "regime": {
     "name": "from_scratch"

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — split canonique DeepSense committé (`sensing-deepsense-official-v1`) ; pas de ligne from_paper
+
+Le `.h5` DeepSense réel (LTE-M) décodé et câblé : `load_deepsense_records` lit les `.h5`
+(`X (2,32,N)`, `y (16,N)` multi-label 16 sous-bandes), **adopte le train/test officiel** (val carvé
+du train, cap 8192 fenêtres/fichier train, test ~8× plus petit pour garder un ratio train-lourd) via
+`prepare_from_official`. Split committé **`sensing-deepsense-official-v1`** (train 36864 / val 4096 /
+test 5120, idx 1 Mo).
+
+**Pas de ligne `from_paper` DeepSense** (décision d'honnêteté) : le « precision 98% / recall 97% »
+(→ F1≈0.975) du papier est un chiffre **GLOBAL** agrégeant WiFi-in-the-wild + SDR + LTE synthétique,
+**pas** un F1 spécifique LTE-M (notre split) ; le LTE-M spécifique est ~92% Pd@Pfa (lecture IPFSCNN),
+pas un F1. L'attacher à la colonne LTE-M serait une misattribution → catalogué en biblio, la colonne
+se peuplera par notre baseline GPU. `spectrum_sensing` reste `wip` (split committé, 0 résultat).
+
 ### Changed — `spectrum_sensing` : métrique primaire `pd@pfa=0.1` → `f1` (aligner sur la littérature)
 
 Décision : la littérature spectrum-sensing rapporte l'occupation en **F1/precision/recall/pd@pfa**,

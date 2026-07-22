@@ -243,9 +243,15 @@ Primary papers:
   Per-subband multi-label occupancy from a **32-IQ-sample** window; CNN (2×Conv16 k3 → pool → 2×Conv32
   k5 → pool → Dense64 → Dense K sigmoid), Adam lr=1e-3, batch 256, 150 ep, `binary_crossentropy`.
   **Precision 98% / Recall 97%**, latency **0.61 ms** (FPGA in-the-loop, not GPU).
-  **pd@pfa=0.1 exact value not recovered from a primary source `(?)`** — our board's primary metric
-  is `pd@pfa=0.1`, but the paper reports operating-point precision/recall, not a tabulated pd@pfa. Do
-  not cite a specific pd@pfa=0.1 without the Xplore PDF.
+  Update (2026-07-22): the board's spectrum-sensing primary is now **`f1`** (the sensing literature
+  reports F1/P/R, not accuracy; IPFSCNN calls F1 its overall metric), and the DeepSense **LTE-M** split
+  is committed (`sensing-deepsense-official-v1`, DeepSense's own train/test adopted, `y` = 16-subband
+  multi-label). **No DeepSense `from_paper` board row**, deliberately: the 98/97 → F1 ≈ 0.975 is the
+  paper's **OVERALL** figure (WiFi-in-the-wild + SDR + synthetic LTE aggregated), NOT a LTE-M-specific
+  number — IPFSCNN reads DeepSense at only ~**92% Pd@Pfa** on LTE-M. Attaching 0.975 to our LTE-M column
+  would misattribute a WiFi-dominated aggregate as an LTE-M result, so it stays catalogue-only; the
+  column populates via an in-repo LTE-M baseline (GPU). Still: do not cite a specific pd@pfa=0.1 without
+  the Xplore PDF.
 
 Cross-dataset caveat: rankings do **not** transfer (DETR wins WBSig53, YOLOv3-L wins RadDet synthetic,
 DeepSense is a different task). Keep the three eval protocols separate.

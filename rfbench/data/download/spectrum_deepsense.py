@@ -190,10 +190,14 @@ def load_deepsense_records(
     test: list[int] = []
     index = 0
     for path in files:
+        is_test = path.name.endswith("_test.h5")
         with h5py.File(path, "r") as handle:
             n_windows = int(handle["y"].shape[-1])
-        kept = min(windows_per_file, n_windows) if windows_per_file else n_windows
-        bucket = test if path.name.endswith("_test.h5") else train
+        # DeepSense's official split is train-heavy (~9:1); cap test files ~8x smaller than train
+        # files so the capped subset keeps a sensible train >> test ratio.
+        cap = max(1, windows_per_file // 8) if is_test else windows_per_file
+        kept = min(cap, n_windows) if windows_per_file else n_windows
+        bucket = test if is_test else train
         for _ in range(kept):
             bucket.append(index)
             index += 1

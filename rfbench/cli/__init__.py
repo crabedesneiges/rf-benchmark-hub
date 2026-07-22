@@ -1223,6 +1223,17 @@ def _resolve_manifest_path(
     return None
 
 
+def _dict_field(document: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return ``document[key]`` when it is a dict, else an empty dict.
+
+    Narrows the value in a single expression so downstream ``.get(...)`` calls are always on a
+    concrete ``dict`` (the inline ``x if isinstance(...) else {}`` form left the binding typed as
+    ``Any | dict | None``, which mypy rightly rejected).
+    """
+    value = document.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 def _row_identity(document: dict[str, Any]) -> tuple[str, str, str, str, str, str, int | None]:
     """The comparability key of a leaderboard row (CONTRIBUTING.md 'One result per ...').
 
@@ -1231,11 +1242,11 @@ def _row_identity(document: dict[str, Any]) -> tuple[str, str, str, str, str, st
     ``track`` defaults to the empty string so single-track tasks (AMC/sensing, which omit it)
     compare cleanly against each other.
     """
-    task = document.get("task") if isinstance(document.get("task"), dict) else {}
-    model = document.get("model") if isinstance(document.get("model"), dict) else {}
-    regime = document.get("regime") if isinstance(document.get("regime"), dict) else {}
-    dataset = document.get("dataset") if isinstance(document.get("dataset"), dict) else {}
-    split = document.get("split") if isinstance(document.get("split"), dict) else {}
+    task = _dict_field(document, "task")
+    model = _dict_field(document, "model")
+    regime = _dict_field(document, "regime")
+    dataset = _dict_field(document, "dataset")
+    split = _dict_field(document, "split")
     k_shot = regime.get("k_shot")
     return (
         str(task.get("name", "")),
@@ -1256,11 +1267,11 @@ def _amc_full_snr_errors(document: dict[str, Any]) -> list[str]:
     falsy flag -- is rejected so the board never blends a partial-SNR score into the AMC column.
     Non-AMC tasks are untouched.
     """
-    task = document.get("task") if isinstance(document.get("task"), dict) else {}
+    task = _dict_field(document, "task")
     if task.get("name") != "amc":
         return []
-    ev = document.get("eval") if isinstance(document.get("eval"), dict) else {}
-    conditions = ev.get("conditions") if isinstance(ev.get("conditions"), dict) else {}
+    ev = _dict_field(document, "eval")
+    conditions = _dict_field(ev, "conditions")
     if conditions.get("full_snr_range") is not True:
         return [
             "AMC requires the full SNR range: set eval.conditions.full_snr_range=true "
@@ -1317,8 +1328,8 @@ def _split_checksum_match_errors(document: dict[str, Any]) -> list[str]:
     between ``canonical_split_id`` + ``checksum`` and ``leaderboard/splits/`` guards against. When
     no committed index exists yet the check is silent (the split lands in a later PR).
     """
-    split = document.get("split") if isinstance(document.get("split"), dict) else {}
-    dataset = document.get("dataset") if isinstance(document.get("dataset"), dict) else {}
+    split = _dict_field(document, "split")
+    dataset = _dict_field(document, "dataset")
     dataset_name = dataset.get("name")
     split_id = split.get("canonical_split_id")
     result_checksum = split.get("checksum")
@@ -1352,22 +1363,20 @@ def _manifest_consistency_errors(
     """
     errors: list[str] = []
 
-    result_task = document.get("task") if isinstance(document.get("task"), dict) else {}
-    manifest_task = manifest_doc.get("task") if isinstance(manifest_doc.get("task"), dict) else {}
+    result_task = _dict_field(document, "task")
+    manifest_task = _dict_field(manifest_doc, "task")
     if result_task and manifest_task and result_task != manifest_task:
         errors.append(f"manifest.task {manifest_task} does not match result.task {result_task}")
 
-    result_regime = document.get("regime") if isinstance(document.get("regime"), dict) else {}
-    manifest_regime = (
-        manifest_doc.get("regime") if isinstance(manifest_doc.get("regime"), dict) else {}
-    )
+    result_regime = _dict_field(document, "regime")
+    manifest_regime = _dict_field(manifest_doc, "regime")
     if result_regime and manifest_regime and result_regime != manifest_regime:
         errors.append(
             f"manifest.regime {manifest_regime} does not match result.regime {result_regime}"
         )
 
-    metrics = document.get("metrics") if isinstance(document.get("metrics"), dict) else {}
-    primary = metrics.get("primary") if isinstance(metrics, dict) else None
+    metrics = _dict_field(document, "metrics")
+    primary = metrics.get("primary")
     expected = manifest_doc.get("expected_metrics")
     if isinstance(primary, str) and isinstance(expected, dict) and primary not in expected:
         errors.append(

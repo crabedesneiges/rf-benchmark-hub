@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — provenance dataset RadDet : le 95.31 mAP50 était NIST-CBRS, pas RadDet (§A.4)
+
+Erreur de provenance dans `docs/BIBLIOGRAPHY.md` §A.4 (détection wideband). La ligne top
+« **RadDet** (NIST-CBRS real) — RT-DETR-L 95.31 mAP50 / 80.96 » attribuait à RadDet un chiffre qui,
+dans la Table III de arXiv:2501.10407v1, appartient à la colonne **NIST-CBRS** — un dataset **synthétique
+à 5 classes** que le papier ne fait que *comparer* (§III-A verbatim : « synthetic radar dataset comprising
+five radar classes … sampled at 10 MHz … SNR 10 to 20 dB »), distinct de la contribution RadDet (11 classes,
+§III-B). L'étiquette « (NIST-CBRS real) » était doublement fausse : NIST-CBRS n'est ni *real* ni *RadDet*.
+Le vrai SOTA board (colonnes RadDet-9T/1T) est bien plus bas : RT-DETR-L n'y fait que 29.34/19.90 (9T) et
+20.90/15.25 (1T), le top par set étant YOLOv3-L (60.37 @9T, 31.85 @1T). Toutes les valeurs re-vérifiées
+sur la Table III avant édition.
+- `docs/BIBLIOGRAPHY.md` §A.4 : NIST-CBRS isolé comme *comparison baseline* (`not the board set`),
+  distinct des lignes RadDet-9T/1T (le vrai dataset board) ; note de provenance ⚠️ ajoutée ; ligne récap
+  corrigée (SOTA board réel au lieu de 95.31).
+- `leaderboard/tasks.json` : même bug dans `real_or_synthetic` (« NIST-CBRS captures » → NIST-CBRS est un
+  set de comparaison synthétique séparé, pas le dataset board).
+- Cohérence §C.6 vérifiée : RadDet déjà rejeté comme `from_paper`, aucune ligne board seedée depuis 95.31.
+- **Non traité (à part)** : ~12 fichiers (code, tests, `EVALUATION_PROTOCOL.md`, README) qualifient RadDet
+  de « real published » alors que le dataset est synthétiquement généré — contradiction pré-existante,
+  hors périmètre de cette correction.
+
 ### Changed — sweep littérature (colonnes <5 baselines + WIP) : catalogue biblio, 0 ligne board
 
 Workflow multi-agents (search → vérif adversariale, chaque chiffre re-lu verbatim au PDF/HTML via

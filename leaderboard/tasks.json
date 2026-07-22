@@ -153,7 +153,7 @@
         "source": "Huang, Denman, Pemasiri, Martin, Fookes, ICASSP 2025 (arXiv:2501.10407; github.com/abcxyzi/RadDet)",
         "n_classes": "11 radar classes",
         "modality": "spectrogram images with YOLO time-frequency box annotations (128/256/512 px resolutions)",
-        "real_or_synthetic": "real published (NIST-CBRS captures; synthetic RadDet-1T/9T variants also exist)",
+        "real_or_synthetic": "synthetic, published/downloadable (11-class RadDet-1T/9T radar spectrograms are the board dataset; NIST-CBRS in the paper is a separate 5-class synthetic comparison set, not part of this board)",
         "conditions": "6 SNR settings, SNR-averaged; detection vs recognition tracks",
         "license": "CC BY-NC-SA 4.0",
         "split": "RadDet official train/val/test split if provided, else 80/10/10 seed 42 (detect-raddet-<track>-v1)"

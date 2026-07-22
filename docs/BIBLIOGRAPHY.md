@@ -212,15 +212,21 @@ Primary papers:
 
 | Dataset | Best model | Score | Metric | Source |
 |---|---|---|---|---|
-| **RadDet** (NIST-CBRS real) | RT-DETR-L @512² | 95.31 mAP50 / 80.96 mAP50:95 | COCO-AP, SNR-avg | RadDet |
-| RadDet-9T (dense synth) | YOLOv3-L @512² | 60.37 mAP50 / 53.97 | COCO-AP | RadDet |
-| RadDet-1T (sparse synth) | YOLOv3-L @512² | 31.85 mAP50 / 25.41 | COCO-AP | RadDet |
+| **RadDet-9T** (board; 11-cls, dense synth) | YOLOv3-L @512² | 60.37 mAP50 / 53.97 mAP50:95 | COCO-AP | RadDet |
+| **RadDet-1T** (board; 11-cls, sparse synth) | YOLOv3-L @512² | 31.85 mAP50 / 25.41 mAP50:95 | COCO-AP | RadDet |
+| NIST-CBRS — comparison baseline, *not* the board set (5-cls synth) | RT-DETR-L @512² | 95.31 mAP50 / 80.96 mAP50:95 | COCO-AP | RadDet |
 | **WBSig53** detection (impaired) | DETR-B4-Nano | 86.98 mAP / 98.92 AP50 | COCO-AP | WBSig53 |
 | WBSig53 recognition (6 fam) | DETR-B4-Nano | 80.65 mAP | COCO-AP | WBSig53 |
 | **DeepSense** (WiFi in-the-wild) | lightweight CNN | Precision 98% / Recall 97% | pd/pr + latency | DeepSense |
 
-Our board: detection track adopts **RadDet** (real, published). WBSig53 is a **blocker**
+Our board: detection track adopts **RadDet** (11-class, published/downloadable). WBSig53 is a **blocker**
 (generation-only). No detection/sensing model implemented yet.
+
+⚠️ **Provenance (arXiv:2501.10407v1, Table III).** The headline **95.31 / 80.96** is RT-DETR-L on
+**NIST-CBRS** — a *separate* 5-class synthetic radar set the RadDet paper only benchmarks against
+(ref [28], "sampled at 10 MHz, SNR 10–20 dB"), **not** our board's 11-class RadDet dataset. On the
+actual board sets RT-DETR-L collapses to **29.34 / 19.90** (9T) and **20.90 / 15.25** (1T); the per-set
+SOTA is **YOLOv3-L** (60.37 mAP50 @9T, 31.85 @1T). Never seed a board row from 95.31.
 
 Primary papers:
 - **RadDet** — Huang, Denman, Pemasiri, Martin, Fookes, *ICASSP 2025*. arXiv:2501.10407.
@@ -405,7 +411,7 @@ is possible at all).
 |---|---|---|---|---|
 | `amc` | ✅ implemented | **TLDNN 62.83%** (SOTA, +SS 63.35%); board's own MCLDNN 61.71% / CLDNN 58.05% / ResNet 56.61% | RadioML 2016.10a, 11-cls, full SNR | §A.1 |
 | `sei` | ✅ implemented | WiSig CNN ~53–99% (tx-count dependent); ORACLE CNN 98.60% (87.13% cross-location); LoRa RFFI spectrogram-CNN 96.40% (83.53% w/o CFO comp) | WiSig / ORACLE / LoRa RFFI | §A.3 |
-| `wideband_detection` | ✅ implemented | RadDet: RT-DETR-L 95.31 mAP50 / 80.96 mAP50:95; WBSig53 (blocked): DETR-B4-Nano 86.98 mAP | RadDet (real) / WBSig53 (blocked) | §A.4 |
+| `wideband_detection` | ✅ implemented | RadDet board SOTA: YOLOv3-L 60.37 mAP50 / 53.97 (9T dense), 31.85 / 25.41 (1T sparse); RT-DETR-L trails (29.34 @9T). The lit. 95.31/80.96 is **NIST-CBRS** (5-cls synth comparison set, NOT board). WBSig53 (blocked): DETR-B4-Nano 86.98 mAP | RadDet (11-cls) / WBSig53 (blocked) | §A.4 |
 | `spectrum_sensing` | ✅ track defined, no model yet | DeepSense lightweight CNN — Precision 98% / Recall 97% (exact `pd@pfa=0.1` not recovered from a primary source) | DeepSense (OTA 802.11 a/g + LTE-M) | §A.4 |
 | `interference_id` | ✅ implemented | No external specialized-baseline paper found for GNSS-jamming 6-class; board's own `interf_cnn` scores **99.87%** (`self_reported`, in-repo only, not a literature citation) | `interf_gnss6` (Swinney & Woods 2021, Zenodo 4629685) | `leaderboard/results/interference_id/interf_cnn.json` |
 | `protocol_tech_id` | ✅ implemented (no split committed yet) | No specialized (T-PRIME or other) baseline figure recorded in this bibliography — only the WirelessJEPA FM figure (94.26%, §A.5) is on file | 802.11 ax/b/n/g OTA (WirelessJEPA's own set) | §A.5 |

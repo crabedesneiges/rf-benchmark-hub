@@ -38,8 +38,10 @@ from rfbench.tasks.spectrum_sensing import (
 )
 from rfbench.tasks.spectrum_sensing.metrics import (
     OccupancyClassification,
+    iter_occupancy_cells,
     occupancy_score,
     pd_at_pfa,
+    reduce_prediction,
 )
 
 _SPLITS: tuple[SplitName, SplitName, SplitName] = ("train", "val", "test")
@@ -488,5 +490,128 @@ def test_end_to_end_evaluate_validates_against_schema() -> None:
     assert values["f1"] == pytest.approx(1.0)
     assert values["accuracy"] == pytest.approx(1.0)
     # Secondaries stay on the row: the classical ROC operating point + auroc.
+    assert values["pd@pfa=0.1"] == pytest.approx(1.0)
+    assert values["auroc"] == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------------------
+# MULTI-LABEL occupancy (DeepSense's 16 LTE-M sub-bands): cells = window x subband
+# --------------------------------------------------------------------------------------
+def test_iter_occupancy_cells_binary_path() -> None:
+    """A scalar target yields ONE cell per window (the binary occupancy path)."""
+    assert iter_occupancy_cells([0.7, 0.2], [1, 0]) == [(0.7, 1), (0.2, 0)]
+
+
+def test_iter_occupancy_cells_multilabel_expands_per_subband() -> None:
+    """A length-K target expands into K window×subband cells with the matching per-band probs."""
+    cells = iter_occupancy_cells([[0.9, 0.1, 0.8]], [[1, 0, 1]])
+    assert cells == [(0.9, 1), (0.1, 0), (0.8, 1)]
+
+
+def test_iter_occupancy_cells_length_mismatch_raises() -> None:
+    """A prediction row whose width differs from the target vector fails loudly."""
+    with pytest.raises(ValueError, match="length mismatch"):
+        iter_occupancy_cells([[0.1, 0.2, 0.3]], [[1, 0]])
+
+
+def test_reduce_prediction_binary_vs_multilabel() -> None:
+    """reduce_prediction collapses binary rows to a scalar but keeps multi-label rows as lists."""
+    assert reduce_prediction(0.7) == pytest.approx(0.7)  # scalar passthrough
+    assert reduce_prediction([0.42]) == pytest.approx(0.42)  # length-1 passthrough
+    assert reduce_prediction([0.0, 10.0]) == pytest.approx(1.0, abs=1e-3)  # length-2 softmax
+    assert reduce_prediction([0.9, 0.1, 0.8]) == [0.9, 0.1, 0.8]  # length-3+ -> per-band list
+
+
+def test_occupancy_classification_multilabel_all_correct() -> None:
+    """Micro-F1 over window×subband cells is 1.0 when every one of the 8 cells is correct."""
+    metric = OccupancyClassification()
+    preds = [[0.9, 0.1, 0.8, 0.2], [0.2, 0.7, 0.3, 0.6]]  # 2 windows x 4 sub-bands
+    targets = [[1, 0, 1, 0], [0, 1, 0, 1]]
+    metric.update(preds, targets)
+    out = metric.compute()
+    assert out["f1"] == pytest.approx(1.0)
+    assert out["accuracy"] == pytest.approx(1.0)
+
+
+def test_occupancy_classification_multilabel_micro_averages_cells() -> None:
+    """F1 micro-averages over cells: 1 TP + 1 FP in a single window -> precision .5, recall 1."""
+    metric = OccupancyClassification()
+    metric.update([[0.9, 0.9]], [[1, 0]])  # cell0 TP, cell1 FP
+    out = metric.compute()
+    assert out["precision"] == pytest.approx(0.5)  # TP / (TP + FP) = 1/2
+    assert out["recall"] == pytest.approx(1.0)  # TP / (TP + FN) = 1/1
+    assert out["f1"] == pytest.approx(2.0 * 0.5 * 1.0 / 1.5)
+
+
+def test_occupancy_classification_multilabel_rejects_non_binary_bit() -> None:
+    """A per-subband target outside {0, 1} fails loudly (same guard as the binary path)."""
+    with pytest.raises(ValueError, match="must be 0 .* or 1"):
+        OccupancyClassification().update([[0.5, 0.5]], [[1, 2]])
+
+
+def test_pd_at_pfa_multilabel_separable_cells() -> None:
+    """Pd@Pfa / AUROC micro-average over cells: occupied cells high, vacant low -> perfect."""
+    metric = PdAtPfa()
+    metric.update([[0.9, 0.1], [0.8, 0.2]], [[1, 0], [1, 0]])
+    computed = metric.compute()
+    assert computed["pd@pfa=0.1"] == pytest.approx(1.0)
+    assert computed["auroc"] == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------------------
+# End-to-end evaluate() on a synthetic MULTI-LABEL SpectrumSensingDataset
+# --------------------------------------------------------------------------------------
+class _MultiLabelReplayModel(Model):
+    """A deterministic baseline replaying each window's baked-in per-subband prob row (no torch)."""
+
+    name = "sensing-ml-dummy"
+    family = "baseline"
+
+    def forward(self, x: Tensor) -> Tensor:
+        return list(x["score"])
+
+    def embed(self, x: Tensor) -> Tensor:  # pragma: no cover - not exercised
+        raise NotImplementedError
+
+    @property
+    def n_params(self) -> int:
+        return 0
+
+
+def _synthetic_multilabel_samples() -> list[Batch]:
+    """6 windows × 4 sub-bands, perfectly separable per cell (prob == label)."""
+    samples: list[Batch] = []
+    for i in range(6):
+        label = [(i + j) % 2 for j in range(4)]  # alternating -> both classes present
+        score = [float(bit) for bit in label]  # 1.0 occupied / 0.0 vacant
+        samples.append({"iq": [[0.1] * 4, [0.2] * 4], "label": label, "score": score})
+    return samples
+
+
+def _multilabel_task() -> SpectrumSensingTask:
+    dataset = SpectrumSensingDataset(
+        "deepsense", samples=_synthetic_multilabel_samples(), checksum=_CHECKSUM
+    )
+    return SpectrumSensingTask(datasets=[dataset])
+
+
+def test_end_to_end_evaluate_multilabel_validates_against_schema() -> None:
+    """``evaluate`` over a synthetic 16-band-style dataset yields a schema-valid result.json."""
+    from jsonschema import Draft202012Validator
+
+    result = evaluate(
+        _MultiLabelReplayModel(),
+        _multilabel_task(),
+        "test",
+        RegimeSpec(Regime.FROM_SCRATCH),
+        batch_size=4,  # forces multi-batch streaming over the 6 windows
+    )
+    Draft202012Validator(_load_schema()).validate(result)
+
+    assert result["task"]["name"] == "spectrum_sensing"
+    assert result["metrics"]["primary"] == "f1"
+    values = result["metrics"]["values"]
+    assert values["f1"] == pytest.approx(1.0)  # micro-averaged over the 24 cells
+    assert values["accuracy"] == pytest.approx(1.0)
     assert values["pd@pfa=0.1"] == pytest.approx(1.0)
     assert values["auroc"] == pytest.approx(1.0)

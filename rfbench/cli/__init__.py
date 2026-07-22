@@ -1205,6 +1205,104 @@ def _cmd_snr_train(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------------
+# `sensing-train` handler (from-scratch multi-label spectrum-sensing training, dedicated recipe)
+# --------------------------------------------------------------------------------------------------
+def _cmd_sensing_train(args: argparse.Namespace) -> int:
+    """Train the DeepSense CNN on the multi-label sensing split, then emit a result.json.
+
+    Uses the sensing-specific loop :func:`rfbench.training_sensing.train_sensing_baseline`
+    (``BCEWithLogitsLoss`` over the 16 LTE-M sub-bands, best checkpoint + early stop on val
+    MICRO-F1) so the AMC/SEI/SNR loops stay untouched, then evaluates on the test split and writes a
+    schema-valid ``result.json`` (primary ``f1``). torch + the sensing training module are imported
+    inside this handler so ``import rfbench`` / ``rfbench --help`` stay dependency-free.
+    """
+    import logging
+
+    # Surface the per-epoch trajectory (train/val loss, val micro-F1, best-checkpoint) on stdout so
+    # a cluster .out log shows convergence -- otherwise the loop's logger.info lines are swallowed.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    try:
+        from rfbench.core.registry import MODELS, TASKS
+        from rfbench.training_sensing import train_sensing_baseline
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: [sensing-train] needs the torch extra (`pip install rfbench[torch]`): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    try:
+        _import_model_module(args.model)
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: [sensing-train] could not import the '{args.model}' model module "
+            f"(needs the torch extra): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILURE
+
+    os.environ.setdefault("RFBENCH_CACHE", args.cache)
+    try:
+        _import_task_module("spectrum_sensing")
+        task = TASKS.get("spectrum_sensing")()
+        datasets = task.datasets()
+        dataset = next((d for d in datasets if d.name == args.dataset), None)
+        if dataset is None:
+            available = ", ".join(sorted(d.name for d in datasets))
+            raise ValueError(f"unknown --dataset {args.dataset!r}; available: {available}")
+        spec = _regime_spec(args.regime, None)
+        model = MODELS.get(args.model)(device=None if args.device == "auto" else args.device)
+    except (KeyError, ValueError, TypeError) as exc:
+        print(f"error: [sensing-train] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    checksum = _load_split_checksum(args.dataset, _repo_root() / "leaderboard")
+    if checksum is not None and hasattr(dataset, "checksum"):
+        dataset.checksum = checksum
+
+    out_path = (
+        Path(args.out)
+        if args.out
+        else Path("leaderboard") / "results" / "spectrum_sensing" / f"{args.model}.json"
+    )
+    print(
+        f"[sensing-train] training '{args.model}' on spectrum_sensing/{args.dataset} "
+        f"(regime={args.regime}, epochs={args.epochs}, batch_size={args.batch_size}, "
+        f"lr={args.lr}, device={args.device})..."
+    )
+    try:
+        _model, result = train_sensing_baseline(
+            task,
+            model,
+            dataset,
+            regime=spec,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            seed=args.seed,
+            device=None if args.device == "auto" else args.device,
+            out_path=out_path,
+            patience=args.patience,
+            checkpoint_out=Path(args.out_checkpoint) if args.out_checkpoint else None,
+        )
+    except (ValueError, RuntimeError, TypeError, FileNotFoundError) as exc:
+        print(f"error: [sensing-train] {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    primary = result["metrics"]["primary"]
+    values = result["metrics"]["values"]
+    extras = ", ".join(f"{k}={v:.4f}" for k, v in values.items() if k != primary)
+    print(
+        f"[sensing-train] wrote result.json -> {out_path} "
+        f"({primary}={values.get(primary):.4f}{'; ' + extras if extras else ''})."
+    )
+    if args.out_checkpoint:
+        print(f"[sensing-train] wrote checkpoint -> {args.out_checkpoint}.")
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------------------------------
 # `submit` handler
 # --------------------------------------------------------------------------------------------------
 def _resolve_manifest_path(
@@ -2005,6 +2103,68 @@ def _build_snr_train_parser(
     sn.set_defaults(func=_cmd_snr_train)
 
 
+def _build_sensing_train_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    parent: argparse.ArgumentParser,
+) -> None:
+    ss = subparsers.add_parser(
+        "sensing-train",
+        parents=[parent],
+        help="Train the DeepSense CNN (multi-label BCE) and emit a result.json (M3, GPU).",
+        description=(
+            "Runs the sensing-specific MULTI-LABEL loop "
+            "(rfbench.training_sensing.train_sensing_baseline: BCEWithLogitsLoss over the 16 LTE-M "
+            "sub-bands, Adam, best checkpoint + early stop on validation MICRO-F1), then evaluates "
+            "on the test split and writes a schema-valid result.json (primary f1, micro-averaged "
+            "over window×subband cells). The AMC/SEI/SNR loops are left untouched. Needs the torch "
+            "extra; runs on the cluster GPU."
+        ),
+    )
+    ss.add_argument(
+        "--dataset",
+        default="deepsense",
+        choices=("deepsense",),
+        help="Spectrum-sensing dataset variant (default: deepsense).",
+    )
+    ss.add_argument(
+        "--model",
+        required=True,
+        metavar="NAME",
+        help="Registered sensing model name (e.g. deepsense_cnn).",
+    )
+    ss.add_argument(
+        "--regime",
+        default="from_scratch",
+        choices=("from_scratch", "full_finetune"),
+        help="Trainable regime, ALWAYS declared (default: from_scratch).",
+    )
+    ss.add_argument("--epochs", type=int, default=150, help="Max epochs (default: 150, DeepSense).")
+    ss.add_argument(
+        "--batch-size", dest="batch_size", type=int, default=256, help="Batch size (default: 256)."
+    )
+    ss.add_argument("--lr", type=float, default=1e-3, help="Adam learning rate (default: 1e-3).")
+    ss.add_argument("--patience", type=int, default=15, help="Early-stop patience (default: 15).")
+    ss.add_argument("--seed", type=int, default=42, help="Global seed (default: 42).")
+    ss.add_argument(
+        "--device",
+        choices=("cuda", "cpu", "auto"),
+        default="auto",
+        help="Compute device (default: auto -> cuda when available).",
+    )
+    ss.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Output path (default: leaderboard/results/spectrum_sensing/<model>.json).",
+    )
+    ss.add_argument(
+        "--out-checkpoint",
+        dest="out_checkpoint",
+        metavar="PATH",
+        help="Also persist the best-val checkpoint state_dict to this path.",
+    )
+    ss.set_defaults(func=_cmd_sensing_train)
+
+
 def _build_submit_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     parent: argparse.ArgumentParser,
@@ -2157,6 +2317,7 @@ def build_parser() -> argparse.ArgumentParser:
     _build_train_parser(subparsers, parent)
     _build_sei_train_parser(subparsers, parent)
     _build_snr_train_parser(subparsers, parent)
+    _build_sensing_train_parser(subparsers, parent)
     _build_submit_parser(subparsers, parent)
     _build_leaderboard_parser(subparsers, parent)
     _build_verify_parser(subparsers, parent)

@@ -1,9 +1,12 @@
 """Spectrum-sensing metrics -- pure-stdlib streaming F1 (primary) + Pd@Pfa/AUROC.
 
-Spectrum sensing is BINARY occupancy detection per ``docs/EVALUATION_PROTOCOL.md``
-§"Spectrum sensing": each raw-IQ window is either occupied (target ``1``) or vacant
-(target ``0``), and the model emits a scalar ``P(occupied)`` per window. The reported metrics
-are:
+Spectrum sensing is occupancy detection per ``docs/EVALUATION_PROTOCOL.md`` §"Spectrum sensing".
+DeepSense is MULTI-LABEL: each ``(2, 32)`` raw-IQ window carries a length-16 per-subband
+occupancy vector, and the model emits ``P(occupied)`` per sub-band. Each ``(window, subband)``
+pair is one binary CELL, and every metric MICRO-averages over cells (via
+:func:`iter_occupancy_cells`), so a window contributes 16 binary decisions. The same metrics also
+accept a scalar ``0/1`` target (one cell per window) so the binary code path stays exercisable on
+pure-Python fixtures. The reported metrics are:
 
 * ``f1`` -- **primary** (:class:`OccupancyClassification`), the occupied-class F1 the sensing
   literature actually reports (DeepSense precision 98% / recall 97%; IPFSCNN calls F1 "the primary
@@ -91,17 +94,18 @@ class PdAtPfa(Metric):
         self._pos = []
         self._neg = []
 
-    def prepare_predictions(self, pred: Tensor) -> list[float]:
-        """Reduce a whole batch of per-sample model outputs to scalar occupied-probabilities, ONCE.
+    def prepare_predictions(self, pred: Tensor) -> list[object]:
+        """Reduce a whole batch of per-sample model outputs to per-window occupied-scores, ONCE.
 
         Optional hook honoured by :func:`rfbench.core.evaluate._bootstrap_uncertainty` (mirrors
         :meth:`rfbench.tasks.sei.metrics.OpenSetMetric.prepare_predictions`): the percentile
-        bootstrap re-runs :meth:`update` ~1000x, so reducing each raw per-sample output to a
-        scalar ``P(occupied)`` here makes every resample a cheap ``float`` pass instead of
-        recomputing the softmax over each window. Pure/deterministic, so the CI is unchanged;
-        already-scalar scores pass through untouched (idempotent).
+        bootstrap re-runs :meth:`update` ~1000x, so reducing each raw per-sample output here makes
+        every resample a cheap pass. A BINARY output collapses to a scalar ``P(occupied)`` via
+        :func:`occupancy_score`; a MULTI-LABEL 16-band row is kept as its length-16 per-subband
+        prob list (:func:`reduce_prediction`). Pure/deterministic, so the CI is unchanged;
+        already-reduced predictions pass through untouched (idempotent).
         """
-        return [occupancy_score(row) for row in pred]
+        return [reduce_prediction(row) for row in pred]
 
     def update(
         self,
@@ -109,24 +113,20 @@ class PdAtPfa(Metric):
         target: Tensor,
         meta: dict[str, Any] | None = None,
     ) -> None:
-        """Accumulate a batch of occupied-probabilities (``pred``) with binary targets (``target``).
+        """Accumulate occupied-scores (``pred``) with binary / 16-band targets (``target``).
 
-        ``pred[i]`` is the model's per-sample output reduced to a scalar ``P(occupied)`` via
-        :func:`occupancy_score` (a length-2 row -> ``softmax(row)[1]``; a length-1 row / scalar /
-        0-d tensor -> its verbatim value). ``target[i]`` is ``1`` for an occupied window or ``0``
-        for a vacant one; positives accumulate into the occupied buffer, negatives into the
-        vacant one. Targets outside ``{0, 1}`` raise :class:`ValueError`.
+        Each ``(prediction, target)`` pair is expanded to one or more binary CELLS by
+        :func:`iter_occupancy_cells`: a scalar target is one binary window (``P(occupied)`` via
+        :func:`occupancy_score`); a length-16 target is 16 window×subband cells (the matching
+        per-subband probabilities). Positives accumulate into the occupied buffer, negatives into
+        the vacant one, so ``pd@pfa`` is micro-averaged over cells. Targets outside ``{0, 1}``
+        raise :class:`ValueError`.
         """
-        for prediction, label in zip(pred, target, strict=True):
-            value = occupancy_score(prediction)
+        for value, label in iter_occupancy_cells(pred, target):
             if label == 1:
                 self._pos.append(value)
-            elif label == 0:
+            else:  # iter_occupancy_cells has already validated label in {0, 1}
                 self._neg.append(value)
-            else:
-                raise ValueError(
-                    f"spectrum-sensing target must be 0 (vacant) or 1 (occupied), got {label!r}"
-                )
 
     def compute(self) -> dict[str, float | list[dict[str, float]]]:
         """Return ``{pd@pfa, auroc, pfa_achieved, roc}`` over the accumulated scores.
@@ -183,9 +183,13 @@ class OccupancyClassification(Metric):
         """Clear the accumulated confusion counts."""
         self._correct = self._n = self._tp = self._fp = self._fn = 0
 
-    def prepare_predictions(self, pred: Tensor) -> list[float]:
-        """Reduce a batch of per-sample outputs to scalar ``P(occupied)`` once (bootstrap hook)."""
-        return [occupancy_score(row) for row in pred]
+    def prepare_predictions(self, pred: Tensor) -> list[object]:
+        """Reduce a batch of per-sample outputs to per-window occupied-scores once (bootstrap hook).
+
+        Binary rows collapse to a scalar ``P(occupied)``; multi-label 16-band rows keep their
+        length-16 per-subband prob list (see :func:`reduce_prediction`).
+        """
+        return [reduce_prediction(row) for row in pred]
 
     def update(
         self,
@@ -193,13 +197,14 @@ class OccupancyClassification(Metric):
         target: Tensor,
         meta: dict[str, Any] | None = None,
     ) -> None:
-        """Accumulate hard-label confusion counts for one batch (``pred`` = ``P(occupied)``)."""
-        for prediction, label in zip(pred, target, strict=True):
-            if label not in (0, 1):
-                raise ValueError(
-                    f"spectrum-sensing target must be 0 (vacant) or 1 (occupied), got {label!r}"
-                )
-            predicted = 1 if occupancy_score(prediction) >= self.threshold else 0
+        """Accumulate hard-label confusion counts for one batch, per binary/16-band CELL.
+
+        :func:`iter_occupancy_cells` expands each ``(prediction, target)`` into binary cells (one
+        per window for a scalar target; 16 window×subband cells for a length-16 target), so ``f1`` /
+        precision / recall are MICRO-averaged over cells. Targets outside ``{0, 1}`` raise.
+        """
+        for value, label in iter_occupancy_cells(pred, target):
+            predicted = 1 if value >= self.threshold else 0
             self._n += 1
             if predicted == label:
                 self._correct += 1
@@ -263,6 +268,99 @@ def occupancy_score(prediction: object) -> float:
         )
     # softmax(row)[1] == 1 / (1 + exp(row[0] - row[1])); numerically stable via the sigmoid form.
     return _sigmoid(row[1] - row[0])
+
+
+def _is_multilabel_target(label: object) -> bool:
+    """Return ``True`` when ``label`` is a per-subband occupancy VECTOR (not a scalar 0/1).
+
+    A binary window carries a scalar target (``int`` / ``float`` / ``bool``); a multi-label
+    DeepSense window carries a length-K sequence of ``0/1`` bits (one per LTE-M sub-band). Strings
+    are never valid occupancy targets, so they are treated as scalar-ish and fail downstream.
+    """
+    if isinstance(label, (bool, int, float, str)):
+        return False
+    try:
+        iter(label)  # type: ignore[call-overload]
+    except TypeError:
+        return False
+    return True
+
+
+def _check_bit(label: object) -> int:
+    """Coerce one occupancy target to a strict ``{0, 1}`` cell label; raise otherwise."""
+    if label == 1:
+        return 1
+    if label == 0:
+        return 0
+    raise ValueError(f"spectrum-sensing target must be 0 (vacant) or 1 (occupied), got {label!r}")
+
+
+def _as_prob_row(prediction: object) -> list[float]:
+    """Coerce a multi-label per-subband prediction row to a plain ``list[float]``.
+
+    ``prediction`` is the model's per-window output over the K sub-bands -- a Python list, a 1-D
+    tensor (iterating yields 0-d tensors that ``float`` unwraps), or an already-reduced prob list.
+    Each value is an already-computed per-subband ``P(occupied)`` (the DeepSense head is a
+    per-band sigmoid), taken verbatim -- mirroring how :func:`occupancy_score` passes a scalar /
+    length-1 row through.
+    """
+    try:
+        return [float(x) for x in prediction]  # type: ignore[union-attr]
+    except TypeError as exc:
+        raise ValueError(
+            "multi-label spectrum-sensing prediction must be a per-subband row"
+        ) from exc
+
+
+def iter_occupancy_cells(pred: Tensor, target: Tensor) -> list[tuple[float, int]]:
+    """Expand a batch of ``(prediction, target)`` pairs into binary ``(score, label)`` CELLS.
+
+    The single place the binary and multi-label sensing paths converge. For each per-sample pair
+    (strictly zipped, so a length mismatch fails loudly):
+
+    * a **scalar** target -> ONE cell: ``(occupancy_score(prediction), bit)`` -- the binary
+      occupancy window (a length-2 row softmaxes to ``P(occupied)``; a scalar / length-1 passes
+      through);
+    * a **length-K** target (DeepSense's 16 LTE-M sub-bands) -> K cells: the per-subband
+      probability paired with its per-subband bit, so the metrics micro-average over
+      window×subband cells. The prediction row length MUST match the target length.
+
+    Every cell label is validated to ``{0, 1}`` via :func:`_check_bit`. Returns a materialised list
+    (not a generator) so a metric's ``update`` can iterate it directly.
+    """
+    cells: list[tuple[float, int]] = []
+    for prediction, label in zip(pred, target, strict=True):
+        if _is_multilabel_target(label):
+            row = _as_prob_row(prediction)
+            bits = list(label)  # type: ignore[call-overload]
+            if len(row) != len(bits):
+                raise ValueError(
+                    "multi-label spectrum-sensing prediction/target length mismatch: "
+                    f"{len(row)} sub-bands predicted vs {len(bits)} targeted"
+                )
+            for value, bit in zip(row, bits, strict=True):
+                cells.append((value, _check_bit(bit)))
+        else:
+            cells.append((occupancy_score(prediction), _check_bit(label)))
+    return cells
+
+
+def reduce_prediction(row: object) -> object:
+    """Reduce ONE per-sample model output for the bootstrap ``prepare_predictions`` hook.
+
+    A binary output (scalar / length-1 / length-2 row) collapses to a scalar ``P(occupied)`` via
+    :func:`occupancy_score`; a MULTI-LABEL per-subband row (length > 2) is kept as its
+    ``list[float]`` of per-subband probabilities so :func:`iter_occupancy_cells` can still expand
+    it into cells after a resample gather. Idempotent on already-reduced values.
+    """
+    if not isinstance(row, (bool, int, float)):
+        try:
+            length = len(row)  # type: ignore[arg-type]
+        except TypeError:
+            length = None
+        if length is not None and length > 2:
+            return _as_prob_row(row)
+    return occupancy_score(row)
 
 
 def _sigmoid(value: float) -> float:
@@ -415,5 +513,7 @@ __all__ = [
     "OccupancyClassification",
     "PdAtPfa",
     "occupancy_score",
+    "iter_occupancy_cells",
+    "reduce_prediction",
     "pd_at_pfa",
 ]

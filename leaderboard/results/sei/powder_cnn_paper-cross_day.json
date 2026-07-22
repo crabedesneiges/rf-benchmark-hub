@@ -1,0 +1,35 @@
+{
+  "dataset": {
+    "name": "powder"
+  },
+  "metrics": {
+    "primary": "rank1_accuracy",
+    "values": {
+      "rank1_accuracy": 0.7624
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "powder-cnn-paper",
+    "url": "https://genesys-lab.org/papers/Globecom-Fingerprinting.pdf"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "sei-powder-crossday-grouped-8010-seed42-v1",
+    "checksum": "sha256:61beee931b8640cd2dc763e92408a0bca6465d617a46358c098e911f19b5e139",
+    "name": "test",
+    "seed": 42,
+    "track": "cross_day"
+  },
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reus-Muns, Jaisinghani, Sankhe, Chowdhury, 'Trust in 5G Open RANs through Machine Learning: RF Fingerprinting on the POWDER PAWR Platform', IEEE GLOBECOM 2020 (GENESYS Lab, Northeastern; open PDF genesys-lab.org/papers/Globecom-Fingerprinting.pdf, verified verbatim via pdftotext). Baseline CNN, base-station identification, trained on one day and tested on a DIFFERENT day -> overall accuracy drops to 76.24% (verbatim: 'trained and tested on different days, the overall accuracy drops to 76.24%', Fig. 5b). Our cross_day track (train day 1 / test day 2, day-disjoint) matches this -> from_paper. Same model.name as the closed_set row, different track.",
+    "status": "from_paper"
+  }
+}

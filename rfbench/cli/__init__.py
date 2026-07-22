@@ -429,11 +429,17 @@ def _prepare_sei(
 
     written: list[str] = []
     for condition in conditions:
+        cond_records = records
+        if dataset == "powder" and condition == "closed_set":
+            # POWDER closed_set = same-day: keep the canonical single day (cross_day uses both).
+            from rfbench.data.prepare.sei import _POWDER_CLOSEDSET_DAY
+
+            cond_records = [r for r in records if r[2] == _POWDER_CLOSEDSET_DAY]
         split, _manifest = prepare_sei(
             dataset,
             condition,
             out_dir=out_dir,
-            records=records,
+            records=cond_records,
             seed=seed,
         )
         written.append(split.canonical_split_id)

@@ -1,0 +1,35 @@
+{
+  "dataset": {
+    "name": "powder"
+  },
+  "metrics": {
+    "primary": "rank1_accuracy",
+    "values": {
+      "rank1_accuracy": 0.9998
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "powder-cnn-paper",
+    "url": "https://genesys-lab.org/papers/Globecom-Fingerprinting.pdf"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "sei-powder-closedset-sameday-strat-site-8010-seed42-v1",
+    "checksum": "sha256:f7034c3ea634ae51182508257919a2933fc48ab09e6967d6b228c30600610b25",
+    "name": "test",
+    "seed": 42,
+    "track": "closed_set"
+  },
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reus-Muns, Jaisinghani, Sankhe, Chowdhury, 'Trust in 5G Open RANs through Machine Learning: RF Fingerprinting on the POWDER PAWR Platform', IEEE GLOBECOM 2020 (GENESYS Lab, Northeastern; open PDF genesys-lab.org/papers/Globecom-Fingerprinting.pdf, verified verbatim via pdftotext). Baseline CNN, base-station identification, trained AND tested on the SAME day -> overall accuracy 99.98% (verbatim: 'trained and tested on the same day gives overall accuracy of 99.98%', Fig. 5a/6a). Our closed_set split is same-day (single fixed capture day, sei-powder-closedset-sameday-strat-site-8010-seed42-v1) matching this protocol -> from_paper (same dataset + same same-day protocol + same metric rank1). Distinct from a future in-repo run.",
+    "status": "from_paper"
+  }
+}

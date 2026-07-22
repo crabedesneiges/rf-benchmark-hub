@@ -76,7 +76,8 @@ CANONICAL_SPLIT_IDS: dict[str, dict[str, str]] = {
         "closed_set": "sei-lora-closedset-strat-dev-8010-seed42-v1",
     },
     "powder": {
-        "closed_set": "sei-powder-closedset-strat-site-8010-seed42-v1",
+        "closed_set": "sei-powder-closedset-sameday-strat-site-8010-seed42-v1",
+        "cross_day": "sei-powder-crossday-grouped-8010-seed42-v1",
     },
 }
 
@@ -88,14 +89,21 @@ SOURCE_URLS: dict[str, str] = {
     "powder": "https://genesys-lab.org/powder",
 }
 
+#: The single capture day the canonical POWDER **closed-set** (same-day) uses. POWDER captures the
+#: 4 base stations on 2 days; the origin paper's headline is same-day 99.98% (train+test one day),
+#: dropping to cross-day 76.24%. We adopt the field-standard split: ``closed_set`` = same-day (one
+#: fixed day), plus a ``cross_day`` track (train one day / test the other), so BOTH paper figures
+#: are clean ``from_paper`` comparisons.
+_POWDER_CLOSEDSET_DAY = "1"
+
 #: Conditions each dataset supports (WiSig carries receiver + day metadata; the others do not).
-#: POWDER (4 BS, one fixed receiver) is closed-set only -- like the two FM SEI evaluators
-#: (WirelessJEPA, IQFM), which pool the two capture days into a single closed-set task.
+#: POWDER (4 BS, one fixed receiver, 2 days) supports same-day ``closed_set`` + ``cross_day`` (its
+#: records carry a day id), matching the origin paper's same-day/cross-day experiments.
 _CONDITIONS: dict[str, tuple[str, ...]] = {
     "wisig": ("closed_set", "cross_receiver", "cross_day", "open_set"),
     "oracle": ("closed_set",),
     "lora": ("closed_set",),
-    "powder": ("closed_set",),
+    "powder": ("closed_set", "cross_day"),
 }
 
 #: Which record field a grouped condition partitions on (index into :data:`SeiRecord`).
@@ -343,9 +351,26 @@ def _partition_by_group(groups: Sequence[object], *, seed: int) -> dict[str, lis
     import random
 
     unique = sorted({_norm_group(g) for g in groups})
+    if len(unique) < 2:
+        raise ValueError(
+            f"grouped split needs >= 2 distinct groups to hold one out; got {len(unique)}"
+        )
     rng = random.Random(seed)
     shuffled = list(unique)
     rng.shuffle(shuffled)
+
+    if len(shuffled) == 2:
+        # Exactly 2 groups (e.g. POWDER's 2 capture days): a 3-way group partition is impossible,
+        # so do the field-standard 2-way -- train = group A (all its items), test = group B -- and
+        # carve val from train's items (val MAY share the group with train; only TEST must be
+        # group-disjoint, which is the cross-day/cross-receiver guarantee).
+        train_group, test_group = shuffled[0], shuffled[1]
+        train_items = [i for i, g in enumerate(groups) if _norm_group(g) == train_group]
+        test_items = sorted(i for i, g in enumerate(groups) if _norm_group(g) == test_group)
+        val_items = sorted(train_items[::9])  # ~11% of train, deterministic spread
+        val_set = set(val_items)
+        train_only = sorted(i for i in train_items if i not in val_set)
+        return {"train": train_only, "val": val_items, "test": test_items}
 
     train_g, val_g, test_g = _partition_groups(shuffled)
     partition_of: dict[tuple[int, str], str] = {}

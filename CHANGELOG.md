@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — POWDER aligné sur le protocole du champ (same-day + cross-day) → 3 lignes `from_paper` vérifiées
+
+Le papier POWDER (Reus-Muns, GLOBECOM 2020) est **ouvert** (genesys-lab.org/papers/Globecom-Fingerprinting.pdf),
+chiffres **re-lus verbatim** via pdftotext : baseline CNN same-day **99.98%** / cross-day **76.24%** ;
+triplet cross-day **92.97%**. On adopte les 2 protocoles du champ :
+- `closed_set` = **same-day** (un jour fixe ; `load_powder_records`/CLI filtrent le jour via
+  `_POWDER_CLOSEDSET_DAY`, split `sei-powder-closedset-sameday-strat-site-8010-seed42-v1`, 61440 items).
+- **piste `cross_day`** (train jour 1 / test jour 2 ; split `sei-powder-crossday-grouped-8010-seed42-v1`).
+  Fix : `_partition_by_group` gère désormais le cas **2 groupes** (train = groupe A, test = groupe B, val
+  carvé du train) — le 80/10/10 au niveau groupe mettait tout dans train avec 2 jours.
+- **3 lignes `from_paper`** : `powder-cnn-paper` closed_set 0.9998, `powder-cnn-paper` cross_day 0.7624,
+  `powder-triplet-paper` cross_day 0.9297. SEI passe à **from_paper 5** (+ ORACLE, WiSig).
+
 ### Changed — ORACLE closed-set aligné sur le protocole du champ (single-location) → `oracle-cnn-paper` devient `from_paper`
 
 Audit protocole (décision : aligner sur la littérature quand c'est le standard rigoureux du champ).

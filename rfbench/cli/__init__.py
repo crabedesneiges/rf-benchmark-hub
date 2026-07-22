@@ -162,7 +162,7 @@ _TASK_DEFAULTS: dict[str, dict[str, str]] = {
     "spectrum_sensing": {
         "dataset": "deepsense",
         "primary": "f1",
-        "canonical_split_id": "sensing-deepsense-8010-seed42-v1",
+        "canonical_split_id": "sensing-deepsense-official-v1",
         "track": "occupancy",
     },
     "interference_id": {
@@ -504,17 +504,15 @@ def _prepare_sensing(
 
     if payload is not None:
         labels = [int(label) for label in payload["labels"]]
+        split, _manifest = prepare_sensing(dataset, out_dir=out_dir, labels=labels, seed=seed)
     else:
-        from rfbench.data.download.spectrum_deepsense import load_deepsense_occupancy
+        from rfbench.data.download.spectrum_deepsense import load_deepsense_records
 
-        labels = [int(label) for _iq, label in load_deepsense_occupancy(cache=cache)]
-
-    split, _manifest = prepare_sensing(
-        dataset,
-        out_dir=out_dir,
-        labels=labels,
-        seed=seed,
-    )
+        # Real data: adopt DeepSense's own train/test partition (val carved from train).
+        _n_items, official = load_deepsense_records(cache=cache)
+        split, _manifest = prepare_sensing(
+            dataset, out_dir=out_dir, official_split=official, seed=seed
+        )
     return split.canonical_split_id
 
 

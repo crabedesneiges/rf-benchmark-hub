@@ -24,20 +24,27 @@ Module top imports are stdlib + the frozen core contracts only; numpy stays in t
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 
 from rfbench.core.manifest import DatasetManifest
 from rfbench.core.splits import SplitManifest
-from rfbench.data.prepare._common import prepare_from_labels
+from rfbench.data.prepare._common import prepare_from_labels, prepare_from_official
 
 #: The spectrum-sensing datasets this module prepares.
 SensingDataset = Literal["deepsense"]
 
-#: Canonical split id per dataset (baked ratios+seed; changing either bumps task version).
+#: Canonical split id per dataset (baked ratios+seed; changing either bumps task version). Used by
+#: the synthetic stratified path (no official split provided).
 CANONICAL_SPLIT_IDS: dict[str, str] = {
     "deepsense": "sensing-deepsense-8010-seed42-v1",
+}
+
+#: Split id when DeepSense's OWN published train/test partition is adopted verbatim (the real-data
+#: path -- our test IS DeepSense's test). The ``-v<N>`` suffix must match the task version.
+OFFICIAL_SPLIT_IDS: dict[str, str] = {
+    "deepsense": "sensing-deepsense-official-v1",
 }
 
 #: Official source URL recorded in the dataset's manifest (provenance, never redistributed).
@@ -54,6 +61,7 @@ def prepare_sensing(
     *,
     out_dir: str | Path,
     labels: Sequence[int] | None = None,
+    official_split: Mapping[str, Sequence[int]] | None = None,
     source_checksums: dict[str, str] | None = None,
     seed: int = 42,
 ) -> tuple[SplitManifest, DatasetManifest]:
@@ -75,9 +83,22 @@ def prepare_sensing(
         raise ValueError(
             f"unknown sensing dataset {dataset!r}; expected one of {sorted(CANONICAL_SPLIT_IDS)}"
         )
-    split_id = CANONICAL_SPLIT_IDS[dataset]
     source_url = SOURCE_URLS[dataset]
 
+    if official_split is not None:
+        # Real-data path: adopt DeepSense's own train/test partition verbatim (val carved from
+        # train). A paper's number on DeepSense's test set is then comparable on our split.
+        return prepare_from_official(
+            dataset=dataset,
+            split_id=OFFICIAL_SPLIT_IDS[dataset],
+            official=official_split,
+            source_url=source_url,
+            out_dir=out_dir,
+            source_checksums=source_checksums,
+            seed=seed,
+        )
+
+    split_id = CANONICAL_SPLIT_IDS[dataset]
     if labels is None:
         raise ValueError(
             f"{dataset!r} has no canonical split; pass `labels=` as per-window binary occupancy "
@@ -106,6 +127,7 @@ def _check_binary(label: int) -> int:
 __all__ = [
     "SensingDataset",
     "CANONICAL_SPLIT_IDS",
+    "OFFICIAL_SPLIT_IDS",
     "SOURCE_URLS",
     "OCCUPANCY_CLASSES",
     "prepare_sensing",

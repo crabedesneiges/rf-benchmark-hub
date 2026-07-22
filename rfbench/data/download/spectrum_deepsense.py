@@ -147,6 +147,63 @@ def load_deepsense_occupancy(cache: str | Path | None = None) -> list[tuple[obje
     return pairs
 
 
+#: Max windows kept PER DeepSense ``.h5`` file when building the committed split index. Each lte_m
+#: file holds ~470k (train) / ~52k (test) windows; an uncapped split over all SNRs would be a ~30 MB
+#: index. Capping the first-k windows/file keeps it committable (like ORACLE/POWDER) while keeping
+#: DeepSense's official train/test partition; the array loader must apply the SAME cap + sorted-file
+#: order so indices align.
+_DEEPSENSE_WINDOWS_PER_FILE = 8192
+
+
+def load_deepsense_records(
+    cache: str | Path | None = None,
+    *,
+    windows_per_file: int = _DEEPSENSE_WINDOWS_PER_FILE,
+) -> tuple[int, dict[str, list[int]]]:
+    """Build DeepSense's OFFICIAL train/test window partition from the published ``lte_m`` files.
+
+    The published DeepSense LTE-M release ships per-SNR HDF5 files
+    ``deepsense/lte_m/lte_<snr>_32_{train,test}.h5`` -- ``X`` is ``(2, 32, N)`` raw I/Q (2 channels,
+    32-sample window, N windows) and ``y`` is ``(16, N)`` binary per-subband occupancy (multi-label,
+    16 LTE-M bands). This reader adopts that official split verbatim (split-policy:
+    official-if-provided): every ``*_train.h5`` window joins the train pool, every ``*_test.h5``
+    window the test pool (so our test IS DeepSense's test), then a deterministic val slice is carved
+    from the train pool. Only the first ``windows_per_file`` windows of each file are kept (see
+    :data:`_DEEPSENSE_WINDOWS_PER_FILE`) so the committed index stays small. Returns
+    ``(n_items, {"train": [...], "val": [...], "test": [...]})``.
+
+    Reads only the ``y`` dataset SHAPE (fast); h5py is imported lazily. Never called in unit tests.
+    """
+    root = resolve_cache_dir(cache) / _DEEPSENSE_SUBDIR / "lte_m"
+    files = sorted(root.glob("*.h5")) if root.is_dir() else []
+    if not files:
+        raise FileNotFoundError(
+            f"DeepSense not found at {root} (expected lte_m/lte_<snr>_32_{{train,test}}.h5); "
+            "run the download step first.\n" + _DEEPSENSE_MANUAL_HINT
+        )
+    try:
+        import h5py
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(_DEEPSENSE_INSTALL_HINT) from exc
+
+    train: list[int] = []
+    test: list[int] = []
+    index = 0
+    for path in files:
+        with h5py.File(path, "r") as handle:
+            n_windows = int(handle["y"].shape[-1])
+        kept = min(windows_per_file, n_windows) if windows_per_file else n_windows
+        bucket = test if path.name.endswith("_test.h5") else train
+        for _ in range(kept):
+            bucket.append(index)
+            index += 1
+    # Deterministic val carve: every 10th train window (~10% of train), disjoint from train_only.
+    val = train[::10]
+    val_set = set(val)
+    train_only = [i for i in train if i not in val_set]
+    return index, {"train": train_only, "val": val, "test": test}
+
+
 def extract_occupancy_labels(manifest: list[object]) -> list[int]:
     """Map a described per-window occupancy manifest to a list of ``0/1`` labels (pure stdlib).
 
@@ -203,5 +260,6 @@ __all__ = [
     "OCCUPANCY_CLASSES",
     "download_deepsense",
     "load_deepsense_occupancy",
+    "load_deepsense_records",
     "extract_occupancy_labels",
 ]

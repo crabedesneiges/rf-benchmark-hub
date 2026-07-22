@@ -774,7 +774,8 @@ def _sigmf_np_dtype(np_mod: object, meta_path: Path, json_mod: object) -> object
     datatype = str(meta.get("global", {}).get("core:datatype", "cf32_le")).strip()
     table = {
         "cf32_le": np_mod.float32,  # type: ignore[attr-defined]
-        "cf32": np_mod.float32,  # GlobecomPOWDER headers use the un-suffixed spelling.
+        # GlobecomPOWDER headers use the un-suffixed spelling.
+        "cf32": np_mod.float32,  # type: ignore[attr-defined]
         "ci16_le": np_mod.int16,  # type: ignore[attr-defined]
         "cf64_le": np_mod.float64,  # type: ignore[attr-defined]
     }

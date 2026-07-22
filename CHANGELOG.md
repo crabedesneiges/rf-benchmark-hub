@@ -58,6 +58,13 @@ GNSS, WiFi-OTA). Les 11 lignes (même RadioML + même full-SNR `accuracy_overall
 sous-optimisé) reste explicite dans chaque `verification.note`, pas dans le badge. `docs/BIBLIOGRAPHY.md`
 et la note de doctrine ajustés.
 
+Audit de suivi des 23 lignes `from_paper*` du board : **aucun autre tier n'était faux**. Les 4
+`from_paper_uncertain` (ORACLE, wjepa/gnss, wjepa/tprime, tprime-paper) le sont pour une vraie
+différence de population/métrique/régime, pas d'indices de split. Deux notes (`tprime_paper`,
+`wjepa/tprime`) citaient encore « split mismatch » comme motif de downgrade — reformulées pour que la
+raison décisive affichée soit la bonne (métrique per-transmission / régime linear-probe / identité
+dataset non confirmée), le split n'étant qu'un contexte non-décisif. Aucun changement de tier.
+
 ### Added — scaffold tâche `spectrum_sensing` (DeepSense, détection d'occupation pd@pfa)
 
 Nouvelle tâche downstream `spectrum_sensing` (détection binaire d'occupation spectrale), code prêt

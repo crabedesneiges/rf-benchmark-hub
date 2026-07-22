@@ -93,7 +93,7 @@
           "real_or_synthetic": "real (over-the-air, bit-similar frames from 16 identical radios)",
           "conditions": "closed_set only (single receiver -> no cross-receiver / cross-day track)",
           "license": "unstated in repo docs",
-          "split": "80/10/10 stratified by tx, seed 42 (sei-oracle-closedset-strat-tx-8010-seed42-v1)"
+          "split": "single-location (8ft) closed-set, 80/10/10 stratified by tx, seed 42 (sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1) -- adopts the ORACLE-paper same-location protocol so the paper's 98.60% is a from_paper comparison"
         }
       ],
       "primary_metric": {

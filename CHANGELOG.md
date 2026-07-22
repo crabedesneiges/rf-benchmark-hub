@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — ORACLE closed-set aligné sur le protocole du champ (single-location) → `oracle-cnn-paper` devient `from_paper`
+
+Audit protocole (décision : aligner sur la littérature quand c'est le standard rigoureux du champ).
+ORACLE capture les 16 tx à ~11 distances (2..62 ft) ; le protocole **standard du champ** est
+**closed-set single-location** (98.60%, Sankhe 2019), pas un pool multi-distance. Notre split closed-set
+avait divergé (pool toutes distances) → ça rendait `oracle-cnn-paper` `from_paper_uncertain`.
+- `load_oracle_records` / `_load_oracle_arrays` filtrent désormais sur une **distance fixe** (`8ft`,
+  `_ORACLE_CLOSEDSET_DISTANCE`) via `_oracle_distance`. Nouveau split
+  **`sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1`** (16 tx × 2 runs × 1024 fenêtres = 32768,
+  80/10/10 strat-tx). L'ancien split multi-distance est retiré.
+- `oracle-cnn-paper` 0.986 : **`from_paper_uncertain` → `from_paper`** (même dataset + même protocole
+  single-location + même métrique rank1 ; l'accuracy ORACLE closed-set est quasi-invariante en distance).
+  tasks.json / LICENSES / NEXT_STEPS mis à jour.
+- La figure **cross-distance 0.8713** du papier = piste séparée (nouvelle track SEI `cross_distance`) —
+  follow-up.
+
 ### Added — split canonique LoRa RFFI committé ; hygiène cluster (~48 Go libérés)
 
 - **LoRa RFFI** (release gxhen 2022, `dataset_training_aug.h5`, 30 devices) : split closed-set committé

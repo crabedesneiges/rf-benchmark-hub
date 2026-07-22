@@ -1,0 +1,10 @@
+{
+  "canonical_split_id": "sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1",
+  "created_at": "2026-07-22T11:37:53Z",
+  "dataset": "oracle",
+  "n_items": 32768,
+  "seed": 42,
+  "source_checksums": {},
+  "source_url": "https://www.genesys-lab.org/oracle",
+  "split_checksum": "sha256:0546bc3fbe8cb62de5047adc0cb86366e99a45cc17a0f8ae8c3547ea72a8d887"
+}

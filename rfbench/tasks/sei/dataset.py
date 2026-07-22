@@ -304,8 +304,10 @@ def _load_oracle_arrays(
 
     from rfbench.data.prepare._common import resolve_cache_dir
     from rfbench.data.prepare.sei import (
+        _ORACLE_CLOSEDSET_DISTANCE,
         _ORACLE_WINDOW,
         _ORACLE_WINDOWS_PER_CAPTURE,
+        _oracle_distance,
         _oracle_tx_id,
         _sigmf_np_dtype,
     )
@@ -321,6 +323,8 @@ def _load_oracle_arrays(
     iq: list[Any] = []
     records: list[SeiRecord] = []
     for data_path in sorted(root.rglob("*.sigmf-data")):
+        if _oracle_distance(data_path) != _ORACLE_CLOSEDSET_DISTANCE:
+            continue  # canonical closed-set = single fixed distance (matches load_oracle_records)
         tx_id = _oracle_tx_id(data_path.name)
         meta_path = data_path.with_suffix(".sigmf-meta")
         dtype = _sigmf_np_dtype(np, meta_path, json) if meta_path.exists() else np.float32

@@ -23,8 +23,8 @@
   "result_id": "sei-oracle-cnn-paper-oracle-closedset",
   "schema_version": "1.1.0",
   "split": {
-    "canonical_split_id": "sei-oracle-closedset-strat-tx-8010-seed42-v1",
-    "checksum": "sha256:8ad5882415dd9fb3bae89b510524f88cda3242c282d5f2491572196fe96a2964",
+    "canonical_split_id": "sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1",
+    "checksum": "sha256:0546bc3fbe8cb62de5047adc0cb86366e99a45cc17a0f8ae8c3547ea72a8d887",
     "name": "test",
     "seed": 42,
     "track": "closed_set"
@@ -34,7 +34,7 @@
     "version": "v1"
   },
   "verification": {
-    "note": "Reported by the ORACLE authors (Sankhe, Rajendran, Belgiovine, Chowdhury, Ioannidis, 'ORACLE: Optimized Radio clAssification through Convolutional neuraL nEtworks', IEEE INFOCOM 2019, arXiv:1812.01124), NOT reproduced or re-run by this repo. The 0.986 is the paper's closed-set 16-transmitter rank-1 accuracy on the SINGLE static-location experiment (Fig. 6a), raw-IQ window=128, same dataset family + input as our committed split sei-oracle-closedset-strat-tx-8010-seed42-v1. from_paper_UNCERTAIN: the paper's number is a single-location split with a fixed 200K/10K/50K per-device sizing, whereas our canonical split pools all distance folders 80/10/10 stratified-by-tx with a 1024-windows/capture cap -- same dataset, different split/protocol, indices unpublished. A faithful in-repo oracle_cnn run on our split (self_reported) is landing separately and must not be conflated with this literature figure.",
-    "status": "from_paper_uncertain"
+    "note": "Reported by the ORACLE authors (Sankhe, Rajendran, Belgiovine, Chowdhury, Ioannidis, 'ORACLE: Optimized Radio clAssification through Convolutional neuraL nEtworks', IEEE INFOCOM 2019, arXiv:1812.01124), NOT reproduced or re-run by this repo. The 0.986 is the paper's closed-set 16-transmitter rank-1 accuracy on the SINGLE static-location experiment (Fig. 6a), raw-IQ window=128. Upgraded to 'from_paper' (2026-07-22): our canonical ORACLE closed-set split was RE-ALIGNED to the field-standard SINGLE fixed distance (8ft) -- sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1, 16-tx stratified 80/10/10, 1024-windows/capture cap -- matching the paper's same-location protocol (it no longer pools all distances). Same dataset + same single-location closed-set protocol + same metric (rank1); the split-index overlap is unpublished (universal for literature rows) and ORACLE closed-set accuracy is near-invariant across distance, so 8ft is a representative same-location reference for the paper's 0.986. Distinct from a future in-repo oracle_cnn run (self_reported) on this same split. The paper's cross-distance figure (0.8713) is a separate track (see roadmap).",
+    "status": "from_paper"
   }
 }

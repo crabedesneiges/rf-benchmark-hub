@@ -70,7 +70,7 @@ CANONICAL_SPLIT_IDS: dict[str, dict[str, str]] = {
         "open_set": "sei-wisig-openset-heldouttx-8010-seed42-v1",
     },
     "oracle": {
-        "closed_set": "sei-oracle-closedset-strat-tx-8010-seed42-v1",
+        "closed_set": "sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1",
     },
     "lora": {
         "closed_set": "sei-lora-closedset-strat-dev-8010-seed42-v1",
@@ -531,6 +531,8 @@ def load_oracle_records(
     window = _ORACLE_WINDOW
     records: list[SeiRecord] = []
     for data_path in sorted(root.rglob("*.sigmf-data")):
+        if _oracle_distance(data_path) != _ORACLE_CLOSEDSET_DISTANCE:
+            continue  # canonical closed-set = a SINGLE fixed distance (the ORACLE-paper protocol)
         tx_id = _oracle_tx_id(data_path.name)
         # SigMF raw IQ: interleaved I/Q float32 (confirm datatype in the .sigmf-meta).
         meta_path = data_path.with_suffix(".sigmf-meta")
@@ -541,7 +543,8 @@ def load_oracle_records(
         records.extend((tx_id, None, None) for _ in range(n_windows))
     if not records:
         raise FileNotFoundError(
-            f"no ORACLE .sigmf-data captures found under {root}; check the extraction."
+            f"no ORACLE {_ORACLE_CLOSEDSET_DISTANCE} .sigmf-data captures found under {root}; "
+            "check the extraction."
         )
     return records
 
@@ -731,6 +734,32 @@ def _block_len(block: object) -> int:
     if shape is not None:
         return int(shape[0]) if len(shape) else 0
     return len(block)  # type: ignore[arg-type]
+
+
+#: The single fixed capture distance the canonical ORACLE **closed-set** uses. ORACLE captures the
+#: 16 transmitters at ~11 distances (2..62 ft); the paper's headline closed-set 98.60% is a
+#: SAME-LOCATION figure (train + test at one distance), and cross-distance drops to 87.13%. We adopt
+#: the field-standard single-location protocol (not a multi-distance pool) so the paper number is a
+#: clean ``from_paper`` comparison. ORACLE closed-set accuracy is near-invariant across distance, so
+#: the exact choice is representative; ``8ft`` is the common near-field reference.
+_ORACLE_CLOSEDSET_DISTANCE = "8ft"
+
+
+def _oracle_distance(data_path: Path) -> str:
+    """Return an ORACLE capture's distance token (e.g. ``"8ft"``) from its ``<dist>ft/`` folder.
+
+    The raw-IQ release lays capture files under distance folders
+    (``.../oracle/KRI-16Devices-RawData/<dist>ft/WiFi_air_X310_<serial>_<dist>ft_run<n>.sigmf-data``).
+    The immediate parent directory name is the distance; falls back to parsing ``_<dist>ft_`` out of
+    the filename if the folder layout deviates.
+    """
+    parent = data_path.parent.name
+    if parent.endswith("ft"):
+        return parent
+    for token in data_path.name.split("_"):
+        if token.endswith("ft"):
+            return token
+    return ""
 
 
 def _oracle_tx_id(filename: str) -> str:

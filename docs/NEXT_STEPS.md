@@ -33,7 +33,7 @@ Légende **Workflow ?** : `solo` = 1 agent / main-loop ; `WF` = workflow multi-a
 - **RadioML 2018.01a préparé** : split canonique `amc-radioml2018-strat-snr-8010-seed42-v1` committé,
   première baseline réelle 24-class au board (**MCLDNN 0.606** full-SNR, from_scratch). Le dataset
   n'est plus un blocker.
-- **ORACLE préparé** : split canonique `sei-oracle-closedset-strat-tx-8010-seed42-v1` committé (cap de
+- **ORACLE préparé** : split canonique `sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1` committé (cap de
   1024 fenêtres/capture pour borner la taille de l'index, 243 Mo → ~5 Mo). Ligne `from_paper_uncertain`
   au board (0.986) ; repro in-repo en cours.
 - **Bibliographie SOTA consolidée** (`docs/BIBLIOGRAPHY.md`, source de vérité unique — `SOTA_REFERENCE.md`

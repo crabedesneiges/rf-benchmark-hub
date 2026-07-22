@@ -51,13 +51,14 @@ _DEEPSENSE_MANUAL_HINT = (
     "DeepSense is a large OTA wideband-IQ spectrum-sensing dataset distributed manually "
     f"(gated / external host) from the wineslab repo: {DEEPSENSE_REPO}\n"
     "Its license is UNSTATED -- do not re-host it. It is not scraped. Download it manually "
-    "following the repo's instructions, then extract it so the tree looks like:\n"
-    "    <RFBENCH_CACHE>/deepsense/windows.npy    (N x 2 x L raw-IQ windows, or N x L complex)\n"
-    "    <RFBENCH_CACHE>/deepsense/labels.npy     (N binary labels: 0 vacant / 1 occupied)\n"
-    "  (or the per-split equivalents documented in load_deepsense_occupancy)\n"
-    "Pass the resulting root as `cache=` / via $RFBENCH_CACHE.\n"
-    "NOTE: the exact wineslab on-disk binary layout is NOT confirmed in-repo; a cluster run "
-    "must verify it and, if it differs, adjust load_deepsense_occupancy's loader (one function)."
+    "following the repo's instructions and place the published HDF5 files AS-IS (no conversion "
+    "needed -- the loader reads them directly) so the tree looks like:\n"
+    "    <RFBENCH_CACHE>/deepsense/lte_m/lte_<snr>_32_{train,test}.h5\n"
+    "      (X = (2, 32, N) raw I/Q ; y = (16, N) binary per-subband occupancy, 16 LTE-M bands)\n"
+    "    <RFBENCH_CACHE>/deepsense/sdr_wifi/...   (the 4-channel SDR-WiFi subset; unused by the\n"
+    "      board's LTE-M spectrum_sensing split, kept for a future WiFi track)\n"
+    "Pass the resulting root as `cache=` / via $RFBENCH_CACHE. load_deepsense_records reads the\n"
+    "lte_m .h5 files directly to build the split -- do NOT convert to windows.npy/labels.npy."
 )
 
 
@@ -96,7 +97,13 @@ def download_deepsense(
 
 
 def load_deepsense_occupancy(cache: str | Path | None = None) -> list[tuple[object, int]]:
-    """Load per-window ``(iq, label)`` pairs from the extracted DeepSense tree (lazy numpy).
+    """LEGACY single-label ``windows.npy``/``labels.npy`` reader (binary per-window occupancy).
+
+    NOTE: the published DeepSense release is **multi-label** (16 LTE-M sub-bands), not a single
+    binary label, and the canonical split is built by :func:`load_deepsense_records` directly from
+    the ``lte_m/*.h5`` files -- prefer that. This function stays for a pre-reduced single-label
+    ``windows.npy`` + ``labels.npy`` layout (e.g. a synthetic fixture); it is NOT the path used for
+    the real cluster data.
 
     Reads the extracted DeepSense layout under ``$RFBENCH_CACHE/deepsense/`` and returns one
     ``(window, label)`` pair per raw-IQ window, where ``label`` is ``1`` for an occupied window

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — couverture FM sur POWDER : IQFM 96.05% + WirelessJEPA 90.45% (`from_paper_uncertain`, few_shot)
+
+Les 2 FM (IQFM, WirelessJEPA) évaluent sur POWDER RF-fingerprinting — bloqué avant (pas de POWDER sur
+le board), débloqué depuis qu'on a ajouté POWDER. Chiffres **re-lus verbatim** (pdftotext des arXiv) :
+- **IQFM** 96.05% (LoRA few-shot, jusqu'à 200 samples/class ; arXiv:2506.06718, 4 BS USRP X310 802.11a).
+- **WirelessJEPA** 90.45% linear-probe / 87.82% k-NN (500 samples/class ; arXiv:2601.20190).
+
+Ajoutés en `from_paper_uncertain`, régime **few_shot** (colonne séparée de nos baselines `from_scratch`) :
+même dataset POWDER (4 BS, Reus-Muns 2020) + tâche + métrique rank1, mais sous-ensemble WiFi-only (vs
+notre pool 4G/5G/WiFi) et régime few-shot non byte-confirmés → uncertain. Complète la couverture FM :
+les 2 FM ont désormais leur score sur une tâche SEI du board.
+
 ### Changed — LoRa RFFI marqué DEFERRED/OBSOLETE ; ORACLE cross-distance abandonné (vérif = mismatch)
 
 - **LoRa RFFI → deferred/obsolete** : dataset + loader + split committé gardés, mais **plus activement

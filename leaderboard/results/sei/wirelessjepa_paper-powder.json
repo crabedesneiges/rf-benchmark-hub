@@ -1,0 +1,36 @@
+{
+  "dataset": {
+    "name": "powder"
+  },
+  "metrics": {
+    "primary": "rank1_accuracy",
+    "values": {
+      "rank1_accuracy": 0.9045
+    }
+  },
+  "model": {
+    "family": "foundation",
+    "name": "wirelessjepa-paper",
+    "url": "https://arxiv.org/abs/2601.20190"
+  },
+  "regime": {
+    "k_shot": 500,
+    "name": "few_shot"
+  },
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "sei-powder-closedset-sameday-strat-site-8010-seed42-v1",
+    "checksum": "sha256:f7034c3ea634ae51182508257919a2933fc48ab09e6967d6b228c30600610b25",
+    "name": "test",
+    "seed": 42,
+    "track": "closed_set"
+  },
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by WirelessJEPA (Chu, Mashaal, Abou-Zeid, arXiv:2601.20190), linear-probe 500 samples/class: RF Fingerprinting 90.45% (k-NN 87.82%), verbatim from the paper's linear-probing table (verified via pdftotext). POWDER RF fingerprinting = 4 base stations (USRP X310, IEEE 802.11a) on the POWDER PAWR platform (Reus-Muns et al. GLOBECOM 2020), the SAME dataset as our board's POWDER site-ID column. NOT reproduced by this repo. from_paper_UNCERTAIN: (1) FEW-SHOT regime (frozen/adapted FM + light head), a different regime column from our from_scratch baselines; (2) the FM uses the 802.11a WiFi subset whereas our closed_set pools 4G/5G/WiFi waveforms (same-day, single day); (3) split indices unpublished. Same dataset + task (BS identification) + metric (rank1 accuracy), regime/subset not byte-confirmed identical -> uncertain. References our committed POWDER same-day split; a literature coverage point for the FM, never conflated with an in-repo run.",
+    "status": "from_paper_uncertain"
+  }
+}

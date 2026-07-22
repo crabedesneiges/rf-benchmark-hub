@@ -215,6 +215,64 @@ def load_deepsense_records(
     return index, {"train": train_only, "val": val, "test": test}
 
 
+def load_deepsense_arrays(
+    cache: str | Path | None = None,
+    *,
+    windows_per_file: int = _DEEPSENSE_WINDOWS_PER_FILE,
+) -> list[tuple[object, list[int]]]:
+    """Materialise the DeepSense EVAL windows + 16-band labels, aligned with the committed split.
+
+    The published DeepSense LTE-M release ships per-SNR HDF5 files
+    ``deepsense/lte_m/lte_<snr>_32_{train,test}.h5`` where ``X`` is ``(2, 32, N)`` raw I/Q (2
+    channels, 32-sample window, N windows) and ``y`` is ``(16, N)`` binary per-subband occupancy
+    (multi-label, 16 LTE-M bands). This returns one ``(iq, label)`` pair per window, where ``iq``
+    is the ``(2, 32)`` float32 window and ``label`` is the length-16 list of ``0/1`` per-subband
+    occupancy bits -- exactly the per-sample supervision
+    :class:`~rfbench.tasks.spectrum_sensing.dataset.SpectrumSensingDataset` materialises and
+    :class:`~rfbench.tasks.spectrum_sensing.metrics.OccupancyClassification` scores per cell.
+
+    The FLAT window order MUST match :func:`load_deepsense_records` byte-for-byte so the committed
+    ``sensing-deepsense-official-v1`` split indices line up: iterate the ``*.h5`` files in the SAME
+    ``sorted`` order, and keep the SAME first-``kept`` cap per file (``windows_per_file`` for a
+    ``*_train.h5`` file, ``windows_per_file // 8`` for a ``*_test.h5`` file). Reads the real ``X`` /
+    ``y`` datasets (h5py + numpy, imported lazily); NEVER called in unit tests (needs the data +
+    heavy deps). Raises :class:`FileNotFoundError` with the manual-download guidance when the tree
+    is absent.
+    """
+    root = resolve_cache_dir(cache) / _DEEPSENSE_SUBDIR / "lte_m"
+    files = sorted(root.glob("*.h5")) if root.is_dir() else []
+    if not files:
+        raise FileNotFoundError(
+            f"DeepSense not found at {root} (expected lte_m/lte_<snr>_32_{{train,test}}.h5); "
+            "run the download step first.\n" + _DEEPSENSE_MANUAL_HINT
+        )
+    try:
+        import h5py
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(_DEEPSENSE_INSTALL_HINT) from exc
+
+    pairs: list[tuple[object, list[int]]] = []
+    for path in files:
+        is_test = path.name.endswith("_test.h5")
+        # Mirror load_deepsense_records' per-file cap EXACTLY so the flat order aligns with the
+        # committed split (test files capped ~8x smaller than train files).
+        cap = max(1, windows_per_file // 8) if is_test else windows_per_file
+        with h5py.File(path, "r") as handle:
+            x_ds = handle["X"]
+            y_ds = handle["y"]
+            n_windows = int(y_ds.shape[-1])
+            kept = min(cap, n_windows) if windows_per_file else n_windows
+            # Slice the leading ``kept`` windows once (last axis is the window index for both X/y).
+            x_slab = np.asarray(x_ds[..., :kept], dtype=np.float32)  # (2, 32, kept)
+            y_slab = np.asarray(y_ds[..., :kept])  # (16, kept)
+        for j in range(kept):
+            iq = np.ascontiguousarray(x_slab[..., j])  # (2, 32) float32
+            label = [int(bit) for bit in y_slab[..., j]]  # length-16 0/1
+            pairs.append((iq, label))
+    return pairs
+
+
 def extract_occupancy_labels(manifest: list[object]) -> list[int]:
     """Map a described per-window occupancy manifest to a list of ``0/1`` labels (pure stdlib).
 
@@ -272,5 +330,6 @@ __all__ = [
     "download_deepsense",
     "load_deepsense_occupancy",
     "load_deepsense_records",
+    "load_deepsense_arrays",
     "extract_occupancy_labels",
 ]

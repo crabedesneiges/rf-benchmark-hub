@@ -3,21 +3,25 @@
 One :class:`SpectrumSensingDataset` instance is one occupancy-detection dataset variant
 (``deepsense``). It ties the canonical split id + checksum (from
 ``rfbench.data.prepare.sensing``) to a ``load(split, track)`` that yields ``(iq, label)``
-samples, where ``label`` is the binary spectrum-occupancy target (``0`` vacant / ``1``
-occupied).
+samples. DeepSense is MULTI-LABEL: ``label`` is the length-16 per-subband occupancy vector
+(one ``0`` vacant / ``1`` occupied bit per LTE-M sub-band), so the metric scores window×subband
+cells. (The synthetic-fixture path may still inject a scalar ``0/1`` label to exercise the
+binary code path end-to-end.)
 
 Two loading paths share one adapter (mirrors
 :class:`rfbench.tasks.interference_id.dataset.InterferenceDataset`):
 
-* **cluster path** -- :meth:`load` reads the versioned split indices, then the real raw-IQ
-  windows + binary labels from the cached extracted DeepSense tree via a LAZY numpy loader
-  (:func:`rfbench.data.download.spectrum_deepsense.load_deepsense_occupancy`), guarded with a
-  clear ``pip install rfbench[tasks]`` hint. Never touched by unit tests.
+* **cluster path** -- :meth:`load` reads the committed ``sensing-deepsense-official-v1`` split
+  indices, then the real ``(2, 32)`` raw-IQ windows + 16-band labels from the cached extracted
+  DeepSense ``lte_m/*.h5`` tree via a LAZY numpy/h5py loader
+  (:func:`rfbench.data.download.spectrum_deepsense.load_deepsense_arrays`), guarded with a clear
+  ``pip install rfbench[tasks]`` hint. Never touched by unit tests.
 * **synthetic path** -- an in-memory list of per-sample dicts injected at construction
   (``samples=``). :meth:`load` returns it verbatim, so the whole adapter/metric/evaluate path
   runs on pure-Python fixtures with only ``pytest`` installed.
 
-Each per-sample dict is ``{"iq": window, "label": 0/1}`` -- consistent with how
+Each per-sample dict is ``{"iq": window, "label": [0/1]*16}`` (or a scalar ``0/1`` in the binary
+fixture path) -- consistent with how
 :meth:`rfbench.tasks.spectrum_sensing.task.SpectrumSensingTask.build_targets` reads
 ``batch["label"]``. Module-top imports are stdlib + the frozen core contracts only; numpy stays
 lazy.
@@ -32,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 from rfbench.core.dataset import Dataset
 from rfbench.core.splits import SplitManifest
 from rfbench.core.types import Batch, SplitName, Track
-from rfbench.data.prepare.sensing import CANONICAL_SPLIT_IDS
+from rfbench.data.prepare.sensing import CANONICAL_SPLIT_IDS, OFFICIAL_SPLIT_IDS
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import, never executed at runtime
     import torch.utils.data
@@ -91,7 +95,9 @@ class SpectrumSensingDataset(Dataset):
                 f"unknown sensing dataset {name!r}; expected one of {sorted(CANONICAL_SPLIT_IDS)}"
             )
         self.name = name
-        self.canonical_split_id = CANONICAL_SPLIT_IDS[name]
+        # The COMMITTED split adopts DeepSense's own train/test partition verbatim (official id);
+        # the cluster loader reads leaderboard/splits/<name>/<official_id>.idx.json.
+        self.canonical_split_id = OFFICIAL_SPLIT_IDS[name]
         self.checksum = checksum if checksum is not None else _PLACEHOLDER_CHECKSUM
         self._samples = None if samples is None else list(samples)
 
@@ -111,16 +117,18 @@ class SpectrumSensingDataset(Dataset):
     def prepare(self, seed: int = 42) -> SplitManifest:
         """Build the canonical split (delegates to ``rfbench.data.prepare.sensing``).
 
-        Extracts the per-window binary occupancy labels from the cached DeepSense tree (lazy
-        numpy) and stratifies 80/10/10 by occupancy at ``seed``. Never called in unit tests; the
-        real label extraction requires the dataset + heavy deps.
+        Adopts DeepSense's OWN published train/test window partition verbatim (official split):
+        :func:`rfbench.data.download.spectrum_deepsense.load_deepsense_records` reads the
+        ``lte_m/*.h5`` file shapes (lazy h5py) to build the ``{train, val, test}`` index sets, and
+        ``prepare_sensing`` writes the committed ``sensing-deepsense-official-v1`` index. Never
+        called in unit tests; reading the real shapes requires the dataset + heavy deps.
         """
-        from rfbench.data.download.spectrum_deepsense import load_deepsense_occupancy
+        from rfbench.data.download.spectrum_deepsense import load_deepsense_records
         from rfbench.data.prepare.sensing import prepare_sensing
 
-        labels = [label for _iq, label in load_deepsense_occupancy()]
+        _n_items, official_split = load_deepsense_records()
         split, _manifest = prepare_sensing(
-            self.name, out_dir="leaderboard", labels=labels, seed=seed
+            self.name, out_dir="leaderboard", official_split=official_split, seed=seed
         )
         self.canonical_split_id = split.canonical_split_id
         self.checksum = split.checksum
@@ -145,17 +153,17 @@ class SpectrumSensingDataset(Dataset):
     def _load_from_disk(self, split: SplitName) -> _InMemorySensingSplit:
         """Materialise ``(iq, label)`` samples from the prepared split (cluster-only).
 
-        Reads the versioned ``.idx.json`` for ``split`` then slices the cached windows/labels via
-        the lazy loader (numpy inside). The flat sample order MUST match
-        ``rfbench.data.download.spectrum_deepsense.load_deepsense_occupancy``'s order so the split
-        indices align. Never exercised in the dep-free unit venv (needs the real dataset + heavy
-        deps).
+        Reads the committed ``.idx.json`` for ``split`` then slices the cached ``(2, 32)`` windows +
+        16-band labels via the lazy loader (numpy/h5py inside). The flat sample order MUST match
+        ``rfbench.data.download.spectrum_deepsense.load_deepsense_arrays``'s order (same sorted-file
+        + first-``kept`` cap as ``load_deepsense_records``) so the split indices align. Never
+        exercised in the dep-free unit venv (needs the real dataset + heavy deps).
         """
-        from rfbench.data.download.spectrum_deepsense import load_deepsense_occupancy
+        from rfbench.data.download.spectrum_deepsense import load_deepsense_arrays
 
         indices = self._read_split_indices(split)
-        pairs = load_deepsense_occupancy()
-        samples: list[Batch] = [{"iq": pairs[i][0], "label": int(pairs[i][1])} for i in indices]
+        pairs = load_deepsense_arrays()
+        samples: list[Batch] = [{"iq": pairs[i][0], "label": list(pairs[i][1])} for i in indices]
         return _InMemorySensingSplit(samples)
 
     def _read_split_indices(self, split: SplitName) -> list[int]:

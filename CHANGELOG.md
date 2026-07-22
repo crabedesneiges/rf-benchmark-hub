@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — baseline DeepSense CNN + intégration multi-label spectrum_sensing (`from_scratch`)
+
+Implémentation de la baseline **DeepSense CNN** (Uvaydov et al., INFOCOM 2021) et finalisation du
+chemin d'éval **multi-label 16 sous-bandes** de `spectrum_sensing` (le `.h5` réel est `X (2,32,N)`,
+`y (16,N)` ; split committé `sensing-deepsense-official-v1`, 46080 items) :
+
+- **Loader d'éval** (`rfbench/data/download/spectrum_deepsense.py`) : `load_deepsense_arrays` lit
+  les vraies fenêtres `(2,32)` + labels 16-bandes depuis `lte_m/*.h5`, **même ordre flat + cap**
+  (8192/train, 1024/test par fichier) que `load_deepsense_records` → indices alignés sur le split.
+  `SpectrumSensingDataset` charge via ce loader + `OFFICIAL_SPLIT_IDS` ; `prepare()` bascule sur la
+  partition officielle DeepSense.
+- **Métrique multi-label** (`.../spectrum_sensing/metrics.py`) : `OccupancyClassification` (f1
+  primaire) et `PdAtPfa` acceptent des cibles 16-dim, aplaties en **cellules `window×subband`**
+  micro-averagées (`iter_occupancy_cells`). Le chemin binaire scalaire reste exercé par les
+  fixtures. `prepare_predictions` gère les lignes multi-label pour le bootstrap CI.
+- **Modèle** (`rfbench/models/baselines/deepsense_cnn.py`, `@register_model("deepsense_cnn")`) :
+  2×Conv16 k3 → pool → 2×Conv32 k5 → pool → Dense64 → Dense(16). Le `nn.Module` sort des **logits**
+  (BCEWithLogits), le wrapper `Model.forward` applique la **sigmoïde** (probs par sous-bande),
+  `embed` → feature 64-dim.
+- **Trainer** (`rfbench/training_sensing.py`) + CLI **`sensing-train`** : boucle dédiée
+  BCEWithLogitsLoss multi-label, best-val sur **micro-F1**, early-stop ; réutilise les helpers
+  device/seed/checkpoint de `rfbench.training` (boucles AMC/SEI/SNR **intactes**). Script SLURM
+  `slurm/train_sensing_arm.sh` (Adam lr=1e-3, batch 256, 150 ep). Non lancé en local ; le
+  `result.json` sera `self_reported` (non committé, à review).
+- **Tests** : métrique multi-label (cellules, micro-averaging, mismatch) + end-to-end `evaluate`
+  sur fixture 16-bandes (pure-Python) ; forward torch-gated du modèle. `ruff`+`black` clean, suite verte.
+
 ### Added — couverture FM sur POWDER : IQFM 96.05% + WirelessJEPA 90.45% (`from_paper_uncertain`, few_shot)
 
 Les 2 FM (IQFM, WirelessJEPA) évaluent sur POWDER RF-fingerprinting — bloqué avant (pas de POWDER sur

@@ -126,9 +126,9 @@ def test_schema_ids_point_to_crabedesneiges_org() -> None:
 
 
 def test_result_schema_version_enum_is_additive() -> None:
-    """1.2.0 is accepted while the older 1.0.0/1.1.0 rows stay valid (additive)."""
+    """1.3.0 is accepted while the older 1.0.0/1.1.0/1.2.0 rows stay valid (additive)."""
     enum = _result_schema()["properties"]["schema_version"]["enum"]
-    assert enum == ["1.0.0", "1.1.0", "1.2.0"]
+    assert enum == ["1.0.0", "1.1.0", "1.2.0", "1.3.0"]
 
 
 def test_result_1_0_0_without_new_fields_still_validates() -> None:
@@ -180,6 +180,35 @@ def test_result_1_2_0_all_new_fields_round_trip() -> None:
         "training_gpu_hours": 4.5,
     }
     _assert_valid(validator, instance)
+
+
+# --- schema 1.3.0: additive model.n_flops compute proxy (PR-2, Agent 1) ---------
+
+
+def test_result_without_n_flops_still_validates() -> None:
+    """Non-regression: an existing-style row whose model block omits n_flops validates."""
+    validator = Draft202012Validator(_result_schema())
+    instance = _load_json(RESULT_VALID_PATH)
+    assert "n_flops" not in instance["model"]
+    _assert_valid(validator, instance)
+
+
+def test_result_with_n_flops_validates() -> None:
+    """A row carrying the additive model.n_flops (an integer FLOPs proxy) validates."""
+    validator = Draft202012Validator(_result_schema())
+    instance = _load_json(RESULT_VALID_PATH)
+    instance["schema_version"] = "1.3.0"
+    instance["model"]["n_flops"] = 1_200_000_000
+    _assert_valid(validator, instance)
+
+
+def test_result_with_negative_n_flops_is_rejected() -> None:
+    """A negative model.n_flops violates the minimum:0 bound and is rejected."""
+    validator = Draft202012Validator(_result_schema())
+    instance = _load_json(RESULT_VALID_PATH)
+    instance["model"]["n_flops"] = -1
+    with pytest.raises(ValidationError):
+        validator.validate(instance)
 
 
 # --- verified tier: snr_estimation accepted by the submission schema (LOT 2) -----

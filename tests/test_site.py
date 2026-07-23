@@ -339,9 +339,11 @@ def test_scalar_metrics_get_one_column_each(tmp_path: Path) -> None:
     generate.build_site(results, out)
     sei_html = (out / "sei.html").read_text(encoding="utf-8")
 
-    # One header cell per distinct scalar metric (primary uses `<th class="num primary"`,
-    # the rest `<th class="num"`; both share the `<th class="num` prefix).
-    assert sei_html.count('<th class="num') == 3
+    # One header cell per distinct scalar metric (each carries a data-metric hook); the Size
+    # column also renders a `<th class="num size"` but is NOT a metric column (no data-metric),
+    # so counting data-metric headers keeps the "one column per scalar" invariant unambiguous.
+    assert sei_html.count('<th class="num size" data-sortable data-sort="num"') == 1
+    assert len(re.findall(r'<th class="num[^"]*" data-sortable data-metric="', sei_html)) == 3
     # Each metric name appears as a header cell.
     for metric in ("rank1_accuracy", "auroc", "eer"):
         assert f">{metric}<" in sei_html
@@ -2048,13 +2050,19 @@ def test_foundation_ranking_excludes_baselines_from_medals(tmp_path: Path) -> No
     generate.build_site(results, out)
     foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
 
-    assert "mcldnn" not in foundation_html
-    section = foundation_html[foundation_html.index('data-task="amc"') :]
+    # The baseline never enters the foundation RANKING tbody (the medal table), even though it
+    # scores higher: locate the task SECTION (not a selector button) via its unique class prefix.
+    section = foundation_html[foundation_html.index('foundation-task" data-task="amc"') :]
     tbody = section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
     trs = re.findall(r"<tr>.*?</tr>", tbody, re.S)
     assert len(trs) == 2
     assert "\U0001f947" in trs[0] and "iqfm-base" in trs[0]
     assert "\U0001f948" in trs[1] and "wirelessjepa-paper" in trs[1]
+    assert "mcldnn" not in tbody  # the specialist is not in the FM ranking/medals ...
+    # ... but it DOES appear as the labelled best-baseline REFERENCE (the vs-baselines feature).
+    ref = section.split("data-baseline-ref", 1)[1].split("</div>", 1)[0]
+    assert "mcldnn" in ref
+    assert "best baseline" in ref
 
 
 def test_single_competitor_group_gets_gold_and_beyond_third_has_no_medal(tmp_path: Path) -> None:
@@ -2075,8 +2083,10 @@ def test_single_competitor_group_gets_gold_and_beyond_third_has_no_medal(tmp_pat
     foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
 
     # TASK_ORDER puts "sei" before "wideband_detection" -> sei's section comes first.
-    sei_start = foundation_html.index('data-task="sei"')
-    wd_start = foundation_html.index('data-task="wideband_detection"')
+    # Target the task SECTIONS (unique class prefix), not the new selector buttons that also
+    # carry data-task.
+    sei_start = foundation_html.index('foundation-task" data-task="sei"')
+    wd_start = foundation_html.index('foundation-task" data-task="wideband_detection"')
     sei_section = foundation_html[sei_start:wd_start]
     solo_tbody = sei_section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
     assert "\U0001f947" in solo_tbody  # sole competitor in its group still gets gold.
@@ -2230,9 +2240,15 @@ def test_foundation_rows_reuse_existing_verification_badge_and_show_regime_track
     assert 'class="chip chip-track"' in foundation_html
 
 
-def test_foundation_page_has_no_inline_script(tmp_path: Path) -> None:
-    """foundation.html carries no board script, like guide/methods (native <title>
-    tooltips only, no legend-toggle/sort/filter script the way full task pages carry)."""
+def test_foundation_page_has_only_minimal_gated_script(tmp_path: Path) -> None:
+    """foundation.html carries the head theme-boot script PLUS exactly one small gated script
+    (the task selector + "Include baselines" toggle) -- and never the full board script.
+
+    So: exactly two ``<script>`` blocks, no ``sortTable`` (not the board script), and the
+    no-JS degradation holds -- neither a ``.foundation-task`` section nor a baseline reference
+    is hidden by default CSS, so with JS off every section AND the baseline reference stay
+    visible; only the controls bar is CSS-hidden until ``body.js-on``.
+    """
     results = tmp_path / "results"
     out = tmp_path / "site"
     _make_results_tree(results)
@@ -2242,8 +2258,17 @@ def test_foundation_page_has_no_inline_script(tmp_path: Path) -> None:
     )
     generate.build_site(results, out)
     foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
-    assert foundation_html.count("<script>") == 1
+    # Head theme boot + the one minimal gated foundation script = 2, and NOT the board script.
+    assert foundation_html.count("<script>") == 2
     assert "sortTable" not in foundation_html
+    # The controls bar is gated (hidden until body.js-on); no default rule hides a section.
+    css = generate.render_styles()
+    assert ".foundation-controls { display: none; }" in css
+    assert "body.js-on .foundation-controls { display: flex; }" in css
+    assert ".foundation-task { display: none" not in css  # no section is hidden by default
+    # With JS off the baseline reference is present and VISIBLE (no default is-hidden on it).
+    assert 'class="baseline-reference" data-baseline-ref' in foundation_html
+    assert 'class="baseline-reference is-hidden"' not in foundation_html
 
 
 def test_render_foundation_is_self_contained() -> None:
@@ -2267,6 +2292,239 @@ def test_foundation_page_css_present() -> None:
     assert ".chip-track {" in css
     assert ".medal { font-size: 1.1rem; }" in css
     assert ".global-podium { margin-bottom: 2rem; }" in css
+
+
+# --------------------------------------------------------------------------------------------------
+# Agent 1: model size + n_flops compute proxy + the size/perf Pareto scatter
+# (schema 1.3.0 `model.n_flops`; generate.py _render_size_cell / _pareto_frontier /
+# _render_pareto_scatter). All rows below are synthetic/in-tree.
+# --------------------------------------------------------------------------------------------------
+def _sized_amc_row(
+    result_id: str,
+    model_name: str,
+    accuracy: float,
+    *,
+    n_params: int | None = None,
+    n_flops: int | None = None,
+    family: str = "baseline",
+    regime: str = "linear_probe",
+) -> dict[str, Any]:
+    """An AMC row with explicit control over ``model.n_params`` / ``model.n_flops`` (or neither)."""
+    model: dict[str, Any] = {"name": model_name, "family": family}
+    if n_params is not None:
+        model["n_params"] = n_params
+    if n_flops is not None:
+        model["n_flops"] = n_flops
+    schema_version = "1.3.0" if n_flops is not None else "1.0.0"
+    return {
+        "schema_version": schema_version,
+        "result_id": result_id,
+        "task": {"name": "amc", "version": "v1"},
+        "model": model,
+        "regime": {"name": regime},
+        "dataset": {"name": "radioml_2016_10a"},
+        "split": {
+            "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+            "name": "test",
+            "seed": 42,
+            "checksum": "sha256:" + "0" * 64,
+        },
+        "metrics": {"primary": "accuracy_overall", "values": {"accuracy_overall": accuracy}},
+        "verification": {"status": "self_reported"},
+    }
+
+
+def test_size_column_present_and_sortable_on_leaderboard_table(tmp_path: Path) -> None:
+    """The leaderboard table carries a sortable Size column; its cell shows params (and a muted
+    FLOPs sub-line when n_flops is present) and carries data-value = n_flops if present else
+    n_params, so the generic board sort orders by compute/size."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "a.json",
+        _sized_amc_row("row-a", "big", 0.80, n_params=2_300_000, n_flops=1_200_000_000),
+    )
+    _write(results / "amc" / "b.json", _sized_amc_row("row-b", "small", 0.70, n_params=90_000))
+    _write(results / "amc" / "c.json", _sized_amc_row("row-c", "unsized", 0.60))
+    generate.build_site(results, out)
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+
+    # A sortable Size header (num + data-sortable + data-sort="num"), exactly one per table.
+    assert (
+        '<th class="num size" data-sortable data-sort="num" aria-sort="none" tabindex="0">Size'
+        in amc
+    )
+    # params on the main line; FLOPs on the muted sub-line only for the row that declares them.
+    assert '<span class="size-params">2.3M</span>' in amc
+    assert '<span class="size-flops">1.2G FLOPs</span>' in amc
+    assert '<span class="size-params">90K</span>' in amc
+    # data-value = n_flops when present, else n_params; the unsized row gets a muted en-dash cell.
+    assert 'data-value="1200000000"' in amc  # FLOPs preferred over params for sorting
+    assert 'data-value="90000"' in amc
+    assert '<td class="num size"><span class="size-params">&ndash;</span></td>' in amc
+    # The inline params span next to the model name is gone (params moved into the Size column).
+    assert 'class="params"' not in amc
+
+
+def test_size_column_present_on_foundation_table(tmp_path: Path) -> None:
+    """The foundation mini-table also renders a Size column with the same params/FLOPs cell."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "f.json",
+        {
+            **_foundation_row("row-f", "amc", "iqfm-base", "linear_probe", 0.8),
+            "schema_version": "1.3.0",
+        },
+    )
+    # give the foundation row a size
+    row = json.loads((results / "amc" / "f.json").read_text())
+    row["model"]["n_params"] = 90_000
+    _write(results / "amc" / "f.json", row)
+    generate.build_site(results, out)
+    foundation = (out / "foundation.html").read_text(encoding="utf-8")
+    assert '<th class="num size" data-sortable data-sort="num"' in foundation
+    assert '<span class="size-params">90K</span>' in foundation
+
+
+def test_pareto_scatter_present_when_two_sized_points(tmp_path: Path) -> None:
+    """A task with >=2 models carrying size data renders the size/perf Pareto scatter (labelled
+    an efficiency/reference view spanning regimes, NOT a ranking)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(results / "amc" / "a.json", _sized_amc_row("row-a", "big", 0.80, n_params=2_300_000))
+    _write(results / "amc" / "b.json", _sized_amc_row("row-b", "small", 0.70, n_params=90_100))
+    generate.build_site(results, out)
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+
+    assert 'aria-label="accuracy_overall vs model size scatter"' in amc
+    assert 'class="pareto-front"' in amc  # the frontier staircase is drawn
+    assert "parameters (log scale)" in amc  # axis names the size proxy in use
+    # Explicit efficiency/reference labelling (spans regimes, not a ranking).
+    assert "Efficiency / reference view" in amc
+
+
+def test_pareto_scatter_uses_flops_axis_when_any_row_declares_it(tmp_path: Path) -> None:
+    """When ANY row declares n_flops the scatter's X axis switches to FLOPs (the
+    hardware-independent compute proxy), naming it in the axis title."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "a.json",
+        _sized_amc_row("row-a", "big", 0.80, n_params=2_300_000, n_flops=1_200_000_000),
+    )
+    _write(results / "amc" / "b.json", _sized_amc_row("row-b", "small", 0.70, n_flops=90_000_000))
+    generate.build_site(results, out)
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+    assert "FLOPs (log scale)" in amc
+    assert "parameters (log scale)" not in amc
+
+
+def test_pareto_scatter_skipped_below_two_sized_points(tmp_path: Path) -> None:
+    """A task with fewer than 2 sized models renders no Pareto scatter (graceful degradation);
+    a size-less point is dropped, not silently placed at an arbitrary size."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(results / "amc" / "a.json", _sized_amc_row("row-a", "sized", 0.80, n_params=90_100))
+    _write(results / "amc" / "b.json", _sized_amc_row("row-b", "unsized", 0.70))
+    generate.build_site(results, out)
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+    assert "vs model size scatter" not in amc
+
+
+def test_pareto_scatter_on_foundation_page_when_sized(tmp_path: Path) -> None:
+    """The Pareto scatter also renders on the foundation page for a task whose foundation rows
+    carry size data (>=2), and foundation markers read apart via a dashed outline."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    for rid, name, val, npar in (
+        ("f1", "iqfm-base", 0.80, 90_100),
+        ("f2", "wjepa", 0.75, 2_300_000),
+    ):
+        row = _foundation_row(rid, "amc", name, "linear_probe", val)
+        row["schema_version"] = "1.3.0"
+        row["model"]["n_params"] = npar
+        _write(results / "amc" / f"{rid}.json", row)
+    generate.build_site(results, out)
+    foundation = (out / "foundation.html").read_text(encoding="utf-8")
+    assert 'aria-label="accuracy_overall vs model size scatter"' in foundation
+    # foundation family => dashed marker outline (a non-colour family channel).
+    assert 'stroke-dasharray="7 4"' in foundation
+
+
+def test_pareto_frontier_dominance_and_ties() -> None:
+    """`_pareto_frontier` returns the non-dominated set sorted by x, keeps exact ties, handles a
+    single point, and inverts correctly for a lower-is-better y."""
+    P = generate.ParetoPoint
+    # Higher-is-better y: 'a' cheapest, 'b' best score; 'c' is dominated by 'b' (>= x, <= y).
+    fr = generate._pareto_frontier([P(1.0, 0.5, "a"), P(2.0, 0.9, "b"), P(3.0, 0.7, "c")])
+    assert [p.label for p in fr] == ["a", "b"]  # sorted by x ascending
+    # A strictly dominated point drops out: 'lo' has more params AND worse score than 'hi'.
+    fr2 = generate._pareto_frontier([P(10.0, 0.9, "hi"), P(20.0, 0.6, "lo")])
+    assert [p.label for p in fr2] == ["hi"]
+    # Exact (x, y) ties do not dominate one another -> both are kept.
+    tied = generate._pareto_frontier([P(1.0, 0.5, "a"), P(1.0, 0.5, "dup"), P(2.0, 0.4, "b")])
+    assert sorted(p.label for p in tied) == ["a", "dup"]
+    # Single point is trivially non-dominated.
+    assert [p.label for p in generate._pareto_frontier([P(5.0, 0.3, "solo")])] == ["solo"]
+    # Lower-is-better y (a regression error): smaller y is better.
+    lb = generate._pareto_frontier(
+        [P(1.0, 2.0, "a"), P(2.0, 1.0, "b"), P(3.0, 3.0, "c")], y_lower_is_better=True
+    )
+    assert [p.label for p in lb] == ["a", "b"]  # 'c' dominated (more params, larger error)
+
+
+def test_pareto_scatter_respects_lower_is_better_metric(tmp_path: Path) -> None:
+    """On a lower-is-better task (snr_estimation rmse_db) the scatter labels the perf direction
+    as 'lower is better' -- the Pareto direction follows the metric, not the task."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    for i, (name, rmse, npar) in enumerate([("small", 3.0, 50_000), ("big", 2.0, 5_000_000)]):
+        _write(
+            results / "snr_estimation" / f"r{i}.json",
+            {
+                "schema_version": "1.0.0",
+                "result_id": f"row-{i}",
+                "task": {"name": "snr_estimation", "version": "v1"},
+                "model": {"name": name, "family": "baseline", "n_params": npar},
+                "regime": {"name": "from_scratch"},
+                "dataset": {"name": "radioml_2016_10a"},
+                "split": {
+                    "canonical_split_id": "snr-estimation-synth-8010-seed42-v1",
+                    "name": "test",
+                    "seed": 42,
+                    "checksum": "sha256:" + "3" * 64,
+                },
+                "metrics": {"primary": "rmse_db", "values": {"rmse_db": rmse}},
+                "verification": {"status": "self_reported"},
+            },
+        )
+    generate.build_site(results, out)
+    snr = (out / "snr_estimation.html").read_text(encoding="utf-8")
+    # The figcaption (which carries the direction arrow) precedes the svg; slice from it.
+    start = snr.index('<figcaption class="plot-title">rmse_db vs model size')
+    figure = snr[start : snr.index("</figure>", start)]
+    assert "&darr; lower is better" in figure
+    assert 'aria-label="rmse_db vs model size scatter"' in figure
+
+
+def test_guide_documents_size_and_compute(tmp_path: Path) -> None:
+    """The Guide has a 'Model size & compute' section (id=size-compute) explaining FLOPs as the
+    hardware-independent proxy vs the hardware-specific inference_latency_ms, and the glossary
+    defines n_params and n_flops."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+    guide = (out / "guide.html").read_text(encoding="utf-8")
+    assert 'id="size-compute"' in guide
+    assert "Model size &amp; compute" in guide
+    assert "FLOPs" in guide
+    assert "hardware-independent" in guide
+    assert "inference_latency_ms" in guide
+    # Glossary rows for the two size/compute quantities.
+    assert ">n_params<" in guide
+    assert ">n_flops<" in guide
 
 
 # --- Sprint 2 (adoption) additions ---
@@ -2377,3 +2635,144 @@ def test_theme_toggle_present_and_progressive(tmp_path: Path) -> None:
     assert "html.theme-js .theme-toggle { display: inline-flex; }" in css
     assert ':root[data-theme="dark"]' in css
     assert ':root:not([data-theme="light"])' in css
+
+
+# --------------------------------------------------------------------------------------------------
+# Agent 2: dataset selector (task pages), Foundation task selector, vs-baselines reference/toggle.
+# All rows below are synthetic/in-tree; no task/model/dataset name is hardcoded in the generator.
+# --------------------------------------------------------------------------------------------------
+def _amc_row_on(result_id: str, model_name: str, accuracy: float, dataset: str) -> dict[str, Any]:
+    """An AMC row placed on an explicit dataset (for the multi-dataset selector tests)."""
+    row = _amc_row(result_id, model_name, "linear_probe", accuracy, "self_reported")
+    row["dataset"] = {"name": dataset}
+    return row
+
+
+def test_multi_dataset_task_renders_dataset_selector_and_keeps_all_groups(
+    tmp_path: Path,
+) -> None:
+    """A task spanning >1 dataset gets a segmented dataset selector; every dataset's .group
+    section is present and carries data-dataset. Progressive enhancement: the selector bar is
+    CSS-hidden until body.js-on and NO group is hidden by default CSS (JS-off shows all)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(results / "amc" / "a.json", _amc_row_on("row-a", "iqfm", 0.71, "radioml_2016_10a"))
+    _write(results / "amc" / "b.json", _amc_row_on("row-b", "mcldnn", 0.66, "radioml_2018_01a"))
+    generate.build_site(results, out)
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+
+    assert 'class="dataset-selector"' in amc
+    assert 'data-dataset="radioml_2016_10a"' in amc
+    assert 'data-dataset="radioml_2018_01a"' in amc
+    # Both dataset groups are rendered (each is its own .group with data-dataset).
+    assert 'section class="group" data-dataset="radioml_2016_10a"' in amc
+    assert 'section class="group" data-dataset="radioml_2018_01a"' in amc
+    # The first dataset button is the default-selected one.
+    assert (
+        '<button type="button" class="board-seg board-seg-active" '
+        'data-dataset="radioml_2016_10a" aria-pressed="true">' in amc
+    )
+    # Progressive enhancement + no-JS degradation.
+    css = generate.render_styles()
+    assert ".dataset-selector, .foundation-controls { display: none; }" in css
+    assert "body.js-on .dataset-selector { display: flex; }" in css
+    assert ".group { display: none" not in css  # a group is NEVER hidden by default CSS
+
+
+def test_single_dataset_task_renders_no_dataset_selector(tmp_path: Path) -> None:
+    """A single-dataset task page renders NO dataset selector (unchanged, clean)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)  # amc rows here all share radioml_2016_10a
+    generate.build_site(results, out)
+    amc = (out / "amc.html").read_text(encoding="utf-8")
+    sei = (out / "sei.html").read_text(encoding="utf-8")
+    assert 'class="dataset-selector"' not in amc
+    assert 'class="dataset-selector"' not in sei
+
+
+def test_foundation_page_has_task_selector_with_all_option(tmp_path: Path) -> None:
+    """foundation.html carries a task selector: an 'All' option plus one button per task that
+    has foundation results (each targeting a .foundation-task via data-task). All is default."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "f.json",
+        _foundation_row("row-fa", "amc", "iqfm-base", "linear_probe", 0.8),
+    )
+    _write(
+        results / "sei" / "f.json",
+        _foundation_row("row-fs", "sei", "iqfm-base", "linear_probe", 0.7),
+    )
+    generate.build_site(results, out)
+    foundation = (out / "foundation.html").read_text(encoding="utf-8")
+
+    assert 'class="foundation-controls"' in foundation
+    assert (
+        '<button type="button" class="board-seg board-seg-active" data-task="all" '
+        'aria-pressed="true">All</button>' in foundation
+    )
+    # A selector button per task with foundation results (targets the .foundation-task section).
+    assert '<button type="button" class="board-seg" data-task="amc"' in foundation
+    assert '<button type="button" class="board-seg" data-task="sei"' in foundation
+    # The task selector's own script shows only the picked section (no board sort/filter script).
+    assert "getAttribute('data-task')" in foundation
+    assert "sortTable" not in foundation
+
+
+def test_foundation_page_include_baselines_toggle_and_reference(tmp_path: Path) -> None:
+    """The Foundation page carries an 'Include baselines' toggle and, for a task with baseline
+    rows, a labelled best-baseline REFERENCE (one per track) that is NOT merged into the FM
+    ranking, plus a baseline-inclusive Pareto scatter. The reference is VISIBLE with JS off."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _write(
+        results / "amc" / "base.json",
+        _sized_amc_row("row-base", "mcldnn", 0.99, n_params=2_000_000, regime="from_scratch"),
+    )
+    row = _foundation_row("row-f", "amc", "iqfm-base", "linear_probe", 0.80)
+    row["schema_version"] = "1.3.0"
+    row["model"]["n_params"] = 90_000
+    _write(results / "amc" / "f.json", row)
+    generate.build_site(results, out)
+    foundation = (out / "foundation.html").read_text(encoding="utf-8")
+
+    # The toggle (a .board-toggle checkbox, like "Verified only").
+    assert 'id="foundation-baselines"' in foundation
+    assert ">Include baselines<" in foundation
+    # A best-baseline reference block, clearly labelled a reference (not merged with the FMs).
+    assert "data-baseline-ref" in foundation
+    assert "best baseline" in foundation
+    assert "reference, not ranked with the foundation models" in foundation
+    # The best baseline is named in the reference (family chip "baseline" + its regime + score).
+    section = foundation[foundation.index('foundation-task" data-task="amc"') :]
+    ref = section.split("data-baseline-ref", 1)[1].split("</div>", 1)[0]
+    assert "mcldnn" in ref
+    assert 'class="chip chip-baseline"' in ref
+    # ...but NOT in the FM ranking tbody (invariant: baselines never in the FM ranking/medals).
+    tbody = section.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    assert "mcldnn" not in tbody
+    # A baseline-inclusive Pareto scatter is present (efficiency/reference, spanning regimes).
+    assert "data-baseline-pareto" in foundation
+    # Progressive enhancement: the baseline surfaces render VISIBLE (no default is-hidden).
+    assert 'class="baseline-reference" data-baseline-ref' in foundation
+    assert (
+        "is-hidden"
+        not in foundation.split("data-baseline-ref", 1)[0].rsplit("baseline-reference", 1)[-1]
+    )
+
+
+def test_best_baseline_per_track_picks_top_specialist(tmp_path: Path) -> None:
+    """_best_baseline_per_track returns the best specialist per track (top of _sort_rows),
+    one entry per distinct track, ordered with the default 'all' bucket first."""
+    rows = [
+        _sei_row("r1", "weak", "closed_set", 0.50),
+        _sei_row("r2", "strong", "closed_set", 0.94),
+        _sei_row("r3", "solo", "cross_receiver", 0.60),
+    ]
+    best = generate._best_baseline_per_track(rows)
+    tracks = [t for t, _r in best]
+    assert tracks == ["closed_set", "cross_receiver"]
+    by_track = {t: r for t, r in best}
+    assert by_track["closed_set"]["model"]["name"] == "strong"  # top specialist of the track
+    assert by_track["cross_receiver"]["model"]["name"] == "solo"

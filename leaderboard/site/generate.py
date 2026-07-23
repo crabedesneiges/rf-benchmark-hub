@@ -75,6 +75,7 @@ import argparse
 import ast
 import html
 import json
+import math
 import re
 import sys
 import zlib
@@ -408,6 +409,36 @@ _GUIDE: dict[str, Any] = {
             "predicted and true SNR. Secondary snr_estimation metric; lower is better.",
             False,
         ),
+        (
+            "n_params",
+            "Total trainable parameter count of the evaluated model (including any adapter head) "
+            "-- its capacity. Shown in the Size column; a smaller model at equal accuracy is the "
+            "cheaper, more deployable choice, so lower is the frugal direction.",
+            False,
+        ),
+        (
+            "n_flops",
+            "FLOPs (or MACs) for a single forward pass at the task's fixed input size -- a "
+            "hardware-independent compute proxy that is deterministic and comparable across "
+            "GPUs/CPUs. When declared it drives the Size column's sub-line and the size axis of "
+            "the size/perf Pareto scatter; lower means less compute per inference.",
+            False,
+        ),
+    ),
+    "size_compute": (
+        "Two model-cost signals sit beside every score. n_params is the model's capacity (its "
+        "total trainable parameter count, adapter head included) -- more parameters can fit more, "
+        "but cost more memory and, roughly, more compute. n_flops (or MACs) counts the arithmetic "
+        "of a single forward pass at the task's FIXED input size: it is a HARDWARE-INDEPENDENT "
+        "compute proxy -- deterministic and directly comparable across GPUs, CPUs and runs, "
+        "because it never touches a clock. inference_latency_ms is the measured complement: an "
+        "actual wall-clock time, so it is faster to read but HARDWARE-SPECIFIC (a GB200 and a "
+        "laptop CPU report wildly different numbers for the same model), which is why a latency "
+        "figure must ALWAYS be reported with the hardware it was measured on. On the board, "
+        "n_params always shows in the Size column, n_flops adds a muted FLOPs sub-line when "
+        "declared, and the size/perf Pareto scatter plots accuracy against size (FLOPs when any "
+        "row has them, else parameters) on a log axis -- an efficiency view spanning regimes, not "
+        "a ranking."
     ),
     "contamination": (
         "Foundation-model rows may disclose what their backbone was pretrained on and whether "
@@ -1095,6 +1126,78 @@ def _fmt_params(n_params: object) -> str:
     return str(n_params)
 
 
+def _fmt_flops(n_flops: object) -> str:
+    """Format a FLOPs/MACs count compactly with an SI suffix (e.g. 90.1M, 1.2G).
+
+    Mirrors :func:`_fmt_params`' human units but adds a Giga (``G``) tier, since a single
+    forward pass is routinely billions of FLOPs. Returns an en-dash for a missing/non-integer
+    value so a caller can fall back gracefully. The trailing ``FLOPs`` word is added by the
+    caller (the sub-line), not here, so this stays a pure number formatter.
+    """
+    if not isinstance(n_flops, int):
+        return "&ndash;"
+    if n_flops >= 1_000_000_000:
+        return f"{n_flops / 1_000_000_000:.1f}G"
+    if n_flops >= 1_000_000:
+        return f"{n_flops / 1_000_000:.1f}M"
+    if n_flops >= 1_000:
+        return f"{n_flops / 1_000:.0f}K"
+    return str(n_flops)
+
+
+def _model_n_params(row: dict[str, Any]) -> int | None:
+    """Return the row's ``model.n_params`` when it is a non-negative int, else ``None``."""
+    value = row["model"].get("n_params")
+    return value if isinstance(value, int) and value >= 0 else None
+
+
+def _model_n_flops(row: dict[str, Any]) -> int | None:
+    """Return the row's ``model.n_flops`` compute proxy (schema 1.3.0) when present, else ``None``.
+
+    ``n_flops`` is the hardware-independent FLOPs/MACs count for one forward pass at the task's
+    fixed input size. Optional and absent on every current row -- returns ``None`` unless the
+    field is a non-negative int, so size rendering degrades to ``n_params`` (or an en-dash).
+    """
+    value = row["model"].get("n_flops")
+    return value if isinstance(value, int) and value >= 0 else None
+
+
+def _size_sort_value(row: dict[str, Any]) -> int | None:
+    """The numeric value the Size column sorts on: ``n_flops`` if present, else ``n_params``.
+
+    A compute proxy (FLOPs) is preferred over raw capacity (params) when available, so the
+    generic board sort on the Size column orders by compute where declared and by parameter
+    count otherwise. ``None`` when the row declares neither (its cell sorts last / as -inf).
+    """
+    flops = _model_n_flops(row)
+    return flops if flops is not None else _model_n_params(row)
+
+
+def _render_size_cell(row: dict[str, Any]) -> str:
+    """Render the sortable Size ``<td>``: params (main line) + FLOPs (muted sub-line) if any.
+
+    The cell always shows the parameter count via :func:`_fmt_params` (an en-dash when absent);
+    when ``model.n_flops`` is declared a muted second line shows the FLOPs (e.g. ``1.2G FLOPs``).
+    The ``data-value`` attribute carries the numeric sort key (:func:`_size_sort_value`) -- FLOPs
+    when present, else params -- so the generic board sort (``data-sort="num"`` reading
+    ``data-value``) orders the column by compute/size. When neither is present the cell shows a
+    muted en-dash and carries NO ``data-value`` (it sorts last, like an empty metric cell).
+    """
+    n_params = _model_n_params(row)
+    n_flops = _model_n_flops(row)
+    sort_value = _size_sort_value(row)
+    value_attr = f' data-value="{sort_value}"' if sort_value is not None else ""
+    if n_params is None and n_flops is None:
+        return f'<td class="num size"{value_attr}><span class="size-params">&ndash;</span></td>'
+    params_line = f'<span class="size-params">{_fmt_params(n_params)}</span>'
+    flops_line = (
+        f'<span class="size-flops">{_fmt_flops(n_flops)} FLOPs</span>'
+        if n_flops is not None
+        else ""
+    )
+    return f'<td class="num size"{value_attr}>{params_line}{flops_line}</td>'
+
+
 def _fmt_axis(value: float) -> str:
     """Format an axis tick label (drops a trailing ``.0`` for integer-valued ticks)."""
     if value == int(value):
@@ -1341,6 +1444,58 @@ def _metric_uncertainty(row: dict[str, Any], key: str) -> tuple[float, float] | 
     return None
 
 
+class ParetoPoint(NamedTuple):
+    """One point for the size/perf Pareto analysis: cost ``x`` (lower=better) + perf ``y``.
+
+    ``label`` (a model name) rides along so :func:`_pareto_frontier` can return the identity of
+    each non-dominated point without the caller re-matching on floats.
+    """
+
+    x: float  # cost proxy (model size / FLOPs) -- LOWER is better
+    y: float  # performance (the group's primary metric)
+    label: str  # model name (carried through, never used in dominance)
+
+
+def _pareto_frontier(
+    points: list[ParetoPoint], *, y_lower_is_better: bool = False
+) -> list[ParetoPoint]:
+    """Return the non-dominated (Pareto-optimal) subset of ``points``, sorted by ``x`` ascending.
+
+    Cost ``x`` is ALWAYS lower-is-better (a smaller model / fewer FLOPs is cheaper). The
+    performance direction is set by ``y_lower_is_better`` -- ``False`` (default) treats a HIGHER
+    ``y`` as better (accuracy-like metrics), ``True`` treats a LOWER ``y`` as better (a
+    regression error such as ``rmse_db``).
+
+    A point ``p`` is DOMINATED iff some other point ``q`` is at-least-as-good on BOTH axes
+    (``q.x <= p.x`` and ``q`` at-least-as-good in ``y``) with at least ONE strict inequality;
+    the frontier is every point that is NOT dominated. Duplicate ``(x, y)`` points do not
+    dominate one another (no strict inequality), so exact ties are all kept. Pure and
+    side-effect-free; sorted by ``x`` so the caller can draw a monotone staircase.
+    """
+
+    def _y_at_least_as_good(a: float, b: float) -> bool:
+        """Is ``a`` at least as good as ``b`` in the perf axis (per the direction flag)?"""
+        return a <= b if y_lower_is_better else a >= b
+
+    def _y_strictly_better(a: float, b: float) -> bool:
+        return a < b if y_lower_is_better else a > b
+
+    frontier: list[ParetoPoint] = []
+    for p in points:
+        dominated = False
+        for q in points:
+            if q is p:
+                continue
+            better_or_equal = q.x <= p.x and _y_at_least_as_good(q.y, p.y)
+            strictly_better = q.x < p.x or _y_strictly_better(q.y, p.y)
+            if better_or_equal and strictly_better:
+                dominated = True
+                break
+        if not dominated:
+            frontier.append(p)
+    return sorted(frontier, key=lambda pt: pt.x)
+
+
 def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
     """Render an inline-SVG bar chart for one scalar metric: X = model, Y = performance.
 
@@ -1456,10 +1611,207 @@ def _render_bar_chart(metric_key: str, rows: list[dict[str, Any]]) -> str:
     )
 
 
+def _render_pareto_scatter(rows: list[dict[str, Any]]) -> str:
+    """Render the size/perf Pareto scatter: X = model size (log), Y = the primary metric.
+
+    THE headline efficiency view: one marker per model, X = a compute/size cost on a LOG scale
+    (``model.n_flops`` if ANY row declares it, else ``model.n_params`` -- the axis title names
+    which), Y = the group's primary metric (direction respects :func:`_is_lower_better`). Markers
+    reuse the board's stable channels (:func:`_model_hue` + :func:`_marker_shape` +
+    :func:`_family_dash`) so baseline vs foundation read apart, and carry the same ``data-*``
+    tooltip hooks as the other charts. The Pareto FRONTIER (:func:`_pareto_frontier`: minimise
+    size, optimise perf) is drawn as a staircase polyline.
+
+    Rows with NO size data are dropped (a size-less point cannot be placed on a size axis); when
+    any are dropped a caption note names how many (no silent truncation). The whole plot is
+    SKIPPED (returns ``""``) when fewer than 2 points carry size -- a single point cannot show a
+    tradeoff. This view intentionally SPANS regimes/tracks (an efficiency/reference view, not a
+    ranking), which the caption states explicitly.
+    """
+    if not rows:
+        return ""
+    primary_key = _primary_key(rows[0])
+    lower = _is_lower_better(primary_key)
+    # X axis = FLOPs when ANY row declares it (a hardware-independent compute proxy), else params.
+    use_flops = any(_model_n_flops(r) is not None for r in rows)
+
+    def _size_of(row: dict[str, Any]) -> int | None:
+        return _model_n_flops(row) if use_flops else _model_n_params(row)
+
+    sized: list[tuple[str, int, float, str | None]] = []
+    dropped = 0
+    for row in rows:
+        size = _size_of(row)
+        # A size of 0 cannot sit on a log axis (log10(0) is undefined) -> treat it as unsized.
+        if size is None or size <= 0:
+            dropped += 1
+            continue
+        sized.append(
+            (str(row["model"]["name"]), size, _primary_value(row), _family(row)),
+        )
+    if dropped:
+        _warn(
+            f"pareto scatter ({primary_key}): dropped {dropped} point(s) with no positive "
+            f"{'n_flops' if use_flops else 'n_params'} size data"
+        )
+    if len(sized) < 2:
+        return ""
+
+    axis_label = "FLOPs (log scale)" if use_flops else "parameters (log scale)"
+    frontier = _pareto_frontier(
+        [ParetoPoint(x=float(s), y=v, label=n) for n, s, v, _fam in sized],
+        y_lower_is_better=lower,
+    )
+
+    log_xs = [math.log10(s) for _n, s, _v, _f in sized]
+    xmin, xmax = min(log_xs), max(log_xs)
+    if xmax == xmin:
+        xmin, xmax = xmin - 0.5, xmax + 0.5
+    else:
+        pad = (xmax - xmin) * 0.06
+        xmin, xmax = xmin - pad, xmax + pad
+    values = [v for _n, _s, v, _f in sized]
+    ymax = max(values) * 1.08
+    ymin = min(0.0, min(values))
+    if ymax <= ymin:
+        ymax = ymin + 1.0
+
+    width, height = 720, 340
+    pad_l, pad_r, pad_t, pad_b = 56, 16, 20, 56
+    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+
+    def sx(log_x: float) -> float:
+        return pad_l + (log_x - xmin) / (xmax - xmin) * plot_w
+
+    def sy(y: float) -> float:
+        return pad_t + (ymax - y) / (ymax - ymin) * plot_h
+
+    parts: list[str] = [
+        f'<svg class="plot" viewBox="0 0 {width} {height}" role="group" '
+        f'aria-label="{_esc(primary_key)} vs model size scatter" '
+        f'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
+    ]
+    # Y gridlines + ticks.
+    for i in range(6):
+        yval = ymin + (ymax - ymin) * i / 5
+        y = sy(yval)
+        parts.append(_svg_line("grid", pad_l, y, pad_l + plot_w, y))
+        parts.append(
+            f'<text class="tick" x="{pad_l - 6:.1f}" y="{y + 3:.1f}" '
+            f'text-anchor="end">{_esc(_fmt_axis(yval))}</text>'
+        )
+    # X gridlines + ticks at decade (integer log10) boundaries within range, labelled in size units.
+    first_decade = math.ceil(xmin)
+    last_decade = math.floor(xmax)
+    decades = list(range(int(first_decade), int(last_decade) + 1))
+    tick_logs = [float(d) for d in decades] if decades else [xmin, xmax]
+    for log_x in tick_logs:
+        x = sx(log_x)
+        parts.append(_svg_line("grid", x, pad_t, x, pad_t + plot_h))
+        size_val = int(round(10**log_x))
+        label = _fmt_flops(size_val) if use_flops else _fmt_params(size_val)
+        parts.append(
+            f'<text class="tick" x="{x:.1f}" y="{pad_t + plot_h + 16:.1f}" '
+            f'text-anchor="middle">{label}</text>'
+        )
+    parts.append(_svg_line("axis", pad_l, pad_t + plot_h, pad_l + plot_w, pad_t + plot_h))
+    parts.append(_svg_line("axis", pad_l, pad_t, pad_l, pad_t + plot_h))
+    ty = pad_t + plot_h / 2
+    parts.append(
+        f'<text class="axis-title" x="14" y="{ty:.1f}" text-anchor="middle" '
+        f'transform="rotate(-90 14 {ty:.1f})">{_esc(primary_key)}</text>'
+    )
+    parts.append(
+        f'<text class="axis-title" x="{pad_l + plot_w / 2:.1f}" y="{height - 4:.1f}" '
+        f'text-anchor="middle">{_esc(axis_label)}</text>'
+    )
+
+    # Pareto frontier staircase (drawn behind the markers). A staircase between two frontier
+    # points steps horizontally at the better perf then vertically, so it never implies an
+    # unobserved point is achievable.
+    if len(frontier) >= 2:
+        stair: list[str] = []
+        prev: ParetoPoint | None = None
+        for pt in frontier:
+            px, py = sx(math.log10(pt.x)), sy(pt.y)
+            if prev is None:
+                stair.append(f"{px:.1f},{py:.1f}")
+            else:
+                stair.append(f"{px:.1f},{sy(prev.y):.1f}")
+                stair.append(f"{px:.1f},{py:.1f}")
+            prev = pt
+        parts.append(
+            f'<polyline class="pareto-front" fill="none" stroke="var(--accent)" '
+            f'stroke-width="1.5" stroke-dasharray="4 3" points="{" ".join(stair)}"/>'
+        )
+
+    model_order = sorted({n for n, _s, _v, _f in sized})
+    shape_for_model = {name: _marker_shape(i) for i, name in enumerate(model_order)}
+    for name, size, val, family in sized:
+        cx, cy = sx(math.log10(size)), sy(val)
+        color = _model_hue(name)
+        shape = shape_for_model[name]
+        # Family as a non-colour channel (mirrors the curve plots): a foundation model gets a
+        # dashed marker outline, a baseline none, so the two families read apart in greyscale.
+        dash = _family_dash(family)
+        fam_stroke = (
+            ""
+            if dash == "none"
+            else f' stroke="{color}" stroke-width="1" stroke-dasharray="{dash}"'
+        )
+        size_label = _fmt_flops(size) if use_flops else _fmt_params(size)
+        unit = "FLOPs" if use_flops else "params"
+        title = _esc(f"{name}: {size_label} {unit} → {_fmt_metric(val)}")
+        fam_attr = f' data-family="{_esc(family)}"' if family else ""
+        extra = (
+            f' class="pt" data-model="{_esc(name)}"{fam_attr}'
+            f' data-x="{_esc(f"{size_label} {unit}")}"'
+            f' data-metric="{_esc(primary_key)}" data-y="{_fmt_metric(val)}"'
+            f'{fam_stroke} tabindex="0" role="img" aria-label="{title}">'
+            f"<title>{title}</title>"
+        )
+        elem = _marker_svg(shape, cx, cy, 4.0, color, extra)
+        close = (
+            "</rect>" if shape == "square" else ("</circle>" if shape == "circle" else "</polygon>")
+        )
+        parts.append(elem + close)
+    parts.append("</svg>")
+
+    legend_items = "".join(
+        '<span class="legend-item">'
+        '<svg class="legend-swatch" viewBox="0 0 24 10" aria-hidden="true">'
+        f"{_marker_svg(shape_for_model[name], 12, 5, 3.0, _model_hue(name), '/>')}"
+        "</svg>"
+        f"<span>{_esc(name)}</span></span>"
+        for name in model_order
+    )
+    legend = f'<div class="legend">{legend_items}</div>'
+    arrow = "&darr; lower is better" if lower else "&uarr; higher is better"
+    dropped_note = (
+        f' <span class="plot-dir">&middot; {dropped} model(s) without size data omitted</span>'
+        if dropped
+        else ""
+    )
+    return (
+        '<figure class="plot-figure">'
+        f'<figcaption class="plot-title">{_esc(primary_key)} vs model size '
+        f'<span class="plot-dir">{arrow}</span>{dropped_note}</figcaption>'
+        f'{"".join(parts)}{legend}'
+        '<p class="note plot-note">Efficiency / reference view &mdash; spans every regime and '
+        "track (not a ranking). The dashed staircase is the size/perf Pareto frontier.</p>"
+        "</figure>"
+    )
+
+
 # --------------------------------------------------------------------------------------------------
 # Table rendering (a column per discovered scalar metric)
 #: Cap for the SHORT badge tooltip (the full note lives in the provenance <details> block).
 _BADGE_NOTE_MAX: int = 160
+
+#: The sort-direction caret appended to a sortable ``<th>`` (CSS-hidden until ``body.js-on`` --
+#: no dead affordance with JS off). Shared by the leaderboard tables and the foundation Size
+#: header so both stamp identical markup.
+_SORT_CARET: str = '<span class="sort-caret" aria-hidden="true"></span>'
 
 
 def _shorten(text: str, limit: int = _BADGE_NOTE_MAX) -> str:
@@ -1660,13 +2012,14 @@ def _render_row(
     *,
     overlaps_above: bool = False,
 ) -> str:
-    """Render one ``<tr>``: rank, model (+family chip, +params), each scalar, status.
+    """Render one ``<tr>``: rank, model (+family chip), size, each scalar, status.
 
     A cell is rendered for EVERY discovered scalar metric so no metric is left out; a metric
     absent from this particular row shows an en-dash. The primary column carries the score
     bar and is visually emphasised, plus its confidence interval (schema 1.2.0) when known;
     ``overlaps_above`` flags a CI overlap with the preceding row (annotation only, never a
-    reorder -- see :func:`_sort_rows`).
+    reorder -- see :func:`_sort_rows`). Model size/compute (params + optional n_flops) lives in
+    its OWN sortable Size column (see :func:`_render_size_cell`), keeping the model cell clean.
     """
     model = row["model"]
     name = _esc(model["name"])
@@ -1677,7 +2030,7 @@ def _render_row(
         name = f'<a href="{_esc(url)}">{name}</a>'
     chip = _render_family_chip(_family(row))
     overlap_badge = _render_overlap_badge(row)
-    params = _fmt_params(model.get("n_params"))
+    size_cell = _render_size_cell(row)
     lower_is_better = _is_lower_better(primary_key)
 
     values = _scalar_values(row)
@@ -1707,8 +2060,8 @@ def _render_row(
     return (
         f'<tr data-model="{_esc(str(model["name"]))}"{family_attr} data-verified="{verified}">'
         f'<td class="rank num">{rank_html}</td>'
-        f'<td class="model"><span class="model-name">{name}</span>{chip}{overlap_badge}'
-        f'<span class="params">{params}</span></td>'
+        f'<td class="model"><span class="model-name">{name}</span>{chip}{overlap_badge}</td>'
+        f"{size_cell}"
         f"{''.join(metric_cells)}"
         f'<td class="status">{badge}</td>'
         "</tr>"
@@ -1734,7 +2087,7 @@ def _render_group_table(
     primary_max = max((_primary_value(r) for r in ordered), default=1.0)
     overlap_flags = _overlap_with_above(ordered)
 
-    caret = '<span class="sort-caret" aria-hidden="true"></span>'
+    caret = _SORT_CARET
     head_metric_cells = "".join(
         (
             f'<th class="num primary" data-sortable data-metric="{_esc(k)}" data-sort="num" '
@@ -1751,6 +2104,8 @@ def _render_group_table(
         '<th class="rank">#</th>'
         f'<th class="model" data-sortable data-sort="text" aria-sort="none" tabindex="0">'
         f"Model{caret}</th>"
+        f'<th class="num size" data-sortable data-sort="num" aria-sort="none" tabindex="0">'
+        f"Size{caret}</th>"
         f"{head_metric_cells}"
         '<th class="status">Status</th>'
         "</tr></thead>"
@@ -2132,6 +2487,36 @@ def _page_description_for(entry: DeclaredTask | None, title: str) -> str:
     return f"{title} leaderboard on RF-Benchmark-Hub — {_SITE_TAGLINE}."
 
 
+def _render_dataset_selector(datasets: list[str]) -> str:
+    """Render the multi-dataset segmented selector for a task page (>1 dataset only).
+
+    A segmented button group (same look/markup family as ``_render_board_controls``'s family
+    control) listing every dataset of the task; the board script shows only the ``.group``
+    sections whose ``data-dataset`` matches the picked one and hides the rest. Progressive
+    enhancement: the whole ``.dataset-selector`` bar is CSS-hidden until ``body.js-on`` (no dead
+    control with JS off) AND, crucially, with JS off NO group is hidden -- the selector never
+    emits a default-hidden rule, so every dataset section stays visible. The first dataset is the
+    default active button. Callers pass this only when ``len(datasets) > 1``; a single-dataset
+    task renders no selector at all.
+    """
+    buttons: list[str] = []
+    for i, dataset in enumerate(datasets):
+        active = " board-seg-active" if i == 0 else ""
+        pressed = "true" if i == 0 else "false"
+        buttons.append(
+            f'<button type="button" class="board-seg{active}" '
+            f'data-dataset="{_esc(dataset)}" aria-pressed="{pressed}">{_esc(dataset)}</button>'
+        )
+    return (
+        '<div class="dataset-selector" role="region" aria-label="Dataset selector">'
+        '<span class="dataset-selector-label">Dataset</span>'
+        '<div class="board-segmented" role="group" aria-label="Choose dataset">'
+        f'{"".join(buttons)}'
+        "</div>"
+        "</div>"
+    )
+
+
 def _render_board_controls() -> str:
     """Render the per-task-page interactive controls bar (search + verified toggle + family).
 
@@ -2295,6 +2680,23 @@ def render_task_page(
     details_card = _render_task_details_card(entry, task_name, rows)
     submit_card = _render_submit_card()
     controls = _render_board_controls()
+    # A dataset selector ONLY when the task spans more than one dataset (segmented control; the
+    # board script filters the .group sections by data-dataset). Single-dataset tasks: no selector.
+    dataset_selector = (
+        _render_dataset_selector(sorted({dataset for dataset, _r, _k, _t in groups}))
+        if multi_dataset
+        else ""
+    )
+    # One size/perf Pareto scatter over EVERY model of the task (efficiency/reference view that
+    # deliberately spans regimes/tracks -- clearly labelled as such in its own caption). Skipped
+    # when fewer than 2 models carry size data.
+    pareto = _render_pareto_scatter(rows)
+    pareto_html = (
+        f'<section class="efficiency-section"><h3 class="group-title">Size vs performance</h3>'
+        f'<div class="plots">{pareto}</div></section>'
+        if pareto
+        else ""
+    )
     body = (
         '<section class="task">'
         f'<p class="breadcrumb"><a href="index.html">Tasks</a> / {_esc(title)}</p>'
@@ -2310,7 +2712,9 @@ def render_task_page(
         "maintainer-verified rows vs self-reported ones.</p>"
         f"{_render_tier_legend()}"
         f"{controls}"
+        f"{dataset_selector}"
         f"{''.join(sections)}"
+        f"{pareto_html}"
         "</div>"
         '<aside class="task-sidebar-right">'
         f"{details_card}{submit_card}"
@@ -3031,6 +3435,7 @@ def _render_foundation_group_table(
             "<tr>"
             f'<td class="rank num">{_render_medal_rank(rank)}</td>'
             f'<td class="model"><span class="model-name">{name}</span></td>'
+            f"{_render_size_cell(row)}"
             f'<td class="tags">{tags}</td>'
             f'<td class="num primary"><span class="metric-val">{value}</span></td>'
             "</tr>"
@@ -3039,6 +3444,8 @@ def _render_foundation_group_table(
         "<thead><tr>"
         '<th class="rank">#</th>'
         '<th class="model">Model</th>'
+        '<th class="num size" data-sortable data-sort="num" aria-sort="none" tabindex="0">'
+        f"Size{_SORT_CARET}</th>"
         '<th class="tags">Regime / Track / Status</th>'
         f'<th class="num primary">{_esc(primary_key)}</th>'
         "</tr></thead>"
@@ -3202,8 +3609,76 @@ def _render_foundation_scatter(rows: list[dict[str, Any]]) -> str:
     )
 
 
+def _best_baseline_per_track(
+    baseline_rows: list[dict[str, Any]],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return ``(track, best_row)`` for each track present among ``baseline_rows``, ordered.
+
+    The best baseline of a track is the top row of :func:`_sort_rows` restricted to that track
+    (same primary-metric direction + trust tiebreak the board uses everywhere). Tracks are
+    ordered with the default ``all`` bucket first, then alphabetically (:func:`_track_sort_key`).
+    This is a per-track REFERENCE (one specialist number to beat), never a ranking merged with
+    the foundation competitors.
+    """
+    by_track: dict[str, list[dict[str, Any]]] = {}
+    for row in baseline_rows:
+        by_track.setdefault(_track_name(row), []).append(row)
+    out: list[tuple[str, dict[str, Any]]] = []
+    for track in sorted(by_track, key=_track_sort_key):
+        out.append((track, _sort_rows(by_track[track])[0]))
+    return out
+
+
+def _render_baseline_reference(baseline_rows: list[dict[str, Any]]) -> str:
+    """Render the best-baseline REFERENCE block for a task (one line per track).
+
+    Shown on the Foundation page when "Include baselines" is on: for each track, the single best
+    specialist result (family chip ``baseline``, its regime, its primary score) as the number the
+    foundation models are measured against. Explicitly labelled a REFERENCE, NOT a ranking merged
+    with the FMs -- it is a cross-regime specialist yardstick, deliberately outside the FM podium.
+    Returns ``""`` when the task has no baseline rows. Rendered VISIBLE by default so the info is
+    present with JS off; the toggle hides it (JS on + unchecked) via the ``is-hidden`` class.
+    """
+    best = _best_baseline_per_track(baseline_rows)
+    if not best:
+        return ""
+    lines: list[str] = []
+    for track, row in best:
+        model = row["model"]
+        name = _esc(str(model["name"]))
+        url = model.get("url") or _method_anchor(str(model["name"]))
+        if isinstance(url, str) and url:
+            name = f'<a href="{_esc(url)}">{name}</a>'
+        track_chip = _render_track_chip(track)
+        value = _fmt_metric(_primary_value(row))
+        primary = _esc(_primary_key(row))
+        lines.append(
+            '<li class="baseline-ref-row">'
+            '<span class="baseline-ref-tag">best baseline</span>'
+            f"{_render_family_chip('baseline')}"
+            f'<span class="chip chip-regime">{_esc(_regime_label(row))}</span>'
+            f"{track_chip}"
+            f'<span class="baseline-ref-model model-name">{name}</span>'
+            f'<span class="baseline-ref-score">{primary} = <strong>{value}</strong></span>'
+            "</li>"
+        )
+    return (
+        '<div class="baseline-reference" data-baseline-ref>'
+        '<p class="baseline-reference-title">Best baseline &mdash; reference, not ranked '
+        "with the foundation models</p>"
+        '<p class="note">A cross-regime specialist yardstick per track (the number to beat), '
+        "shown for context. It is a REFERENCE only &mdash; deliberately outside the foundation "
+        "podium above, never merged into that ranking.</p>"
+        f'<ul class="baseline-reference-list">{"".join(lines)}</ul>'
+        "</div>"
+    )
+
+
 def _render_foundation_task_section(
-    task_name: str, rows: list[dict[str, Any]], declared: dict[str, DeclaredTask]
+    task_name: str,
+    rows: list[dict[str, Any]],
+    declared: dict[str, DeclaredTask],
+    baseline_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     """One task's foundation-only section: stacked ``(regime, track)`` mini-tables + a scatter.
 
@@ -3211,7 +3686,17 @@ def _render_foundation_task_section(
     Groups are partitioned and ordered exactly like :func:`render_task_page` (same
     :func:`_regime_track_sort_key`), so a group here never mixes two regimes nor two tracks --
     every group renders its OWN mini-table, stacked vertically, never merged into one table.
+
+    ``baseline_rows`` (this task's ``family != "foundation"`` rows) drive the vs-baselines
+    surfaces added by the "Include baselines" toggle: a per-track best-baseline REFERENCE block
+    (:func:`_render_baseline_reference`) and baseline points in the size/perf Pareto scatter
+    (which reuses :func:`_render_pareto_scatter` with foundation+baseline rows -- markers already
+    distinguish family). Both are cross-regime efficiency/reference views, never rankings merged
+    with the FM podium; both render VISIBLE by default (usable with JS off) and are hidden by the
+    toggle when JS is on and the box is unchecked. When there are no baseline rows nothing extra
+    is emitted, so the section is byte-identical to before for a baseline-less task.
     """
+    baseline_rows = baseline_rows or []
     groups: dict[tuple[str, int | None, str], list[dict[str, Any]]] = {}
     for row in rows:
         groups.setdefault((_regime_name(row), _k_shot(row), _track_name(row)), []).append(row)
@@ -3220,14 +3705,33 @@ def _render_foundation_task_section(
         _render_foundation_group(regime, track, groups[(regime, k, track)])
         for (regime, k, track) in ordered_keys
     )
+    baseline_reference = _render_baseline_reference(baseline_rows)
+    # Two complementary numeric views, both spanning regimes (efficiency/reference, not rankings):
+    # the existing frugality scatter (adaptation cost) + the size/perf Pareto scatter (compute
+    # cost). The Pareto scatter is skipped when fewer than 2 foundation rows carry size data.
     scatter = _render_foundation_scatter(rows)
-    scatter_html = f'<div class="plots">{scatter}</div>' if scatter else ""
+    pareto = _render_pareto_scatter(rows)
+    plots = "".join(p for p in (scatter, pareto) if p)
+    scatter_html = f'<div class="plots">{plots}</div>' if plots else ""
+    # A SECOND Pareto scatter that also plots the baseline specialists (family markers already
+    # read apart), so the FM-vs-specialist size/perf tradeoff is visible. Hidden by default when
+    # JS is on and the toggle is unchecked; shown with JS off (info present without JS). Skipped
+    # when fewer than 2 foundation+baseline rows carry size data (same graceful-degradation rule).
+    pareto_with_baselines = _render_pareto_scatter(rows + baseline_rows)
+    baseline_pareto_html = (
+        '<div class="plots baseline-pareto" data-baseline-pareto>'
+        '<p class="note">Size vs performance with the baseline specialists included '
+        "(efficiency/reference view spanning regimes, not a ranking).</p>"
+        f"{pareto_with_baselines}</div>"
+        if (baseline_rows and pareto_with_baselines)
+        else ""
+    )
     title = _task_title(task_name, declared)
     return (
         f'<section class="foundation-task" data-task="{_esc(task_name)}">'
         f'<h3 class="foundation-task-title">'
         f'<a href="{_esc(task_name)}.html">{_esc(title)}</a></h3>'
-        f"{group_sections}{scatter_html}"
+        f"{group_sections}{baseline_reference}{scatter_html}{baseline_pareto_html}"
         "</section>"
     )
 
@@ -3298,6 +3802,87 @@ def _render_global_podium(grouped: dict[str, list[dict[str, Any]]]) -> str:
     )
 
 
+def _render_foundation_task_selector(task_ids: list[str], declared: dict[str, DeclaredTask]) -> str:
+    """Render the Foundation page's task selector (an "All" option + one per task with results).
+
+    A segmented control (same look/markup family as the task-page controls) listing every task
+    that has foundation results; the foundation script shows only the ``.foundation-task`` section
+    whose ``data-task`` matches the pick and hides the rest, with "All" showing everything.
+    Progressive enhancement: the whole ``.foundation-controls`` bar is CSS-hidden until
+    ``body.js-on`` and, with JS off, NO section is hidden (the control emits no default-hidden
+    rule), so every task section stays visible. "All" is the default active button.
+    """
+    buttons: list[str] = [
+        '<button type="button" class="board-seg board-seg-active" data-task="all" '
+        'aria-pressed="true">All</button>'
+    ]
+    for task_id in task_ids:
+        title = _task_title(task_id, declared)
+        buttons.append(
+            f'<button type="button" class="board-seg" data-task="{_esc(task_id)}" '
+            f'aria-pressed="false">{_esc(title)}</button>'
+        )
+    return (
+        '<div class="foundation-controls" role="region" aria-label="Foundation controls">'
+        '<div class="foundation-task-select">'
+        '<span class="dataset-selector-label">Task</span>'
+        '<div class="board-segmented" role="group" aria-label="Choose task">'
+        f'{"".join(buttons)}'
+        "</div></div>"
+        '<label class="board-toggle"><input type="checkbox" id="foundation-baselines">'
+        "<span>Include baselines</span></label>"
+        "</div>"
+    )
+
+
+#: The Foundation page's SMALL gated script -- vanilla JS, no dependencies. It adds
+#: ``body.js-on`` (revealing the CSS-hidden controls), wires the task selector (show only the
+#: picked ``.foundation-task`` / all), and the "Include baselines" toggle (show/hide the
+#: best-baseline reference blocks + the baseline-inclusive Pareto scatters, which render VISIBLE
+#: by default so the info is there with JS off). It is NOT the board script: no table sort /
+#: row filter / legend toggle, and it never contains the substring "sortTable".
+_FOUNDATION_JS: str = """
+(function () {
+  document.body.classList.add('js-on');
+
+  var sections = document.querySelectorAll('.foundation-task');
+  var taskButtons = document.querySelectorAll('.foundation-task-select .board-seg');
+  taskButtons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      taskButtons.forEach(function (b) {
+        b.classList.remove('board-seg-active');
+        b.setAttribute('aria-pressed', 'false');
+      });
+      btn.classList.add('board-seg-active');
+      btn.setAttribute('aria-pressed', 'true');
+      var pick = btn.getAttribute('data-task') || 'all';
+      sections.forEach(function (sec) {
+        sec.hidden = !(pick === 'all' || sec.getAttribute('data-task') === pick);
+      });
+    });
+  });
+
+  var baselineToggle = document.getElementById('foundation-baselines');
+  var baselineBits = document.querySelectorAll('[data-baseline-ref], [data-baseline-pareto]');
+  function applyBaselines() {
+    var on = baselineToggle && baselineToggle.checked;
+    baselineBits.forEach(function (el) { el.classList.toggle('is-hidden', !on); });
+  }
+  if (baselineToggle) { baselineToggle.addEventListener('change', applyBaselines); }
+  applyBaselines();  // default unchecked -> hide the baseline surfaces once JS is on
+})();
+"""
+
+
+def render_foundation_scripts() -> str:
+    """Return the Foundation page's minimal gated script (``_FOUNDATION_JS``).
+
+    A named accessor mirroring :func:`render_scripts`; injected verbatim into foundation.html's
+    ``extra_body`` (inside a ``<script>`` tag). Constant content -> deterministic build.
+    """
+    return _FOUNDATION_JS
+
+
 def render_foundation(
     grouped: dict[str, list[dict[str, Any]]], declared: dict[str, DeclaredTask]
 ) -> str:
@@ -3326,12 +3911,15 @@ def render_foundation(
     )
 
     task_sections_list: list[str] = []
+    task_ids_with_foundation: list[str] = []
     for task_name in sorted(grouped, key=_task_sort_key):
         foundation_rows = _foundation_rows(grouped[task_name])
         if not foundation_rows:
             continue
+        task_ids_with_foundation.append(task_name)
+        baseline_rows = [r for r in grouped[task_name] if _family(r) != "foundation"]
         task_sections_list.append(
-            _render_foundation_task_section(task_name, foundation_rows, declared)
+            _render_foundation_task_section(task_name, foundation_rows, declared, baseline_rows)
         )
 
     if not task_sections_list:
@@ -3351,15 +3939,22 @@ def render_foundation(
         return _page("Foundation Models — RF-Benchmark-Hub", body, current=_FOUNDATION_SLUG)
 
     podium = _render_global_podium(grouped)
+    controls = _render_foundation_task_selector(task_ids_with_foundation, declared)
     body = (
         '<section class="task guide">'
         '<h1 class="task-title">Foundation Models</h1>'
         f"{intro}"
+        f"{controls}"
         f"{podium}"
         f"{''.join(task_sections_list)}"
         "</section>"
     )
-    return _page("Foundation Models — RF-Benchmark-Hub", body, current=_FOUNDATION_SLUG)
+    return _page(
+        "Foundation Models — RF-Benchmark-Hub",
+        body,
+        current=_FOUNDATION_SLUG,
+        extra_body=f"<script>{render_foundation_scripts()}</script>",
+    )
 
 
 def render_guide() -> str:
@@ -3401,6 +3996,10 @@ def render_guide() -> str:
         '<span class="badge badge-overlap-unknown">overlap unknown</span> not audited &middot; '
         '<span class="badge badge-overlap-confirmed">contaminated</span> known overlap'
         "</p>"
+        "</section>"
+        '<section class="guide-section" id="size-compute">'
+        "<h2>Model size &amp; compute</h2>"
+        f'<p>{_esc(_GUIDE["size_compute"])}</p>'
         "</section>"
         f"{_render_glossary_section()}"
         "</section>"
@@ -3800,8 +4399,12 @@ td.num.primary .metric-val { font-weight: 700; }
 }
 .model { min-width: 12rem; }
 .model-name { font-weight: 600; }
-.params {
-  display: inline-block; margin-left: 0.5rem; color: var(--muted); font-size: 0.78rem;
+td.num.size, th.num.size { white-space: nowrap; }
+.size-params {
+  display: block; color: var(--fg); font-size: 0.82rem; font-variant-numeric: tabular-nums;
+}
+.size-flops {
+  display: block; margin-top: 0.05rem; color: var(--muted); font-size: 0.66rem;
   font-variant-numeric: tabular-nums;
 }
 .bar {
@@ -3870,7 +4473,9 @@ td.num.primary .metric-val { font-weight: 700; }
 .plot .errbar { stroke: var(--fg); stroke-width: 1.4; }
 .plot .bar-val { fill: var(--fg); font-size: 10px; font-family: var(--font-mono); }
 .plot .bar-label { fill: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+.plot .pareto-front { opacity: 0.85; }
 .plot-dir { color: var(--muted); font-weight: 400; font-size: 0.78rem; }
+.plot-note { margin-top: 0.4rem; font-size: 0.76rem; }
 .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin-top: 0.5rem; }
 .legend-item {
   display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--muted);
@@ -4225,6 +4830,50 @@ body.js-on .home-sort { display: inline-flex; }
 .board-seg:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .no-match td { color: var(--muted); font-style: italic; text-align: center; }
 
+/* Multi-dataset selector (task pages) + Foundation task selector / baselines toggle.
+   Progressive enhancement: both bars are hidden until body.js-on (no dead control with JS off),
+   and NEITHER emits any rule that hides a .group / .foundation-task by default -- so with JS off
+   every dataset group and every task section stays visible. */
+.dataset-selector, .foundation-controls { display: none; }
+body.js-on .dataset-selector { display: flex; }
+body.js-on .foundation-controls { display: flex; }
+.dataset-selector, .foundation-controls {
+  flex-wrap: wrap; align-items: center; gap: 0.5rem 0.9rem; margin: 0 0 1.25rem;
+}
+.dataset-selector-label {
+  font-size: 0.8rem; font-weight: 600; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.dataset-selector .board-seg[aria-pressed="true"],
+.foundation-task-select .board-seg[aria-pressed="true"] {
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
+}
+.foundation-task-select { display: inline-flex; align-items: center; gap: 0.5rem; }
+
+/* Best-baseline reference block (Foundation page). Rendered VISIBLE by default (usable with JS
+   off); the "Include baselines" toggle hides it via .is-hidden when JS is on and unchecked. */
+.is-hidden { display: none; }
+.baseline-reference {
+  margin: 0.75rem 0 1.25rem; padding: 0.85rem 1rem; border: 1px dashed var(--line-strong);
+  border-radius: var(--radius); background: var(--surface-2);
+}
+.baseline-reference-title {
+  margin: 0 0 0.35rem; font-family: var(--font-heading); font-weight: 600; font-size: 0.92rem;
+}
+.baseline-reference-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.baseline-ref-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem;
+  padding: 0.3rem 0; border-top: 1px solid var(--line);
+}
+.baseline-ref-row:first-child { border-top: none; }
+.baseline-ref-tag {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--muted);
+}
+.baseline-ref-model { font-family: var(--font-mono); font-size: 0.85rem; }
+.baseline-ref-score { margin-left: auto; font-family: var(--font-mono); font-size: 0.85rem; }
+.baseline-pareto { margin-top: 0.5rem; }
+
 /* Sortable table headers: the caret + pointer + hover affordance are GATED behind body.js-on,
    exactly like .board-controls -- with JS off the click/keydown handlers never bind, so the
    header must not advertise a sort it cannot perform (no dead affordance). The focus ring is
@@ -4435,6 +5084,36 @@ _BOARD_JS: str = """
       applyRowFilters();
     });
   });
+
+  // ---- Multi-dataset selector: show only the picked dataset's .group sections ----
+  // Rendered ONLY when the task has >1 dataset (else the selector is absent). With JS off every
+  // .group stays visible (no default-hidden CSS); this handler just narrows the view when JS is on.
+  var datasetButtons = document.querySelectorAll('.dataset-selector .board-seg');
+  var groupSections = document.querySelectorAll('section.group[data-dataset]');
+  datasetButtons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      datasetButtons.forEach(function (b) {
+        b.classList.remove('board-seg-active');
+        b.setAttribute('aria-pressed', 'false');
+      });
+      btn.classList.add('board-seg-active');
+      btn.setAttribute('aria-pressed', 'true');
+      var pick = btn.getAttribute('data-dataset');
+      groupSections.forEach(function (sec) {
+        sec.hidden = sec.getAttribute('data-dataset') !== pick;
+      });
+    });
+  });
+  // Apply the default (first dataset) selection once, so a multi-dataset page opens focused.
+  if (datasetButtons.length > 1) {
+    var firstActive = document.querySelector('.dataset-selector .board-seg-active');
+    if (firstActive) {
+      var initPick = firstActive.getAttribute('data-dataset');
+      groupSections.forEach(function (sec) {
+        sec.hidden = sec.getAttribute('data-dataset') !== initPick;
+      });
+    }
+  }
 
   // ---- Chart legend toggles (hide/show a series) + hover highlight ----
   function seriesFor(btn) {

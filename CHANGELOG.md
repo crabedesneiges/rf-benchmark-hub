@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Site — colonne Size, champ `model.n_flops`, scatter taille/perf + frontière de Pareto
+
+Taille et coût compute des modèles rendus first-class dans le générateur statique :
+- **Colonne Size** triable dans toutes les tables (tâche + foundation) : `n_params` en unités
+  humaines, sous-ligne `n_flops` quand présent, « — » sinon (les params inline à côté du nom
+  sont déplacés dans cette colonne). Tri par compute/taille.
+- **Schéma** : `model.n_flops` optionnel (`integer, minimum:0`) ajouté de façon **additive** —
+  les 57 results existants valident inchangés, `additionalProperties:false` conservé, version
+  note 1.2.0 → 1.3.0. FLOPs/MACs par forward pass à taille d'entrée fixe = proxy compute
+  **hardware-agnostique** (déterministe, comparable entre GPU/CPU ; complète le
+  `inference_latency_ms` mesuré et taggé hardware).
+- **Scatter taille/perf avec frontière de Pareto** (`_pareto_frontier` pur et testé,
+  `_render_pareto_scatter`) : X = FLOPs si dispo sinon params (échelle log), Y = métrique
+  primaire (respecte lower-is-better) ; vue efficacité explicitement **cross-régime, pas un
+  classement** ; points sans taille écartés et comptés (pas de troncature silencieuse) ;
+  masquée sous 2 points. Rendue sur les pages tâche et la page foundation.
+- **Guide** : section « Model size & compute » (params / FLOPs / latency) + glossaire.
+- Tests : +13 (`_pareto_frontier` dominance/ties/single/lower-better, colonne Size, scatter,
+  schéma additif sans/avec/négatif).
+
+### Site — sélecteur de dataset, sélecteur de tâche FM, vue vs-baselines
+
+Trois contrôles data-driven ajoutés au générateur statique (`leaderboard/site/generate.py`),
+sans nouvelle dépendance externe (hors Google Fonts) et **fonctionnels sans JavaScript** :
+- **Sélecteur de dataset** (pages tâche multi-dataset uniquement, ex. amc / sei) : un groupe de
+  boutons segmentés (`_render_dataset_selector`) filtre les sections `.group[data-dataset]` via le
+  board script étendu. Une tâche mono-dataset ne rend aucun sélecteur (inchangé). Progressive
+  enhancement : barre masquée jusqu'à `body.js-on`, et sans JS **aucun** groupe n'est caché.
+- **Sélecteur de tâche** sur `foundation.html` (`_render_foundation_task_selector`) : option
+  « All » + un bouton par tâche à résultats FM ; un petit script gaté dédié
+  (`_FOUNDATION_JS` / `render_foundation_scripts`) affiche la seule `.foundation-task[data-task]`
+  choisie. Le test « pas de board script » est mis à jour pour tolérer exactement ce script
+  minimal (2 `<script>` : boot thème + gaté), toujours sans `sortTable`.
+- **Toggle « Include baselines »** (checkbox `.board-toggle`, comme « Verified only ») : quand
+  activé, chaque section FM affiche (a) un bloc **best-baseline reference** par track
+  (`_render_baseline_reference` : chip `baseline`, régime, score — clairement étiqueté RÉFÉRENCE,
+  jamais fusionné au classement FM) et (b) un scatter Pareto taille/perf incluant les baselines
+  (réutilise `_render_pareto_scatter`, les marqueurs distinguent déjà la famille). Rendu VISIBLE
+  par défaut (info présente sans JS) ; le toggle masque via `.is-hidden` quand JS actif + décoché.
+- Tests : +6 dans `tests/test_site.py` (sélecteurs, référence best-baseline, dégradation no-JS) ;
+  3 tests existants ajustés (localisateurs de section désambiguïsés, comptage de scripts FM).
+  `ruff` + `black` + `mypy` + `pytest` + `check_no_raw_data` verts.
+
 ### Fixed — site : légende des tiers cassée, espacement dataset/metrics, toggle dark/light
 
 Correctifs visuels sur la passe UX précédente (constatés sur rendu réel) :

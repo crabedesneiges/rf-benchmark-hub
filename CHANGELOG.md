@@ -27,6 +27,18 @@ externe (hors Google Fonts) et **fonctionnelle sans JavaScript** :
   nav des 14 tâches).
 - Tests : +5 dans `tests/test_site.py`. `ruff` + `pytest` verts.
 
+### Fixed — intégration M3 : enregistrement modèles + backend mAP détection
+
+Deux bugs d'intégration révélés par les premiers runs GPU (invisibles aux tests CPU) :
+- **`sensing-train` / `eval` ne trouvaient pas `deepsense_cnn` / `tldnn` / `raddet_yolov3`** :
+  ces baselines ont des drivers dédiés (`training_sensing`, `train_tldnn`, `training_detection`)
+  qui importent le module directement, mais n'étaient **pas dans `_MODEL_MODULES`** (`rfbench/cli`)
+  → `MODELS` vide à la résolution (`unknown model 'deepsense_cnn'; available: <none>`). Ajout des
+  3 entrées → modèles résolubles via le CLI générique aussi.
+- **mAP détection RadDet crashait à l'éval** (`MeanAveragePrecision` exige `pycocotools`/
+  `faster-coco-eval`, absent) : ajout de `faster-coco-eval` + `torchmetrics` à l'extra `raddet`
+  (wheels aarch64, pas de compile). L'entraînement lui-même réussissait ; seul le scoring cassait.
+
 ### Added — baseline de DÉTECTION wideband RadDet : YOLOv3 (`raddet_yolov3`, from_scratch)
 
 Première baseline de la tâche `wideband_detection` (détection d'objets = boîtes T-F, un stack tout

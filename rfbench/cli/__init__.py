@@ -840,6 +840,11 @@ _MODEL_MODULES: dict[str, str] = {
     "resnet1d_sei": "rfbench.models.baselines.resnet1d_sei",
     # SNR-estimation regression baseline (trained via `rfbench snr-train`).
     "snr_cnn": "rfbench.models.baselines.snr_cnn",
+    # M3 baselines with dedicated training drivers (train_tldnn / training_sensing /
+    # training_detection); listed here so `rfbench sensing-train`/`eval` can resolve them too.
+    "tldnn": "rfbench.models.baselines.tldnn",
+    "deepsense_cnn": "rfbench.models.baselines.deepsense_cnn",
+    "raddet_yolov3": "rfbench.models.baselines.raddet_detector",
     "lwm-spectro": "rfbench.models.foundation.lwm_spectro",
     "dummy-fm": "rfbench.models.foundation.dummy",
 }

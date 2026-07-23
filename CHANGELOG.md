@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — outil de mesure params/FLOPs des modèles implémentés (nœud ARM)
+
+- `scripts/compute_model_sizes.py` : instancie chaque modèle **implémenté** (registre
+  `rfbench.core.registry.MODELS`) à la shape d'entrée dérivée des données du board, puis
+  reporte `n_params` (via `Model.n_params`) et les **FLOPs** (fvcore, proxy compute
+  hardware-indépendant). Mode `--write` patche `model.n_params`/`model.n_flops` dans les
+  `result.json`. Mesure pure (jamais d'entraînement) ; mesure chaque modèle indépendamment
+  (échec isolé et reporté, jamais bloquant).
+- `slurm/compute_model_sizes_arm.sh` : job SLURM prêt (`sbatch`), installe l'extra `size`
+  (`fvcore` + `torch`) et lance `--write`. **À exécuter sur un nœud ARM** — torch est absent
+  de la frontale Intel, donc le script n'a pas pu être exécuté ici (lint/compile OK seulement).
+- `pyproject.toml` : extra optionnel `size = ["fvcore", "torch"]`.
+
 ### Fixed + Data — Pareto taille/perf lisible & peuplé (n_params de 24 modèles from_paper)
 
 - **Rendu Pareto** : ticks Y en 3 chiffres significatifs (fin du débordement `0.654866` →

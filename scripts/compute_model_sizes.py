@@ -114,10 +114,25 @@ def _instantiate(cls: type, n_classes: int | None) -> object:
 
 def measure() -> dict[str, dict[str, Any]]:
     """Measure every registered model that appears on the board (ARM-only: imports torch)."""
+    import importlib
+    import pkgutil
+
     import torch
 
-    import rfbench.models  # noqa: F401  (side effect: populate the model registry)
+    import rfbench.models.baselines as _baselines
+    import rfbench.models.foundation as _foundation
     from rfbench.core.registry import MODELS
+
+    # Models register via @register_model on IMPORT of their (torch) module; the package
+    # __init__ files are empty, so import every concrete model module to populate MODELS.
+    for _pkg in (_baselines, _foundation):
+        for _info in pkgutil.iter_modules(_pkg.__path__, _pkg.__name__ + "."):
+            if _info.name.rsplit(".", 1)[-1].startswith("_"):
+                continue  # helpers/templates (_template, _download_*, base) register nothing
+            try:
+                importlib.import_module(_info.name)
+            except Exception:  # noqa: BLE001 - optional-dep models just do not register
+                continue
 
     try:
         from fvcore.nn import FlopCountAnalysis

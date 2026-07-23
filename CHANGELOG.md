@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Pareto taille/perf : un scatter PAR DATASET, filtré par le sélecteur
+
+- Le scatter « Size vs performance » était rendu une seule fois par tâche (tous datasets
+  mélangés) et ne réagissait PAS au sélecteur de dataset — sur SEI il mélangeait oracle/powder/
+  wisig, non comparables sur un même plot. Désormais **un scatter par dataset**, tagué
+  `data-dataset` et filtré par le sélecteur comme les tables ; sauté pour un dataset à < 2
+  modèles taillés.
+- `scripts/compute_model_sizes.py` : corrige le peuplement du registre `MODELS` (les `__init__`
+  étant vides, importe explicitement chaque module modèle via pkgutil) — sinon la mesure
+  renvoyait `{}`.
+
 ### Added — outil de mesure params/FLOPs des modèles implémentés (nœud ARM)
 
 - `scripts/compute_model_sizes.py` : instancie chaque modèle **implémenté** (registre

@@ -2799,3 +2799,27 @@ def test_foundation_scatter_points_get_a_tooltip(tmp_path: Path) -> None:
     foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
     assert "chart-tooltip" in foundation_html
     assert ".pt[data-model], .barplot-bar[data-model]" in foundation_html
+
+
+# --- per-dataset Pareto ---
+def test_pareto_scatter_is_per_dataset_and_filterable(tmp_path: Path) -> None:
+    """A multi-dataset task renders one size/perf scatter PER dataset, each tagged data-dataset."""
+    import re
+
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    # give the amc task two datasets, each with >=2 sized models (so both scatters render)
+    for ds in ("radioml_2016_10a", "radioml_2018_01a"):
+        for i in range(2):
+            row = _amc_row(
+                f"{ds}-{i}", f"{ds}-m{i}", "from_scratch", 0.7 + i * 0.05, "self_reported"
+            )
+            row["dataset"] = {"name": ds}
+            row["model"]["n_params"] = 1000 * (i + 1)
+            _write(results / "amc" / f"pareto_{ds}_{i}.json", row)
+    generate.build_site(results, out)
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    tagged = re.findall(r'<section class="efficiency-section" data-dataset="([^"]+)"', amc_html)
+    assert set(tagged) >= {"radioml_2016_10a", "radioml_2018_01a"}  # one per dataset, tagged
+    assert "section.efficiency-section[data-dataset]" in amc_html  # selector filters them

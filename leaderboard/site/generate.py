@@ -2687,16 +2687,22 @@ def render_task_page(
         if multi_dataset
         else ""
     )
-    # One size/perf Pareto scatter over EVERY model of the task (efficiency/reference view that
-    # deliberately spans regimes/tracks -- clearly labelled as such in its own caption). Skipped
-    # when fewer than 2 models carry size data.
-    pareto = _render_pareto_scatter(rows)
-    pareto_html = (
-        f'<section class="efficiency-section"><h3 class="group-title">Size vs performance</h3>'
-        f'<div class="plots">{pareto}</div></section>'
-        if pareto
-        else ""
-    )
+    # One size/perf Pareto scatter PER DATASET (an efficiency/reference view spanning that
+    # dataset's regimes/tracks -- two datasets are never mixed on one size/perf plot, which would
+    # not be comparable). Each scatter carries data-dataset so the dataset selector filters it
+    # exactly like the leaderboard groups. Skipped for a dataset with fewer than 2 sized models.
+    pareto_parts: list[str] = []
+    for pareto_dataset in sorted({ds for ds, _r, _k, _t in groups}):
+        ds_scatter = _render_pareto_scatter([r for r in rows if _dataset_name(r) == pareto_dataset])
+        if not ds_scatter:
+            continue
+        ds_label = f" &middot; {_esc(pareto_dataset)}" if multi_dataset else ""
+        pareto_parts.append(
+            f'<section class="efficiency-section" data-dataset="{_esc(pareto_dataset)}">'
+            f'<h3 class="group-title">Size vs performance{ds_label}</h3>'
+            f'<div class="plots">{ds_scatter}</div></section>'
+        )
+    pareto_html = "".join(pareto_parts)
     body = (
         '<section class="task">'
         f'<p class="breadcrumb"><a href="index.html">Tasks</a> / {_esc(title)}</p>'
@@ -5127,7 +5133,8 @@ _BOARD_JS: str = """
   // Rendered ONLY when the task has >1 dataset (else the selector is absent). With JS off every
   // .group stays visible (no default-hidden CSS); this handler just narrows the view when JS is on.
   var datasetButtons = document.querySelectorAll('.dataset-selector .board-seg');
-  var groupSections = document.querySelectorAll('section.group[data-dataset]');
+  var groupSections = document.querySelectorAll(
+    'section.group[data-dataset], section.efficiency-section[data-dataset]');
   datasetButtons.forEach(function (btn) {
     btn.addEventListener('click', function () {
       datasetButtons.forEach(function (b) {

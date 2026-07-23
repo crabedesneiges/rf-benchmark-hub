@@ -70,23 +70,6 @@ _TASK_DEFAULT_WINDOW: dict[str, int] = {
 }
 
 
-def _model_specs() -> dict[str, dict[str, Any]]:
-    """Map ``model_name -> {task, dataset, n_classes, window}`` from the committed board rows."""
-    out: dict[str, dict[str, Any]] = {}
-    for path in sorted(_RESULTS.rglob("*.json")):
-        row = json.loads(path.read_text(encoding="utf-8"))
-        name = row.get("model", {}).get("name")
-        if not name or name in out:
-            continue
-        task = row.get("task", {}).get("name", "")
-        dataset = row.get("dataset", {}).get("name", "")
-        n_classes, window = _DATASET_SPEC.get(dataset, (None, None))
-        if window is None:
-            window = _TASK_DEFAULT_WINDOW.get(task, 128)
-        out[name] = {"task": task, "dataset": dataset, "n_classes": n_classes, "window": window}
-    return out
-
-
 def _build_dummy(task: str, window: int) -> object:
     """Build a batch-1 dummy input tensor for ``task`` (see ``_TASK_LAYOUT``)."""
     import torch
@@ -113,7 +96,12 @@ def _instantiate(cls: type, n_classes: int | None) -> object:
 
 
 def measure() -> dict[str, dict[str, Any]]:
-    """Measure every registered model that appears on the board (ARM-only: imports torch)."""
+    """Measure params + FLOPs for every board ROW backed by a registered model (ARM: imports torch).
+
+    Keyed by result-file path, so a model evaluated on TWO datasets (different #classes / window,
+    e.g. ``mcldnn`` on 11-class 2016.10a vs 24-class 2018.01a) is measured SEPARATELY per config
+    -- one config's numbers are never copied onto the other's row.
+    """
     import importlib
     import pkgutil
 
@@ -133,41 +121,49 @@ def measure() -> dict[str, dict[str, Any]]:
                 continue
 
     report: dict[str, dict[str, Any]] = {}
-    for name, spec in _model_specs().items():
+    for path in sorted(_RESULTS.rglob("*.json")):
+        row = json.loads(path.read_text(encoding="utf-8"))
+        name = row.get("model", {}).get("name", "")
         if name not in MODELS:
             continue  # a from_paper row with no in-repo implementation -> nothing to measure
-        entry: dict[str, Any] = {"task": spec["task"], "dataset": spec["dataset"]}
+        task = row.get("task", {}).get("name", "")
+        dataset = row.get("dataset", {}).get("name", "")
+        n_classes, window = _DATASET_SPEC.get(dataset, (None, None))
+        if window is None:
+            window = _TASK_DEFAULT_WINDOW.get(task, 128)
+        key = str(path.relative_to(_REPO))
+        entry: dict[str, Any] = {"model": name, "task": task, "dataset": dataset}
         try:
-            model = _instantiate(MODELS[name], spec["n_classes"])
+            model = _instantiate(MODELS[name], n_classes)
             entry["n_params"] = int(model.n_params)  # the Model ABC property (not nn.Module)
         except Exception as exc:  # noqa: BLE001 - instantiation failed: record and keep going
             entry["error"] = f"{type(exc).__name__}: {exc}"
-            report[name] = entry
+            report[key] = entry
             continue
         # FLOPs for one forward via torch's dispatch counter -- the model's own forward handles
         # the Batch dict + device placement, so no nn.Module access nor fvcore is needed.
         try:
             from torch.utils.flop_counter import FlopCounterMode
 
-            dummy = _build_dummy(spec["task"], int(spec["window"]))
+            dummy = _build_dummy(task, int(window))
             entry["input_shape"] = list(dummy.shape)
             with FlopCounterMode(display=False) as counter:
                 model.forward({"iq": dummy})
             entry["n_flops"] = int(counter.get_total_flops())
         except Exception as exc:  # noqa: BLE001 - FLOPs are best-effort; the params are kept
             entry["flops_error"] = f"{type(exc).__name__}: {exc}"
-        report[name] = entry
+        report[key] = entry
     return report
 
 
 def _write_back(report: dict[str, dict[str, Any]]) -> int:
-    """Patch ``model.n_params`` / ``model.n_flops`` into every matching board row (in place)."""
+    """Patch model.n_params / model.n_flops into each measured row (keyed by result-file path)."""
     changed = 0
-    for path in sorted(_RESULTS.rglob("*.json")):
-        row = json.loads(path.read_text(encoding="utf-8"))
-        measured = report.get(row.get("model", {}).get("name", ""))
-        if not measured or "error" in measured:
+    for rel_path, measured in report.items():
+        if "error" in measured:
             continue
+        path = _REPO / rel_path
+        row = json.loads(path.read_text(encoding="utf-8"))
         model = row["model"]
         updated = False
         for key in ("n_params", "n_flops"):

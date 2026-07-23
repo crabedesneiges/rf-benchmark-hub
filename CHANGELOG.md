@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — site : légende des tiers cassée, espacement dataset/metrics, toggle dark/light
+
+Correctifs visuels sur la passe UX précédente (constatés sur rendu réel) :
+- **Légende des tiers illisible** : les items réutilisaient les classes `legend-item`/
+  `legend-swatch` des légendes de charts, dont la règle `.legend-swatch { width: 24px;
+  height: 10px }` (plus bas dans la cascade) écrasait les pills → texte superposé. Renommées
+  en `tl-*` (namespace dédié), légendes de charts intactes.
+- **Cartes dataset/metrics collées** : rendues sans wrapper dans la colonne principale ;
+  ré-enveloppées dans le grid `task-header-grid` existant (gap 1rem + margin-bottom).
+- **Toggle dark/light manuel** (dans le header, soleil/lune) : tokens dark factorisés en
+  `_DARK_TOKENS` émis deux fois (`prefers-color-scheme` par défaut OS + `:root[data-theme]`
+  forcé), mini script `<head>` sur chaque page (localStorage, appliqué avant le premier
+  paint), bouton masqué sans JS (progressive enhancement, le schéma OS s'applique).
+- La commande de la submit-card passe en `pre-wrap` (plus de texte coupé dans la sidebar).
+- Tests : 3 assertions « zéro `<script>` » adaptées (seul le boot de thème est permis sur
+  les pages sans board) + 3 nouveaux tests (namespace légende, wrapper grid, toggle).
+
 ### Site — leaderboard : rigueur visible + adoption (provenance, tiers, CTA, meta)
 
 Refonte UX du générateur statique (`leaderboard/site/generate.py`), sans nouvelle dépendance

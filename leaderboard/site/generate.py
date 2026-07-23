@@ -10,7 +10,8 @@ imported LAZILY so importing this module stays dependency-free. The site's only 
 network / runtime additions are a single Google Fonts ``<link>`` (Space Grotesk / IBM Plex,
 every selector falls back to system fonts if it's blocked) and a small homepage-only inline
 vanilla-JS search/filter script (no dependencies, degrades to "everything visible" if JS is
-disabled) -- every other page stays zero-JS.
+disabled) plus a tiny head theme-boot on every page (the dark/light toggle; hidden with JS
+off, when the OS scheme simply applies) -- pages without a board carry no other script.
 
 The renderer is **data-driven, never task-specific**:
 
@@ -1504,18 +1505,20 @@ def _render_tier_legend() -> str:
     ``guide.html#verification``. Fully usable with JS off (plain spans + an ``<a>``). Rendered in
     the index hero and under the task-page invariant note.
 
-    The swatches carry a ``legend-swatch`` class (reusing each key's semantic COLOR class only)
-    rather than the live ``badge``/``chip`` class, so a legend sample is never mistaken for a
-    real row badge -- e.g. the contamination legend does not emit a ``class="badge
-    badge-overlap-*"`` row-badge string on a page whose rows declare no pretraining.
+    The swatches carry a dedicated ``tl-swatch`` class -- NOT the chart-legend
+    ``legend-item``/``legend-swatch`` classes (whose fixed 24x10 swatch sizing would clobber
+    the pills) and NOT the live ``badge``/``chip`` class, so a legend sample is never
+    mistaken for a real row badge -- e.g. the contamination legend does not emit a
+    ``class="badge badge-overlap-*"`` row-badge string on a page whose rows declare no
+    pretraining.
     """
 
     def _item(label: str, css_class: str, gloss: str) -> str:
         gloss_attr = f' title="{_esc(gloss)}"' if gloss else ""
         return (
-            f'<span class="legend-item"{gloss_attr}>'
-            f'<span class="legend-swatch {css_class}">{_esc(label)}</span>'
-            f'<span class="legend-gloss">{_esc(gloss)}</span>'
+            f'<span class="tl-item"{gloss_attr}>'
+            f'<span class="tl-swatch {css_class}">{_esc(label)}</span>'
+            f'<span class="tl-gloss">{_esc(gloss)}</span>'
             "</span>"
         )
 
@@ -1532,13 +1535,13 @@ def _render_tier_legend() -> str:
         for key, (text, css_class) in _OVERLAP_BADGE.items()
     )
     guide_link = (
-        f'<a class="legend-guide" href="{_GUIDE_SLUG}.html#verification">Full guide &rarr;</a>'
+        f'<a class="tl-guide" href="{_GUIDE_SLUG}.html#verification">Full guide &rarr;</a>'
     )
     return (
         '<div class="tier-legend" aria-label="How to read the board">'
-        f'<span class="legend-group">{badges}</span>'
-        f'<span class="legend-group">{families}</span>'
-        f'<span class="legend-group">{overlaps}</span>'
+        f'<span class="tl-group">{badges}</span>'
+        f'<span class="tl-group">{families}</span>'
+        f'<span class="tl-group">{overlaps}</span>'
         f"{guide_link}"
         "</div>"
     )
@@ -2190,6 +2193,11 @@ def render_wip_page(
     header = _render_task_header(entry, include_dataset_and_metrics=False)
     dataset_card = _render_dataset_card(entry.dataset)
     metrics_block = _render_metrics_block(entry)
+    header_grid = (
+        f'<div class="task-header-grid">{dataset_card}{metrics_block}</div>'
+        if (dataset_card or metrics_block)
+        else ""
+    )
     blurb = f'<p class="wip-blurb">{_esc(entry.blurb)}</p>' if entry.blurb else ""
     sidebar = _render_task_sidebar(nav_task_ids, declared, entry.id)
     details_card = _render_task_details_card(entry, entry.id, None)
@@ -2203,7 +2211,7 @@ def render_wip_page(
         '<div class="task-layout">'
         f"{sidebar}"
         '<div class="task-main">'
-        f"{dataset_card}{metrics_block}"
+        f"{header_grid}"
         '<div class="wip-card">'
         '<div class="empty-state-card">'
         f'<p class="wip-kicker">Work in progress</p>'
@@ -2256,6 +2264,11 @@ def render_task_page(
     header = _render_task_header(entry, include_dataset_and_metrics=False)
     dataset_card = _render_dataset_card(entry.dataset) if entry is not None else ""
     metrics_block = _render_metrics_block(entry) if entry is not None else ""
+    header_grid = (
+        f'<div class="task-header-grid">{dataset_card}{metrics_block}</div>'
+        if (dataset_card or metrics_block)
+        else ""
+    )
 
     # (dataset, regime, k_shot, track) -> rows, preserving input order within each leaf group.
     # Dataset is part of the key so two datasets of one task never share a table/plot.
@@ -2297,7 +2310,7 @@ def render_task_page(
         '<div class="task-layout">'
         f"{sidebar}"
         '<div class="task-main">'
-        f"{dataset_card}{metrics_block}"
+        f"{header_grid}"
         f'<p class="note">Each (regime, track) is ranked separately &mdash; a table or plot '
         "never mixes two regimes nor two tracks (protocol invariant). Badges mark "
         "maintainer-verified rows vs self-reported ones.</p>"
@@ -3402,7 +3415,7 @@ def render_guide() -> str:
 
 
 def _top_nav(current: str | None) -> str:
-    """Render the site-wide top nav: Tasks | Guide | Submit, plus a GitHub repo icon link.
+    """Render the site-wide top nav: Tasks | Guide | Submit, repo icon and theme toggle.
 
     Replaces the old per-task chip list (Home + one chip per task name) -- task-to-task
     navigation now lives in each task page's own sidebar (see ``_render_task_sidebar``), so
@@ -3431,6 +3444,8 @@ def _top_nav(current: str | None) -> str:
         "</div>"
         '<a class="icon-link" aria-label="GitHub repository" target="_blank" rel="noopener" '
         f'href="{_esc(_REPO_URL)}">{_REPO_ICON_SVG}</a>'
+        '<button type="button" class="icon-link theme-toggle" '
+        f'aria-label="Switch between light and dark theme">{_SUN_SVG}{_MOON_SVG}</button>'
     )
 
 
@@ -3455,6 +3470,43 @@ def _favicon_data_uri() -> str:
     """
     svg = _LOGO_SVG.replace('class="logo" ', "").replace("var(--accent)", "#2f6fed")
     return "data:image/svg+xml," + quote(svg, safe="")
+
+
+#: Minimal theme-boot script injected into EVERY page's <head> (before first paint, so a
+#: stored preference never flashes the wrong scheme). It applies the localStorage override to
+#: ``<html data-theme=...>``, marks JS availability (``html.theme-js`` reveals the toggle
+#: button -- progressive enhancement: with JS off the button stays hidden and the OS scheme
+#: applies), and wires the header toggle via event delegation (the button renders later).
+_THEME_JS: str = (
+    "(function(){var d=document.documentElement;"
+    'try{var t=localStorage.getItem("rfb-theme");'
+    'if(t==="light"||t==="dark"){d.setAttribute("data-theme",t);}}catch(e){}'
+    'd.classList.add("theme-js");'
+    'document.addEventListener("click",function(e){'
+    'var b=e.target&&e.target.closest?e.target.closest(".theme-toggle"):null;'
+    "if(!b){return;}"
+    'var cur=d.getAttribute("data-theme")||'
+    '(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?'
+    '"dark":"light");'
+    'var next=cur==="dark"?"light":"dark";'
+    'd.setAttribute("data-theme",next);'
+    'try{localStorage.setItem("rfb-theme",next);}catch(e2){}});})();'
+)
+
+#: Sun / moon glyphs for the header theme toggle (inline stroke SVGs, no binary assets); the
+#: stylesheet shows exactly one of the pair for the EFFECTIVE scheme (forced attr or OS).
+_SUN_SVG: str = (
+    '<svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" '
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">'
+    '<circle cx="12" cy="12" r="4"></circle>'
+    '<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2'
+    'M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>'
+)
+_MOON_SVG: str = (
+    '<svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" '
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">'
+    '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>'
+)
 
 
 def _page(
@@ -3492,6 +3544,7 @@ def _page(
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_esc(title)}</title>\n"
         f"{meta}"
+        f"<script>{_THEME_JS}</script>\n"
         f"{_GOOGLE_FONTS_LINK}"
         f"<style>{render_styles()}</style>\n"
         "</head>\n<body>\n"
@@ -3508,7 +3561,7 @@ def _page(
         '<footer class="site-footer"><p>Generated by leaderboard/site/generate.py '
         "&mdash; every row validated against result.schema.json. Charts are inline SVG "
         "computed here in Python; a Google Fonts link and a small inline interactivity "
-        "script (sort / filter / hover) are the only external/runtime additions, and the "
+        "script (sort / filter / hover / theme) are the only external/runtime additions, and the "
         "board stays fully readable with JavaScript disabled.</p></footer>\n"
         f"{extra_body}"
         "</body>\n</html>\n"
@@ -3527,6 +3580,55 @@ _LOGO_SVG = (
     'stroke-width="2" stroke-linecap="round"/>'
     "</svg>"
 )
+
+#: Dark-scheme design tokens, emitted TWICE by :func:`render_styles` -- once inside the
+#: ``prefers-color-scheme: dark`` media query (OS preference, unless the user forced
+#: light via the header toggle) and once under ``:root[data-theme="dark"]`` (forced
+#: dark) -- so the dark palette lives in one single place.
+_DARK_TOKENS: str = """    --bg: oklch(0.18 0.012 260);
+    --surface: oklch(0.22 0.014 260);
+    --surface-2: oklch(0.25 0.016 260);
+    --fg: oklch(0.93 0.006 260);
+    --muted: oklch(0.7 0.02 260);
+    --line: oklch(0.31 0.014 260);
+    --line-strong: oklch(0.38 0.016 260);
+    --accent: oklch(0.72 0.15 260);
+    --accent-2: oklch(0.74 0.11 200);
+    --accent-soft: oklch(0.3 0.05 260);
+    --head: oklch(0.25 0.016 260);
+    --focus: oklch(0.72 0.15 260);
+    --tooltip-bg: oklch(0.32 0.016 260);
+    --tooltip-fg: oklch(0.96 0.006 260);
+    --badge-verified-bg: oklch(0.3 0.06 150); --badge-verified-fg: oklch(0.8 0.14 150);
+    --badge-verified-bd: oklch(0.44 0.08 150);
+    --badge-self-bg: oklch(0.32 0.06 70); --badge-self-fg: oklch(0.82 0.13 75);
+    --badge-self-bd: oklch(0.45 0.07 70);
+    --badge-paper-bg: oklch(0.3 0.06 255); --badge-paper-fg: oklch(0.8 0.12 255);
+    --badge-paper-bd: oklch(0.44 0.09 255);
+    --badge-paper-uncertain-bg: oklch(0.31 0.06 300);
+    --badge-paper-uncertain-fg: oklch(0.82 0.11 300);
+    --badge-paper-uncertain-bd: oklch(0.45 0.08 300);
+    --badge-overlap-none-bg: oklch(0.3 0.06 150); --badge-overlap-none-fg: oklch(0.8 0.14 150);
+    --badge-overlap-none-bd: oklch(0.44 0.08 150);
+    --badge-overlap-unknown-bg: oklch(0.32 0.06 70);
+    --badge-overlap-unknown-fg: oklch(0.82 0.13 75);
+    --badge-overlap-unknown-bd: oklch(0.45 0.07 70);
+    --badge-overlap-confirmed-bg: oklch(0.32 0.08 25);
+    --badge-overlap-confirmed-fg: oklch(0.8 0.14 25);
+    --badge-overlap-confirmed-bd: oklch(0.46 0.1 25);
+    --chip-baseline-bg: oklch(0.28 0.012 260); --chip-baseline-fg: oklch(0.78 0.02 260);
+    --chip-baseline-bd: oklch(0.38 0.016 260);
+    --chip-foundation-bg: oklch(0.3 0.06 300); --chip-foundation-fg: oklch(0.82 0.12 300);
+    --chip-foundation-bd: oklch(0.46 0.09 300);
+    --status-impl-bg: oklch(0.3 0.06 150); --status-impl-fg: oklch(0.8 0.14 150);
+    --status-impl-bd: oklch(0.44 0.08 150);
+    --status-wip-bg: oklch(0.32 0.06 70); --status-wip-fg: oklch(0.82 0.13 75);
+    --status-wip-bd: oklch(0.45 0.07 70);
+    --status-planned-bg: oklch(0.28 0.012 260); --status-planned-fg: oklch(0.7 0.02 260);
+    --status-planned-bd: oklch(0.38 0.016 260);
+    --bar-track: oklch(0.3 0.014 260); --bar-fill: oklch(0.7 0.15 260);
+    --grid: oklch(0.29 0.014 260);
+    --shadow-hover: 0 2px 14px rgba(0,0,0,0.35);"""
 
 _CSS = """
 /* Theme tokens in oklch (perceptually uniform): neutrals are desaturated (near-zero chroma,
@@ -3582,56 +3684,20 @@ _CSS = """
   --status-planned-bd: oklch(0.87 0.01 260);
   --bar-track: oklch(0.94 0.006 260); --bar-fill: oklch(0.55 0.2 260);
   --grid: oklch(0.945 0.005 260);
+  --shadow-hover: 0 2px 10px rgba(0,0,0,0.06);
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: oklch(0.18 0.012 260);
-    --surface: oklch(0.22 0.014 260);
-    --surface-2: oklch(0.25 0.016 260);
-    --fg: oklch(0.93 0.006 260);
-    --muted: oklch(0.7 0.02 260);
-    --line: oklch(0.31 0.014 260);
-    --line-strong: oklch(0.38 0.016 260);
-    --accent: oklch(0.72 0.15 260);
-    --accent-2: oklch(0.74 0.11 200);
-    --accent-soft: oklch(0.3 0.05 260);
-    --head: oklch(0.25 0.016 260);
-    --focus: oklch(0.72 0.15 260);
-    --tooltip-bg: oklch(0.32 0.016 260);
-    --tooltip-fg: oklch(0.96 0.006 260);
-    --badge-verified-bg: oklch(0.3 0.06 150); --badge-verified-fg: oklch(0.8 0.14 150);
-    --badge-verified-bd: oklch(0.44 0.08 150);
-    --badge-self-bg: oklch(0.32 0.06 70); --badge-self-fg: oklch(0.82 0.13 75);
-    --badge-self-bd: oklch(0.45 0.07 70);
-    --badge-paper-bg: oklch(0.3 0.06 255); --badge-paper-fg: oklch(0.8 0.12 255);
-    --badge-paper-bd: oklch(0.44 0.09 255);
-    --badge-paper-uncertain-bg: oklch(0.31 0.06 300);
-    --badge-paper-uncertain-fg: oklch(0.82 0.11 300);
-    --badge-paper-uncertain-bd: oklch(0.45 0.08 300);
-    --badge-overlap-none-bg: oklch(0.3 0.06 150); --badge-overlap-none-fg: oklch(0.8 0.14 150);
-    --badge-overlap-none-bd: oklch(0.44 0.08 150);
-    --badge-overlap-unknown-bg: oklch(0.32 0.06 70);
-    --badge-overlap-unknown-fg: oklch(0.82 0.13 75);
-    --badge-overlap-unknown-bd: oklch(0.45 0.07 70);
-    --badge-overlap-confirmed-bg: oklch(0.32 0.08 25);
-    --badge-overlap-confirmed-fg: oklch(0.8 0.14 25);
-    --badge-overlap-confirmed-bd: oklch(0.46 0.1 25);
-    --chip-baseline-bg: oklch(0.28 0.012 260); --chip-baseline-fg: oklch(0.78 0.02 260);
-    --chip-baseline-bd: oklch(0.38 0.016 260);
-    --chip-foundation-bg: oklch(0.3 0.06 300); --chip-foundation-fg: oklch(0.82 0.12 300);
-    --chip-foundation-bd: oklch(0.46 0.09 300);
-    --status-impl-bg: oklch(0.3 0.06 150); --status-impl-fg: oklch(0.8 0.14 150);
-    --status-impl-bd: oklch(0.44 0.08 150);
-    --status-wip-bg: oklch(0.32 0.06 70); --status-wip-fg: oklch(0.82 0.13 75);
-    --status-wip-bd: oklch(0.45 0.07 70);
-    --status-planned-bg: oklch(0.28 0.012 260); --status-planned-fg: oklch(0.7 0.02 260);
-    --status-planned-bd: oklch(0.38 0.016 260);
-    --bar-track: oklch(0.3 0.014 260); --bar-fill: oklch(0.7 0.15 260);
-    --grid: oklch(0.29 0.014 260);
+  :root:not([data-theme="light"]) {
+__DARK_TOKENS__
   }
+}
+:root[data-theme="dark"] {
+__DARK_TOKENS__
 }
 * { box-sizing: border-box; }
 html { color-scheme: light dark; }
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
 body {
   font-family: var(--font-body);
   color: var(--fg); background: var(--bg); margin: 0;
@@ -3643,10 +3709,7 @@ h1, h2, h3, .task-title, .card-title, .brand-name, .group-title {
   font-family: var(--font-heading); font-weight: 600; letter-spacing: -0.01em;
 }
 .hover-elevate { transition: box-shadow .15s ease, border-color .15s ease; }
-.hover-elevate:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
-@media (prefers-color-scheme: dark) {
-  .hover-elevate:hover { box-shadow: 0 2px 14px rgba(0,0,0,0.35); }
-}
+.hover-elevate:hover { box-shadow: var(--shadow-hover); }
 
 .site-header {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem;
@@ -3705,14 +3768,14 @@ main { max-width: 1320px; margin: 0 auto; padding: 1.5rem 1.5rem 4rem; }
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.9rem;
   margin: 0 0 1.25rem; font-size: 0.78rem; color: var(--muted);
 }
-.legend-group {
+.tl-group {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.65rem;
   padding-right: 0.9rem; border-right: 1px solid var(--line);
 }
-.legend-item { display: inline-flex; align-items: center; gap: 0.32rem; }
-.legend-swatch { font-size: 0.68rem; padding: 0.02rem 0.45rem; }
-.legend-gloss { color: var(--muted); }
-.legend-guide { font-weight: 600; white-space: nowrap; }
+.tl-item { display: inline-flex; align-items: center; gap: 0.32rem; }
+.tl-swatch { font-size: 0.68rem; padding: 0.02rem 0.45rem; }
+.tl-gloss { color: var(--muted); }
+.tl-guide { font-weight: 600; white-space: nowrap; }
 
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 table { border-collapse: collapse; width: 100%; min-width: 480px; font-size: 0.9rem; }
@@ -3753,7 +3816,7 @@ td.num.primary .metric-val { font-weight: 700; }
 }
 .bar-fill { display: block; height: 100%; background: var(--bar-fill); }
 
-.badge, .chip, .legend-swatch {
+.badge, .chip, .tl-swatch {
   display: inline-block; padding: 0.08rem 0.55rem; border-radius: 999px;
   font-size: 0.74rem; font-weight: 600; white-space: nowrap; border: 1px solid transparent;
 }
@@ -3832,6 +3895,15 @@ td.num.primary .metric-val { font-weight: 700; }
   width: 32px; height: 32px; border-radius: 8px; color: var(--muted); margin-left: 0.5rem;
 }
 .icon-link:hover { color: var(--fg); background: var(--surface-2); text-decoration: none; }
+.theme-toggle { display: none; border: none; background: none; padding: 0; cursor: pointer; }
+html.theme-js .theme-toggle { display: inline-flex; }
+.theme-toggle .icon-sun { display: none; }
+html[data-theme="dark"] .theme-toggle .icon-sun { display: block; }
+html[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) .theme-toggle .icon-sun { display: block; }
+  html:not([data-theme="light"]) .theme-toggle .icon-moon { display: none; }
+}
 
 .hero-eyebrow {
   color: var(--accent); font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
@@ -3898,9 +3970,6 @@ td.num.primary .metric-val { font-weight: 700; }
 .filter-pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .filter-pill-active {
   background: var(--fg); color: var(--bg); border-color: var(--fg);
-}
-@media (prefers-color-scheme: dark) {
-  .filter-pill-active { background: var(--fg); color: var(--bg); }
 }
 
 .scope-heading {
@@ -3982,7 +4051,7 @@ td.num.primary .metric-val { font-weight: 700; }
 .cmd {
   font-family: var(--font-mono); font-size: 0.74rem; line-height: 1.5; color: var(--fg);
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
-  padding: 0.6rem 0.7rem; margin: 0 0 0.9rem; overflow-x: auto; white-space: pre;
+  padding: 0.6rem 0.7rem; margin: 0 0 0.9rem; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 
 .empty-state-card {
@@ -4016,10 +4085,7 @@ td.num.primary .metric-val { font-weight: 700; }
   padding: 1rem 1.1rem; transition: box-shadow .15s ease, border-color .15s ease;
 }
 .task-card:hover {
-  border-color: var(--accent); text-decoration: none; box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-}
-@media (prefers-color-scheme: dark) {
-  .task-card:hover { box-shadow: 0 2px 14px rgba(0,0,0,0.35); }
+  border-color: var(--accent); text-decoration: none; box-shadow: var(--shadow-hover);
 }
 .card-title { font-weight: 700; font-size: 1.05rem; }
 .card-sub { color: var(--muted); font-size: 0.8rem;
@@ -4068,6 +4134,7 @@ td.num.primary .metric-val { font-weight: 700; }
   display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1rem; align-items: start;
 }
+.task-main > .task-header-grid { margin: 0 0 1.1rem; }
 .dataset-card, .metrics-block {
   border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2);
   padding: 0.9rem 1.1rem;
@@ -4263,7 +4330,7 @@ def render_styles() -> str:
     the stylesheet has a single named entry point. The content is a constant, so the output is
     deterministic (idempotent build).
     """
-    return _CSS
+    return _CSS.replace("__DARK_TOKENS__", _DARK_TOKENS)
 
 
 #: The per-task-page interactive board script -- vanilla JS, no dependencies, no build step.

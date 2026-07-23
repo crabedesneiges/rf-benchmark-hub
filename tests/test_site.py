@@ -1298,20 +1298,22 @@ def test_task_and_guide_pages_have_no_inline_script(tmp_path: Path) -> None:
 
     A full leaderboard page (amc, which has tables + charts) now carries the inline board
     script (sort / filter / hover). A WIP page (spectrum_sensing, no board) and the shared
-    Guide page have nothing to make interactive, so they stay script-free -- no dead JS.
+    Guide page have no board to drive, so they carry only the head theme-boot script.
     """
     results = tmp_path / "results"
     out = tmp_path / "site"
     _make_results_tree(results)
     generate.build_site(results, out)
 
-    # WIP + Guide pages have no board to drive -> zero <script>.
+    # WIP + Guide pages have no board to drive -> only the head theme-boot script.
     for name in ("spectrum_sensing.html", "guide.html"):
         page = (out / name).read_text(encoding="utf-8")
-        assert "<script>" not in page
-    # The full amc leaderboard page carries the board script.
+        assert page.count("<script>") == 1
+        assert "rfb-theme" in page
+        assert "sortTable" not in page
+    # The full amc leaderboard page adds the board script on top of the theme boot.
     amc_html = (out / "amc.html").read_text(encoding="utf-8")
-    assert "<script>" in amc_html
+    assert amc_html.count("<script>") == 2
     # ...but still never contains the "line plot" substring in that script/CSS/controls.
     assert "line plot" not in amc_html.split("</table>")[-1]
 
@@ -1819,7 +1821,7 @@ def test_board_controls_present_on_full_page_only(tmp_path: Path) -> None:
     # A declared-but-resultless task renders a WIP page with NO controls and NO script.
     guide = (out / "guide.html").read_text(encoding="utf-8")
     assert 'id="board-search"' not in guide
-    assert "<script>" not in guide
+    assert "sortTable" not in guide  # no board script; only the theme boot
 
 
 def test_chart_points_and_bars_carry_tooltip_data(tmp_path: Path) -> None:
@@ -2229,8 +2231,8 @@ def test_foundation_rows_reuse_existing_verification_badge_and_show_regime_track
 
 
 def test_foundation_page_has_no_inline_script(tmp_path: Path) -> None:
-    """foundation.html is zero-JS, like guide.html/methods.html (native <title> tooltips only,
-    no legend-toggle/sort/filter script the way full task pages carry)."""
+    """foundation.html carries no board script, like guide/methods (native <title>
+    tooltips only, no legend-toggle/sort/filter script the way full task pages carry)."""
     results = tmp_path / "results"
     out = tmp_path / "site"
     _make_results_tree(results)
@@ -2240,7 +2242,8 @@ def test_foundation_page_has_no_inline_script(tmp_path: Path) -> None:
     )
     generate.build_site(results, out)
     foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
-    assert "<script>" not in foundation_html
+    assert foundation_html.count("<script>") == 1
+    assert "sortTable" not in foundation_html
 
 
 def test_render_foundation_is_self_contained() -> None:
@@ -2325,3 +2328,52 @@ def test_mobile_layout_puts_leaderboard_first() -> None:
     idx = css.index("@media (max-width: 900px)")
     block = css[idx : idx + 200]
     assert ".task-main { order: -1; }" in block
+
+
+# --- UI fixes: tier-legend collision, dataset/metrics spacing, theme toggle ---
+def test_tier_legend_uses_dedicated_classes() -> None:
+    """Tier-legend pills use tl-* classes, never the chart-legend legend-item/swatch names.
+
+    The chart legend pins .legend-swatch to a fixed 24x10 box; reusing that class for the
+    tier pills clobbered their layout (overlapping text). The namespaces must stay distinct.
+    """
+    legend = generate._render_tier_legend()
+    assert 'class="tl-swatch' in legend
+    assert 'class="tl-item"' in legend
+    assert "legend-swatch" not in legend
+    assert "legend-item" not in legend
+    css = generate.render_styles()
+    assert ".tl-swatch" in css
+    # The chart-legend swatch rule is untouched.
+    assert ".legend-swatch { width: 24px; height: 10px; flex: none; }" in css
+
+
+def test_task_page_wraps_dataset_and_metrics_in_grid(tmp_path: Path) -> None:
+    """dataset-card + metrics-block sit in a task-header-grid wrapper (gap between boxes)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    amc_html = (out / "amc.html").read_text(encoding="utf-8")
+    main = amc_html.split('<div class="task-main">', 1)[1]
+    assert main.startswith('<div class="task-header-grid">')
+    assert ".task-main > .task-header-grid { margin: 0 0 1.1rem; }" in amc_html
+
+
+def test_theme_toggle_present_and_progressive(tmp_path: Path) -> None:
+    """Every page ships the theme boot + a toggle button hidden until JS marks html.theme-js."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    generate.build_site(results, out)
+
+    for name in ("index.html", "amc.html", "guide.html"):
+        page = (out / name).read_text(encoding="utf-8")
+        assert 'class="icon-link theme-toggle"' in page
+        assert "rfb-theme" in page
+    css = generate.render_styles()
+    assert ".theme-toggle { display: none;" in css
+    assert "html.theme-js .theme-toggle { display: inline-flex; }" in css
+    assert ':root[data-theme="dark"]' in css
+    assert ':root:not([data-theme="light"])' in css

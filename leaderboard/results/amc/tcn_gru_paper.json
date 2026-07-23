@@ -20,7 +20,8 @@
   "model": {
     "family": "baseline",
     "name": "tcn-gru-paper",
-    "url": "https://doi.org/10.3390/s24247908"
+    "url": "https://doi.org/10.3390/s24247908",
+    "n_params": 253451
   },
   "regime": {
     "name": "from_scratch"
@@ -38,7 +39,7 @@
     "version": "v1"
   },
   "verification": {
-    "note": "TCN-GRU ('Robust Automatic Modulation Classification via a Lightweight Temporal Hybrid Neural Network', Sensors 24(24):7908, 2024, DOI 10.3390/s24247908). Chiffre 0.6156 = full-SNR accuracy_overall (moyenne sur -20..+18 dB, 11 classes), rapporte par les auteurs de TCN-GRU dans LEUR PROPRE Table III (source primaire pour TCN-GRU lui-meme), MAIS repris dans notre biblio comme second tableau inter-baselines et NON re-verifie a la source primaire PDF par ce repo; on cite ce nombre tel que consolide dans docs/BIBLIOGRAPHY.md sec.A.1. Meme dataset (RadioML 2016.10a) que notre split committe. Split du papier non publie au niveau indices; ratio non 80/10/10 -> aucun recouvrement byte-level confirme avec amc-radioml2016-strat-snr-8010-seed42-v1, seuls le dataset et le protocole full-SNR/metric coincident. 'from_paper' (dataset+protocole identiques, precedent tldnn_paper/iqfm_paper). Point de reference litterature, jamais confondu avec un chiffre reproduit en interne.",
+    "note": "TCN-GRU ('Robust Automatic Modulation Classification via a Lightweight Temporal Hybrid Neural Network', Sensors 24(24):7908, 2024, DOI 10.3390/s24247908). Chiffre 0.6156 = full-SNR accuracy_overall (moyenne sur -20..+18 dB, 11 classes), rapporte par les auteurs de TCN-GRU dans LEUR PROPRE Table III (source primaire pour TCN-GRU lui-meme), MAIS repris dans notre biblio comme second tableau inter-baselines et NON re-verifie a la source primaire PDF par ce repo; on cite ce nombre tel que consolide dans docs/BIBLIOGRAPHY.md sec.A.1. Meme dataset (RadioML 2016.10a) que notre split committe. Split du papier non publie au niveau indices; ratio non 80/10/10 -> aucun recouvrement byte-level confirme avec amc-radioml2016-strat-snr-8010-seed42-v1, seuls le dataset et le protocole full-SNR/metric coincident. 'from_paper' (dataset+protocole identiques, precedent tldnn_paper/iqfm_paper). Point de reference litterature, jamais confondu avec un chiffre reproduit en interne. Model size: n_params=253451 (high confidence — TCN-GRU primary paper: 'Robust Automatic Modulation Classification via a Lightweight Temporal Hybrid Neural Network', Sensors 24(24):7908, 2024, DOI 10.3390/s24…)",
     "status": "from_paper"
   }
 }

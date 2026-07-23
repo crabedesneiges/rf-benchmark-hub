@@ -12,7 +12,8 @@
   "model": {
     "family": "baseline",
     "name": "rt-detr-l-paper",
-    "url": "https://arxiv.org/abs/2501.10407"
+    "url": "https://arxiv.org/abs/2501.10407",
+    "n_params": 42000000
   },
   "regime": {
     "name": "from_scratch"
@@ -30,7 +31,7 @@
     "version": "v1"
   },
   "verification": {
-    "note": "RT-DETR-L: RadDet (Huang, Denman, Pemasiri, Martin, Fookes, ICASSP 2025, arXiv:2501.10407), Table III, column RadDet-9T @512x512 (the DENSE SYNTHETIC variant at 512 px). NOT reproduced/re-run by this repo. Our canonical split detect-raddet-detection-official-v1 ADOPTS RadDet's own published train/val/test partition verbatim (images/{{train,val,test}}/ from the archive; our test = their test set), so this figure is directly comparable -> 'from_paper' (not uncertain). Board primary 'mAP' = COCO AP@[0.50:0.95] (= the paper's mAP50:95); mAP50 kept as a secondary value. This is the SYNTHETIC RadDet-9T variant we hold on the cluster, NOT the NIST-CBRS real captures that back the paper's headline RT-DETR-L 95.31 mAP50. Verification: the YOLOv3-L (53.97) and YOLOv9-M (40.85) mAP50:95 cells were re-read verbatim from the PDF via pdftotext in the 2026-07-22 sweep; the full 512/9T column (incl. YOLOv6-M, RT-DETR-L) was cross-read from the arXiv HTML Table III, agreeing exactly on the two pdftotext-verified cells. Literature reference point, never a repro.",
+    "note": "RT-DETR-L: RadDet (Huang, Denman, Pemasiri, Martin, Fookes, ICASSP 2025, arXiv:2501.10407), Table III, column RadDet-9T @512x512 (the DENSE SYNTHETIC variant at 512 px). NOT reproduced/re-run by this repo. Our canonical split detect-raddet-detection-official-v1 ADOPTS RadDet's own published train/val/test partition verbatim (images/{{train,val,test}}/ from the archive; our test = their test set), so this figure is directly comparable -> 'from_paper' (not uncertain). Board primary 'mAP' = COCO AP@[0.50:0.95] (= the paper's mAP50:95); mAP50 kept as a secondary value. This is the SYNTHETIC RadDet-9T variant we hold on the cluster, NOT the NIST-CBRS real captures that back the paper's headline RT-DETR-L 95.31 mAP50. Verification: the YOLOv3-L (53.97) and YOLOv9-M (40.85) mAP50:95 cells were re-read verbatim from the PDF via pdftotext in the 2026-07-22 sweep; the full 512/9T column (incl. YOLOv6-M, RT-DETR-L) was cross-read from the arXiv HTML Table III, agreeing exactly on the two pdftotext-verified cells. Literature reference point, never a repro. Model size: n_params=42000000 (high confidence — Original RT-DETR paper 'DETRs Beat YOLOs on Real-time Object Detection' (arXiv:2304.08069), Table 2: RT-DETR-R50, #Params(M)=42, GFLOPs=136, 108 FPS, 53.1% AP. …)",
     "status": "from_paper"
   }
 }

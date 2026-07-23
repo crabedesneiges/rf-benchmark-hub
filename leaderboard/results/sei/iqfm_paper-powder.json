@@ -11,7 +11,8 @@
   "model": {
     "family": "foundation",
     "name": "iqfm-paper",
-    "url": "https://arxiv.org/abs/2506.06718"
+    "url": "https://arxiv.org/abs/2506.06718",
+    "n_params": 341800
   },
   "regime": {
     "k_shot": 200,
@@ -30,7 +31,7 @@
     "version": "v1"
   },
   "verification": {
-    "note": "Reported by IQFM (Mashaal, Abou-Zeid, arXiv:2506.06718), LoRA few-shot (up to 200 samples/class): 96.05% on RF fingerprinting (vs 96.64% supervised), the abstract's headline figure, verbatim (Fig 9a curve; verified via pdftotext). k_shot=200 is the paper's max samples/class for POWDER. POWDER RF fingerprinting = 4 base stations (USRP X310, IEEE 802.11a) on the POWDER PAWR platform (Reus-Muns et al. GLOBECOM 2020), the SAME dataset as our board's POWDER site-ID column. NOT reproduced by this repo. from_paper_UNCERTAIN: (1) FEW-SHOT regime (frozen/adapted FM + light head), a different regime column from our from_scratch baselines; (2) the FM uses the 802.11a WiFi subset whereas our closed_set pools 4G/5G/WiFi waveforms (same-day, single day); (3) split indices unpublished. Same dataset + task (BS identification) + metric (rank1 accuracy), regime/subset not byte-confirmed identical -> uncertain. References our committed POWDER same-day split; a literature coverage point for the FM, never conflated with an in-repo run.",
+    "note": "Reported by IQFM (Mashaal, Abou-Zeid, arXiv:2506.06718), LoRA few-shot (up to 200 samples/class): 96.05% on RF fingerprinting (vs 96.64% supervised), the abstract's headline figure, verbatim (Fig 9a curve; verified via pdftotext). k_shot=200 is the paper's max samples/class for POWDER. POWDER RF fingerprinting = 4 base stations (USRP X310, IEEE 802.11a) on the POWDER PAWR platform (Reus-Muns et al. GLOBECOM 2020), the SAME dataset as our board's POWDER site-ID column. NOT reproduced by this repo. from_paper_UNCERTAIN: (1) FEW-SHOT regime (frozen/adapted FM + light head), a different regime column from our from_scratch baselines; (2) the FM uses the 802.11a WiFi subset whereas our closed_set pools 4G/5G/WiFi waveforms (same-day, single day); (3) split indices unpublished. Same dataset + task (BS identification) + metric (rank1 accuracy), regime/subset not byte-confirmed identical -> uncertain. References our committed POWDER same-day split; a literature coverage point for the FM, never conflated with an in-repo run. Model size: n_params=341800 (high confidence — arXiv:2506.06718 (IQFM), Section V-A: \"Our implementation, based on the official PyTorch release, contains approximately 341k trainable parameters\" and \"the ful…)",
     "status": "from_paper_uncertain"
   }
 }

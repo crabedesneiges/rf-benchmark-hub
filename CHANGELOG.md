@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed + Data — Pareto taille/perf lisible & peuplé (n_params de 24 modèles from_paper)
+
+- **Rendu Pareto** : ticks Y en 3 chiffres significatifs (fin du débordement `0.654866` →
+  `0.655`), marge gauche élargie (plus de labels coupés), et **tooltip au survol** câblé sur la
+  page foundation (qui ne chargeait aucun board script) → les points montrent modèle + taille +
+  score, sur les pages tâche ET foundation.
+- **Données** : `n_params` ajouté à **24 lignes `from_paper`** par recherche sourcée (YOLOv3-l
+  61.9M, YOLOv6-m 34.9M, YOLOv9-m 20M, RT-DETR-l 42M, ResNet 236 344 verbatim du papier, VT-CNN2
+  1.59M, MCLDNN/CLDNN/TLDNN/LSTM2/… par dataset selon #classes). Couverture `n_params` 25 → 49/57 ;
+  provenance (source + confiance) ajoutée à la note de chaque ligne. Écartés : `oracle-cnn`
+  (non fiable) et `wirelessjepa` (compte jamais énoncé dans le papier). Résultat : les scatters
+  Pareto se peuplent (détection complète, IQFM visible en foundation ; amc : 20 → 3 modèles omis).
+
 ### Site — colonne Size, champ `model.n_flops`, scatter taille/perf + frontière de Pareto
 
 Taille et coût compute des modèles rendus first-class dans le générateur statique :

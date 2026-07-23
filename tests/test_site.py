@@ -2776,3 +2776,26 @@ def test_best_baseline_per_track_picks_top_specialist(tmp_path: Path) -> None:
     by_track = {t: r for t, r in best}
     assert by_track["closed_set"]["model"]["name"] == "strong"  # top specialist of the track
     assert by_track["cross_receiver"]["model"]["name"] == "solo"
+
+
+# --- Pareto rendering fixes ---
+def test_axis_ticks_are_short() -> None:
+    """Axis tick labels use <=3 significant figures (no 6-decimal overflow like 0.654866)."""
+    assert generate._fmt_axis(0.6548659) == "0.655"
+    assert generate._fmt_axis(0.13) == "0.13"
+    assert generate._fmt_axis(5.0) == "5"
+
+
+def test_foundation_scatter_points_get_a_tooltip(tmp_path: Path) -> None:
+    """foundation.html wires the shared tooltip to its scatter points (no board script)."""
+    results = tmp_path / "results"
+    out = tmp_path / "site"
+    _make_results_tree(results)
+    _write(
+        results / "amc" / "found.json",
+        _foundation_row("row-f", "amc", "iqfm-base", "linear_probe", 0.8),
+    )
+    generate.build_site(results, out)
+    foundation_html = (out / "foundation.html").read_text(encoding="utf-8")
+    assert "chart-tooltip" in foundation_html
+    assert ".pt[data-model], .barplot-bar[data-model]" in foundation_html

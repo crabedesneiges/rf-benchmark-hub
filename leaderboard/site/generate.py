@@ -1202,7 +1202,7 @@ def _fmt_axis(value: float) -> str:
     """Format an axis tick label (drops a trailing ``.0`` for integer-valued ticks)."""
     if value == int(value):
         return str(int(value))
-    return f"{value:g}"
+    return f"{value:.3g}"
 
 
 def _axis_titles(curve_name: str) -> tuple[str | None, str | None]:
@@ -1677,7 +1677,7 @@ def _render_pareto_scatter(rows: list[dict[str, Any]]) -> str:
         ymax = ymin + 1.0
 
     width, height = 720, 340
-    pad_l, pad_r, pad_t, pad_b = 56, 16, 20, 56
+    pad_l, pad_r, pad_t, pad_b = 66, 16, 20, 56
     plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
 
     def sx(log_x: float) -> float:
@@ -3870,6 +3870,44 @@ _FOUNDATION_JS: str = """
   }
   if (baselineToggle) { baselineToggle.addEventListener('change', applyBaselines); }
   applyBaselines();  // default unchecked -> hide the baseline surfaces once JS is on
+
+  // Shared floating tooltip for this page's scatter points (foundation.html loads no board
+  // script, so the points would otherwise have only the native <title>). Mirrors the board JS.
+  var tip = document.createElement('div');
+  tip.className = 'chart-tooltip';
+  tip.setAttribute('role', 'tooltip');
+  document.body.appendChild(tip);
+  function showTip(el) {
+    var model = el.getAttribute('data-model');
+    if (!model) { return; }
+    var x = el.getAttribute('data-x');
+    var metric = el.getAttribute('data-metric');
+    var y = el.getAttribute('data-y');
+    tip.textContent = '';
+    var nm = document.createElement('span');
+    nm.className = 'tt-model';
+    nm.textContent = model;
+    tip.appendChild(nm);
+    if (x !== null) {
+      tip.appendChild(document.createElement('br'));
+      tip.appendChild(document.createTextNode('x = ' + x));
+    }
+    tip.appendChild(document.createElement('br'));
+    tip.appendChild(document.createTextNode(
+      (metric ? metric + ' = ' : '') + (y !== null ? y : '')));
+    var box = el.getBoundingClientRect();
+    tip.style.left = (box.left + box.width / 2) + 'px';
+    tip.style.top = (box.top - 8) + 'px';
+    tip.style.transform = 'translate(-50%, -100%)';
+    tip.classList.add('visible');
+  }
+  function hideTip() { tip.classList.remove('visible'); }
+  document.querySelectorAll('.pt[data-model], .barplot-bar[data-model]').forEach(function (el) {
+    el.addEventListener('mouseenter', function () { showTip(el); });
+    el.addEventListener('mouseleave', hideTip);
+    el.addEventListener('focus', function () { showTip(el); });
+    el.addEventListener('blur', hideTip);
+  });
 })();
 """
 

@@ -21,7 +21,8 @@
     "family": "foundation",
     "name": "iqfm-paper",
     "pretrained": true,
-    "url": "https://arxiv.org/abs/2506.06718"
+    "url": "https://arxiv.org/abs/2506.06718",
+    "n_params": 341800
   },
   "regime": {
     "k_shot": 50,
@@ -40,7 +41,7 @@
     "version": "v1"
   },
   "verification": {
-    "note": "Reported by the IQFM authors (Mashaal & Abou-Zeid, arXiv:2506.06718v2), NOT reproduced or re-run by this repo. Same dataset (RadioML 2016.10a, 11 classes, full SNR range -20..+18 dB) and evaluation protocol as our board's AMC track (docs/BIBLIOGRAPHY.md A.5) -- the only reason this is 'from_paper' and not 'from_paper_uncertain'. The paper's exact train/probe/test sample indices are unpublished, so byte-for-byte overlap with our canonical split (amc-radioml2016-strat-snr-8010-seed42-v1) is not confirmed, only the dataset+protocol match. Weights are unpublished; our own in-repo retrain of the recipe (iqfm-base wrapper, scripts/pretrain/iqfm_simclr.py) is a SEPARATE, in-distribution number and must never be conflated with this figure.",
+    "note": "Reported by the IQFM authors (Mashaal & Abou-Zeid, arXiv:2506.06718v2), NOT reproduced or re-run by this repo. Same dataset (RadioML 2016.10a, 11 classes, full SNR range -20..+18 dB) and evaluation protocol as our board's AMC track (docs/BIBLIOGRAPHY.md A.5) -- the only reason this is 'from_paper' and not 'from_paper_uncertain'. The paper's exact train/probe/test sample indices are unpublished, so byte-for-byte overlap with our canonical split (amc-radioml2016-strat-snr-8010-seed42-v1) is not confirmed, only the dataset+protocol match. Weights are unpublished; our own in-repo retrain of the recipe (iqfm-base wrapper, scripts/pretrain/iqfm_simclr.py) is a SEPARATE, in-distribution number and must never be conflated with this figure. Model size: n_params=341800 (high confidence — arXiv:2506.06718 (IQFM), Section V-A: \"Our implementation, based on the official PyTorch release, contains approximately 341k trainable parameters\" and \"the ful…)",
     "status": "from_paper"
   }
 }

@@ -117,8 +117,6 @@ def measure() -> dict[str, dict[str, Any]]:
     import importlib
     import pkgutil
 
-    import torch
-
     import rfbench.models.baselines as _baselines
     import rfbench.models.foundation as _foundation
     from rfbench.core.registry import MODELS
@@ -134,28 +132,30 @@ def measure() -> dict[str, dict[str, Any]]:
             except Exception:  # noqa: BLE001 - optional-dep models just do not register
                 continue
 
-    try:
-        from fvcore.nn import FlopCountAnalysis
-    except ImportError:
-        FlopCountAnalysis = None
-
     report: dict[str, dict[str, Any]] = {}
     for name, spec in _model_specs().items():
         if name not in MODELS:
             continue  # a from_paper row with no in-repo implementation -> nothing to measure
         entry: dict[str, Any] = {"task": spec["task"], "dataset": spec["dataset"]}
         try:
-            model = _instantiate(MODELS[name], spec["n_classes"]).eval()
-            entry["n_params"] = int(model.n_params)
+            model = _instantiate(MODELS[name], spec["n_classes"])
+            entry["n_params"] = int(model.n_params)  # the Model ABC property (not nn.Module)
+        except Exception as exc:  # noqa: BLE001 - instantiation failed: record and keep going
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+            report[name] = entry
+            continue
+        # FLOPs for one forward via torch's dispatch counter -- the model's own forward handles
+        # the Batch dict + device placement, so no nn.Module access nor fvcore is needed.
+        try:
+            from torch.utils.flop_counter import FlopCounterMode
+
             dummy = _build_dummy(spec["task"], int(spec["window"]))
             entry["input_shape"] = list(dummy.shape)
-            if FlopCountAnalysis is None:
-                entry["warning"] = "fvcore missing -> params only (uv pip install fvcore)"
-            else:
-                with torch.no_grad():
-                    entry["n_flops"] = int(FlopCountAnalysis(model, (dummy,)).total())
-        except Exception as exc:  # noqa: BLE001 - best-effort tool: record and keep going
-            entry["error"] = f"{type(exc).__name__}: {exc}"
+            with FlopCounterMode(display=False) as counter:
+                model.forward({"iq": dummy})
+            entry["n_flops"] = int(counter.get_total_flops())
+        except Exception as exc:  # noqa: BLE001 - FLOPs are best-effort; the params are kept
+            entry["flops_error"] = f"{type(exc).__name__}: {exc}"
         report[name] = entry
     return report
 

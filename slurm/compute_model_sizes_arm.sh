@@ -32,10 +32,7 @@ echo "=== node=$(hostname) arch=$(uname -m) repo=$REPO date=$(date -Is) ==="
 cd "$REPO" || { echo "REPO NOT FOUND: $REPO"; exit 2; }
 [ -x "$VENV/bin/python" ] || { echo "GPU venv missing: $VENV (run slurm/setup_gpu_venv.sh)"; exit 3; }
 
-echo "=== ensure fvcore in the GPU venv (torch already present) ==="
-"$UV" pip install --python "$VENV/bin/python" "fvcore>=0.1.5" >/dev/null || echo "(fvcore install warn -> params-only fallback)"
-
-echo "=== measure params + FLOPs, patch result.json (--write) ==="
+echo "=== measure params + FLOPs (torch FlopCounterMode), patch result.json (--write) ==="
 "$VENV/bin/python" scripts/compute_model_sizes.py --write
 
 echo "=== done; review 'git diff leaderboard/results' on the frontend, then commit ==="

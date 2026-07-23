@@ -35,7 +35,7 @@ detection = ["torchsig", "torch>=2.2"]   # WBSig53 generation via TorchSig
 # (aarch64 wheels, no compile); without it the detection-track mAP raises ModuleNotFoundError.
 raddet = ["ultralytics>=8.1", "torch>=2.2", "numpy>=1.24", "torchmetrics>=1.3", "faster-coco-eval>=1.5"]
 foundation = ["torch>=2.2", "huggingface_hub>=0.20", "numpy>=1.24"]  # public-weights FMs (LWM-Spectro)
-size = ["fvcore>=0.1.5", "torch>=2.2"]   # measure n_params/FLOPs (scripts/compute_model_sizes.py, ARM node)
+size = ["torch>=2.2"]   # measure n_params/FLOPs via torch FlopCounterMode (scripts/compute_model_sizes.py, ARM)
 dev = ["ruff>=0.5", "black>=24.4", "pytest>=8.0", "mypy>=1.10", "pre-commit>=3.7", "types-jsonschema", "pyyaml>=6.0", "types-pyyaml"]
 
 [project.scripts]

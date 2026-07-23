@@ -1534,9 +1534,7 @@ def _render_tier_legend() -> str:
         _item(text, css_class, _OVERLAP_GLOSS.get(key, ""))
         for key, (text, css_class) in _OVERLAP_BADGE.items()
     )
-    guide_link = (
-        f'<a class="tl-guide" href="{_GUIDE_SLUG}.html#verification">Full guide &rarr;</a>'
-    )
+    guide_link = f'<a class="tl-guide" href="{_GUIDE_SLUG}.html#verification">Full guide &rarr;</a>'
     return (
         '<div class="tier-legend" aria-label="How to read the board">'
         f'<span class="tl-group">{badges}</span>'
@@ -1871,9 +1869,7 @@ def _render_group(
     parts = []
     if show_dataset:
         parts.append(f'<span class="group-dataset">Dataset &middot; {_esc(dataset)}</span>')
-    parts.append(
-        f'<span class="chip chip-regime">Regime &middot; {_esc(regime_label)}</span>'
-    )
+    parts.append(f'<span class="chip chip-regime">Regime &middot; {_esc(regime_label)}</span>')
     if track != _DEFAULT_TRACK:
         parts.append(
             f'<span class="chip chip-track">Track &middot; {_esc(_track_label(track))}</span>'
@@ -2108,11 +2104,9 @@ def _render_submit_card() -> str:
     Shows the real self-serve command flow (docs/SUBMISSION.md) in a selectable ``<pre>``
     (readable with JavaScript off) so a would-be submitter sees the exact steps in place.
     """
-    commands = (
-        """# 1. run the eval (emits result.json, marked self_reported)
+    commands = """# 1. run the eval (emits result.json, marked self_reported)
 rfbench eval <task> --model <name> --regime <regime>
 # 2. add leaderboard/results/<task>/<name>.json, then open a PR"""
-    )
     return (
         '<div class="submit-card"><h3>Submit a result</h3>'
         "<p>Run the eval, add the JSON result (validated against result.schema.json) "

@@ -305,7 +305,7 @@ def _as_prob_row(prediction: object) -> list[float]:
     length-1 row through.
     """
     try:
-        return [float(x) for x in prediction]  # type: ignore[union-attr]
+        return [float(x) for x in prediction]  # type: ignore[attr-defined]
     except TypeError as exc:
         raise ValueError(
             "multi-label spectrum-sensing prediction must be a per-subband row"
@@ -332,7 +332,7 @@ def iter_occupancy_cells(pred: Tensor, target: Tensor) -> list[tuple[float, int]
     for prediction, label in zip(pred, target, strict=True):
         if _is_multilabel_target(label):
             row = _as_prob_row(prediction)
-            bits = list(label)  # type: ignore[call-overload]
+            bits = list(label)
             if len(row) != len(bits):
                 raise ValueError(
                     "multi-label spectrum-sensing prediction/target length mismatch: "

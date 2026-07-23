@@ -39,8 +39,9 @@
   },
   "model": {
     "family": "baseline",
-    "n_params": 49012,
-    "name": "wisig_cnn_paper"
+    "n_params": 51442,
+    "name": "wisig_cnn_paper",
+    "n_flops": 1074240
   },
   "regime": {
     "name": "from_scratch"

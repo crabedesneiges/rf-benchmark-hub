@@ -168,7 +168,8 @@
   "model": {
     "family": "baseline",
     "n_params": 124011,
-    "name": "resnet_amc"
+    "name": "resnet_amc",
+    "n_flops": 5884672
   },
   "regime": {
     "name": "from_scratch"

@@ -33,7 +33,8 @@
   "model": {
     "family": "baseline",
     "n_params": 1580164,
-    "name": "tprime"
+    "name": "tprime",
+    "n_flops": 787456
   },
   "regime": {
     "name": "from_scratch"

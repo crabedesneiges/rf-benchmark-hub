@@ -39,8 +39,9 @@
   },
   "model": {
     "family": "baseline",
-    "n_params": 226420,
-    "name": "complex_cnn"
+    "n_params": 229450,
+    "name": "complex_cnn",
+    "n_flops": 12434000
   },
   "regime": {
     "name": "from_scratch"

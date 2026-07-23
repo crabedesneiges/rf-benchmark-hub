@@ -40,7 +40,8 @@
   "model": {
     "family": "baseline",
     "n_params": 90086,
-    "name": "interf_cnn"
+    "name": "interf_cnn",
+    "n_flops": 22513152
   },
   "regime": {
     "name": "from_scratch"

@@ -204,7 +204,8 @@
   "model": {
     "family": "baseline",
     "n_params": 407876,
-    "name": "mcldnn"
+    "name": "mcldnn",
+    "n_flops": 290906880
   },
   "regime": {
     "name": "from_scratch"

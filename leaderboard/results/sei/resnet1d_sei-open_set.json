@@ -39,8 +39,9 @@
   },
   "model": {
     "family": "baseline",
-    "n_params": 3905912,
-    "name": "resnet1d_sei"
+    "n_params": 3921302,
+    "name": "resnet1d_sei",
+    "n_flops": 87414784
   },
   "regime": {
     "name": "from_scratch"

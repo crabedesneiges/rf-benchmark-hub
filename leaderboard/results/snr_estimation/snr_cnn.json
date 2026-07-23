@@ -44,7 +44,8 @@
   "model": {
     "family": "baseline",
     "n_params": 239361,
-    "name": "snr_cnn"
+    "name": "snr_cnn",
+    "n_flops": 15958272
   },
   "regime": {
     "name": "from_scratch"

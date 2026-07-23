@@ -167,7 +167,7 @@
   },
   "model": {
     "family": "baseline",
-    "n_params": 88,
+    "n_params": 0,
     "name": "hoc_lr"
   },
   "regime": {

@@ -171,7 +171,7 @@ def _write_back(report: dict[str, dict[str, Any]]) -> int:
                 model[key] = measured[key]
                 updated = True
         if updated:
-            path.write_text(json.dumps(row, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            path.write_text(json.dumps(row, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
             changed += 1
     return changed
 

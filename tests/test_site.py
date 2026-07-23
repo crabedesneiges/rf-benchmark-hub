@@ -2336,8 +2336,8 @@ def _sized_amc_row(
 
 def test_size_column_present_and_sortable_on_leaderboard_table(tmp_path: Path) -> None:
     """The leaderboard table carries a sortable Size column; its cell shows params (and a muted
-    FLOPs sub-line when n_flops is present) and carries data-value = n_flops if present else
-    n_params, so the generic board sort orders by compute/size."""
+    FLOPs sub-line when n_flops is present) and carries data-value = n_params if present else
+    n_flops, so the generic board sort orders the column by model size."""
     results = tmp_path / "results"
     out = tmp_path / "site"
     _write(
@@ -2358,8 +2358,10 @@ def test_size_column_present_and_sortable_on_leaderboard_table(tmp_path: Path) -
     assert '<span class="size-params">2.3M</span>' in amc
     assert '<span class="size-flops">1.2G FLOPs</span>' in amc
     assert '<span class="size-params">90K</span>' in amc
-    # data-value = n_flops when present, else n_params; the unsized row gets a muted en-dash cell.
-    assert 'data-value="1200000000"' in amc  # FLOPs preferred over params for sorting
+    # data-value = n_params when present (the Size column sorts by parameter count, not FLOPs);
+    # the unsized row gets a muted en-dash cell.
+    assert 'data-value="2300000"' in amc  # params is the sort key (headline "Size")
+    assert 'data-value="1200000000"' not in amc  # NOT the FLOPs value
     assert 'data-value="90000"' in amc
     assert '<td class="num size"><span class="size-params">&ndash;</span></td>' in amc
     # The inline params span next to the model name is gone (params moved into the Size column).

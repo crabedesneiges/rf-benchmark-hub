@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Pareto : modèles params-only visibles + tri Size par params
+
+- Le scatter Pareto basculait son axe X en FLOPs dès qu'UN modèle en déclarait, puis **jetait
+  tous les modèles sans FLOPs** — or seuls nos modèles implémentés ont des FLOPs, les lignes
+  `from_paper` n'ayant que des params. Résultat : sur AMC 2016, 14 modèles omis (il ne restait
+  que 3), et **aucun plot pour 2018** (< 2 points). Désormais l'axe FLOPs n'est utilisé que si
+  TOUS les modèles tracés en ont ; sinon on trace en `n_params` (couverture 49/57). AMC 2016
+  passe à 13 points et 2018 s'affiche (8 points).
+- La colonne **Size** triait par FLOPs quand présents : `tprime` (1.58M params mais 787K FLOPs)
+  se retrouvait sous des modèles à 400K params. Elle trie désormais par **n_params** (la taille
+  affichée en tête), FLOPs seulement en repli.
+
 ### Fixed — Pareto taille/perf : un scatter PAR DATASET, filtré par le sélecteur
 
 - Le scatter « Size vs performance » était rendu une seule fois par tâche (tous datasets

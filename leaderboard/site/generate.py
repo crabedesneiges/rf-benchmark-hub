@@ -1163,14 +1163,15 @@ def _model_n_flops(row: dict[str, Any]) -> int | None:
 
 
 def _size_sort_value(row: dict[str, Any]) -> int | None:
-    """The numeric value the Size column sorts on: ``n_flops`` if present, else ``n_params``.
+    """The numeric value the Size column sorts on: ``n_params`` if present, else ``n_flops``.
 
-    A compute proxy (FLOPs) is preferred over raw capacity (params) when available, so the
-    generic board sort on the Size column orders by compute where declared and by parameter
-    count otherwise. ``None`` when the row declares neither (its cell sorts last / as -inf).
+    The column is headed "Size" and shows the PARAMETER count as its main line, so it sorts on
+    n_params (a 1.6M-param model ranks above a 400K-param one, regardless of their FLOPs). FLOPs
+    is only the fallback for the rare row that declares FLOPs but not params. ``None`` when the
+    row declares neither (its cell sorts last / as -inf).
     """
-    flops = _model_n_flops(row)
-    return flops if flops is not None else _model_n_params(row)
+    params = _model_n_params(row)
+    return params if params is not None else _model_n_flops(row)
 
 
 def _render_size_cell(row: dict[str, Any]) -> str:
@@ -1178,9 +1179,9 @@ def _render_size_cell(row: dict[str, Any]) -> str:
 
     The cell always shows the parameter count via :func:`_fmt_params` (an en-dash when absent);
     when ``model.n_flops`` is declared a muted second line shows the FLOPs (e.g. ``1.2G FLOPs``).
-    The ``data-value`` attribute carries the numeric sort key (:func:`_size_sort_value`) -- FLOPs
-    when present, else params -- so the generic board sort (``data-sort="num"`` reading
-    ``data-value``) orders the column by compute/size. When neither is present the cell shows a
+    The ``data-value`` attribute carries the numeric sort key (:func:`_size_sort_value`) -- the
+    parameter count (else FLOPs) -- so the generic board sort (``data-sort="num"`` reading
+    ``data-value``) orders the column by model size. When neither is present the cell shows a
     muted en-dash and carries NO ``data-value`` (it sorts last, like an empty metric cell).
     """
     n_params = _model_n_params(row)
@@ -1615,7 +1616,7 @@ def _render_pareto_scatter(rows: list[dict[str, Any]]) -> str:
     """Render the size/perf Pareto scatter: X = model size (log), Y = the primary metric.
 
     THE headline efficiency view: one marker per model, X = a compute/size cost on a LOG scale
-    (``model.n_flops`` if ANY row declares it, else ``model.n_params`` -- the axis title names
+    (``model.n_flops`` only when EVERY plotted model declares it, else ``model.n_params`` --
     which), Y = the group's primary metric (direction respects :func:`_is_lower_better`). Markers
     reuse the board's stable channels (:func:`_model_hue` + :func:`_marker_shape` +
     :func:`_family_dash`) so baseline vs foundation read apart, and carry the same ``data-*``
@@ -1633,7 +1634,9 @@ def _render_pareto_scatter(rows: list[dict[str, Any]]) -> str:
     primary_key = _primary_key(rows[0])
     lower = _is_lower_better(primary_key)
     # X axis = FLOPs when ANY row declares it (a hardware-independent compute proxy), else params.
-    use_flops = any(_model_n_flops(r) is not None for r in rows)
+    # Use the FLOPs (compute) axis ONLY when EVERY row declares it; otherwise fall back to
+    # n_params (far wider coverage) so params-only literature rows are NOT dropped from the plot.
+    use_flops = bool(rows) and all(_model_n_flops(r) is not None for r in rows)
 
     def _size_of(row: dict[str, Any]) -> int | None:
         return _model_n_flops(row) if use_flops else _model_n_params(row)

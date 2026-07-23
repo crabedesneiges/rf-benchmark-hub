@@ -1,0 +1,35 @@
+{
+  "dataset": {
+    "name": "powder"
+  },
+  "metrics": {
+    "primary": "rank1_accuracy",
+    "values": {
+      "rank1_accuracy": 1.0
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "pvamu-cnn-paper",
+    "url": "https://arxiv.org/abs/2511.01198"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "sei-powder-closedset-sameday-strat-site-8010-seed42-v1",
+    "checksum": "sha256:f7034c3ea634ae51182508257919a2933fc48ab09e6967d6b228c30600610b25",
+    "name": "test",
+    "seed": 42,
+    "track": "closed_set"
+  },
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by Abdul-Quddoos, Sharmin, Li, Qian (arXiv:2511.01198), NOT reproduced by this repo. 1.0 = 100% base-station (transmitter) classification on the POWDER platform, verified in the abstract. from_paper_UNCERTAIN: the paper's multi-task CNN classifies over a 3-PROTOCOL-MIXED input pool whereas our POWDER closed_set column is the WiFi-only same-day 4-BS protocol (Reus-Muns GLOBECOM 2020); the exact capture subset + split are not confirmed identical -> only the dataset family matches. A perfect 100% on a mixed-protocol pool is not directly comparable to our WiFi-only rank1. Literature reference, never conflated with an in-repo reproduced number.",
+    "status": "from_paper_uncertain"
+  }
+}

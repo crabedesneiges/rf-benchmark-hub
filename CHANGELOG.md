@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — littérature (axe 1) : 4 lignes `from_paper` sourcées + audit datasets sans littérature
+
+Recherche fan-out (2022-2026) par dataset, audit adversarial contre la doctrine des tiers et les
+verdicts `not_addable` existants ; 4 propositions retenues (sources primaires arXiv vérifiées) :
+- **GAMC (5-MoE) 66.14 %** — amc/2016.10a, `from_paper` (arXiv:2604.10317, Table IV full-SNR).
+  Nouveau SOTA littérature 2016 (> moeformer 63.74 %).
+- **MoE-AMC 71.76 %** — amc/2018.01a, `from_paper` (arXiv:2312.02298, re-vérifié : moyenne full-SNR).
+  Caveat prominent dans la note : +7.5 pt vs SOTA on-board, preprint → référence optimiste.
+- **SinFormer 89.5 %** — sei/wisig closed_set, `from_paper_uncertain` (arXiv:2605.24389 ; équalisation
+  non précisée + split différent).
+- **pvamu-multitask-cnn 100 %** — sei/powder closed_set, `from_paper_uncertain` (arXiv:2511.01198 ;
+  pool 3-protocoles mixé vs notre WiFi-only).
+- Rejets (alignés doctrine) : HyDRA (équalisé), Hamiltonian (data-starved), OOD-detectors, few-shot
+  ORACLE, CBADNN. Datasets **sans littérature externe comparable** notés (snr_estimation, interf_gnss6,
+  oracle) — gardés actifs car ils ont des scores réels (verified/from_paper), aucun retrait de page.
+
 ### Fixed — Pareto : modèles params-only visibles + tri Size par params
 
 - Le scatter Pareto basculait son axe X en FLOPs dès qu'UN modèle en déclarait, puis **jetait

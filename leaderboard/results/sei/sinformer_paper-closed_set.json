@@ -1,0 +1,35 @@
+{
+  "dataset": {
+    "name": "wisig"
+  },
+  "metrics": {
+    "primary": "rank1_accuracy",
+    "values": {
+      "rank1_accuracy": 0.895
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "sinformer-paper",
+    "url": "https://arxiv.org/abs/2605.24389"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "sei-wisig-closedset-strat-tx-8010-seed42-v1",
+    "checksum": "sha256:26981a0bc303c4c53ad03b3f7a84d290b799f40b2a96718efc2233f35e010d01",
+    "name": "test",
+    "seed": 42,
+    "track": "closed_set"
+  },
+  "task": {
+    "name": "sei",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the SinFormer authors (arXiv:2605.24389, 2026), NOT reproduced by this repo. 0.895 = closed-set rank1 device-ID accuracy on WiSig ManyTx (150 transmitters), verified in the arXiv HTML (Section 5 / Fig.14). from_paper_UNCERTAIN: WiSig ships EQUALIZED and NON-EQUALIZED preambles and the paper does not state which it uses (our closed_set column is NON-equalized -- equalization removes the channel that WiSig fingerprinting tests), and the exact tx/rx/day pool + split differ from our sei-wisig-closedset-strat-tx-8010-seed42-v1 -> only the dataset family + track name match, the protocol/condition is not confirmed identical. Literature reference, never conflated with our in-repo WiSig baselines (resnet1d_sei 0.8938 verified).",
+    "status": "from_paper_uncertain"
+  }
+}

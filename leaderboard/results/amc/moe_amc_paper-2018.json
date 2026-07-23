@@ -1,0 +1,44 @@
+{
+  "created_at": "2026-07-23T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2018_01a",
+    "version": "01a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 30,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.7176
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "moe-amc-paper",
+    "url": "https://arxiv.org/abs/2312.02298"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "amc-moe-amc-paper-radioml2018-fullsnr",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2018-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:a6dcde164f5a3974990747c08b1ad48c0be2a05b41f15fc33a071627a3ad6d94",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the MoE-AMC authors (Gao, Cao, Chen, arXiv:2312.02298, Dec 2023), NOT reproduced or re-run by this repo. 0.7176 = the paper's headline 'average classification accuracy across SNR levels' on RadioML 2018.01a (24-class), confirmed in the abstract and Table 1 (full -20..+30 dB average, NOT a high-SNR peak). Same dataset + full-SNR accuracy_overall metric as our canonical split -> 'from_paper'. CAVEAT: this exceeds the next-best on-board literature figure (moeformer-paper 0.6422) by ~7.5 points -- a large margin for a preprint MoE model; read it as an OPTIMISTIC upper reference until independently corroborated. Split indices unpublished, so overlap with amc-radioml2018-strat-snr-8010-seed42-v1 is unconfirmed -- only dataset + protocol match. Literature reference point, never conflated with an in-repo reproduced number.",
+    "status": "from_paper"
+  }
+}

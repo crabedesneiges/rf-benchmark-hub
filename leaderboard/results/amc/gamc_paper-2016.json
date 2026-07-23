@@ -1,0 +1,44 @@
+{
+  "created_at": "2026-07-23T00:00:00Z",
+  "dataset": {
+    "name": "radioml_2016_10a",
+    "version": "10a"
+  },
+  "eval": {
+    "conditions": {
+      "full_snr_range": true,
+      "snr_db_max": 18,
+      "snr_db_min": -20
+    }
+  },
+  "metrics": {
+    "primary": "accuracy_overall",
+    "values": {
+      "accuracy_overall": 0.6614
+    }
+  },
+  "model": {
+    "family": "baseline",
+    "name": "gamc-paper",
+    "url": "https://arxiv.org/abs/2604.10317"
+  },
+  "regime": {
+    "name": "from_scratch"
+  },
+  "result_id": "amc-gamc-paper-radioml2016-fullsnr",
+  "schema_version": "1.1.0",
+  "split": {
+    "canonical_split_id": "amc-radioml2016-strat-snr-8010-seed42-v1",
+    "checksum": "sha256:77de86672250814f9ca2cb76b08242aa27d1504fe84ceb4c101347277c74d869",
+    "name": "test",
+    "seed": 42
+  },
+  "task": {
+    "name": "amc",
+    "version": "v1"
+  },
+  "verification": {
+    "note": "Reported by the GAMC (Green Machine Learning AMC) authors (Yu, Chen, C.-C. Jay Kuo, arXiv:2604.10317), NOT reproduced or re-run by this repo. 0.6614 = the paper's Table IV FULL-SNR-RANGE average accuracy_overall on RadioML 2016.10a (11-class, -20..+18 dB), verified verbatim in the arXiv HTML (GAMC 5-MoE row), NOT a high-SNR peak. Same dataset + same full-SNR accuracy_overall metric as our canonical split -> 'from_paper' (same precedent as the existing tldnn_paper / moeformer_paper rows). Split indices unpublished (papers typically 60/20/20 vs our 80/10/10), so byte-level overlap with amc-radioml2016-strat-snr-8010-seed42-v1 is not confirmed -- only the dataset + protocol match, which does NOT downgrade the tier. New leading literature figure on 2016.10a (above moeformer-paper 0.6374). Literature reference point, never conflated with an in-repo reproduced number.",
+    "status": "from_paper"
+  }
+}

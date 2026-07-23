@@ -37,7 +37,9 @@ Deux bugs d'intégration révélés par les premiers runs GPU (invisibles aux te
   3 entrées → modèles résolubles via le CLI générique aussi.
 - **mAP détection RadDet crashait à l'éval** (`MeanAveragePrecision` exige `pycocotools`/
   `faster-coco-eval`, absent) : ajout de `faster-coco-eval` + `torchmetrics` à l'extra `raddet`
-  (wheels aarch64, pas de compile). L'entraînement lui-même réussissait ; seul le scoring cassait.
+  (wheels aarch64, pas de compile) et sélection explicite du backend `faster_coco_eval` dans
+  `MeanAveragePrecision` (défaut torchmetrics = `pycocotools`, qui exige une compilation ARM).
+  L'entraînement lui-même réussissait ; seul le scoring cassait.
 
 ### Added — baseline de DÉTECTION wideband RadDet : YOLOv3 (`raddet_yolov3`, from_scratch)
 

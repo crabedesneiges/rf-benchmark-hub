@@ -443,11 +443,22 @@ class DetectionMetric(Metric):
             warnings.warn(_DETECTION_EXTRA_HINT, RuntimeWarning, stacklevel=2)
             return None
 
+        # torchmetrics' MeanAveragePrecision defaults to the `pycocotools` backend; prefer
+        # faster-coco-eval (aarch64 wheels, no compile; declared in the `raddet` extra) and fall
+        # back to pycocotools so either install works. Without a backend the compute() raises.
+        try:
+            import faster_coco_eval  # noqa: F401,PLC0415
+
+            _coco_backend = "faster_coco_eval"
+        except ImportError:
+            _coco_backend = "pycocotools"
+
         metric = MeanAveragePrecision(
             box_format="xyxy",
             iou_type="bbox",
             iou_thresholds=[self._iou_threshold],
             class_metrics=False,
+            backend=_coco_backend,
         )
 
         def _label(box: TFBox) -> int:

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — hygiène pré-ouverture publique/collaborateurs
+
+- Lien `[Unreleased]` du CHANGELOG pointait encore vers l'ancienne org `rf-benchmark-hub/rf-benchmark-hub`
+  (404) ; corrigé vers `crabedesneiges/rf-benchmark-hub`.
+- Retiré `docs/NEXT_STEPS.md` (notes de travail internes, français, jargon multi-agents) — non destiné
+  au public, pas lié depuis README/CONTRIBUTING.
+- Ajouté `.github/dependabot.yml` (écosystèmes `pip` + `github-actions`, hebdomadaire) — requis pour un
+  repo public, sinon GitHub le signale dans l'onglet Security.
+
 ### Added — littérature (axe 1) : 4 lignes `from_paper` sourcées + audit datasets sans littérature
 
 Recherche fan-out (2022-2026) par dataset, audit adversarial contre la doctrine des tiers et les
@@ -1656,4 +1665,4 @@ CI skeleton.
   requires an explicit review and a version bump.
 - Scope is terrestrial RF only (D1); satellite RF is a separate repository.
 
-[Unreleased]: https://github.com/rf-benchmark-hub/rf-benchmark-hub/commits/main
+[Unreleased]: https://github.com/crabedesneiges/rf-benchmark-hub/commits/main

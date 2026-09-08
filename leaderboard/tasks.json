@@ -72,7 +72,10 @@
         "real_or_synthetic": "real (over-the-air WiFi captures)",
         "conditions": "closed-set / cross-receiver / cross-day / open-set tracks reported separately",
         "license": "unstated in repo docs",
-        "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closedset-strat-tx-8010-seed42-v1), plus cross_receiver / cross_day (grouped) and open_set (held-out tx) tracks"
+        "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closedset-strat-tx-8010-seed42-v1), plus cross_receiver / cross_day (grouped) and open_set (held-out tx) tracks",
+        "band": "WiFi ISM 2.4 GHz band (2,400\u20132,483.5 MHz); the WiSig paper states captures occur \"over the 2.4 GHz band\" but does not publish the exact channel/center frequency (Hanna, Karunaratne, Cabric, IEEE Access 2022)",
+        "band_low_mhz": "2400",
+        "band_high_mhz": "2483.5"
       },
       "datasets": [
         {
@@ -83,7 +86,10 @@
           "real_or_synthetic": "real (over-the-air WiFi captures)",
           "conditions": "closed-set / cross-receiver / cross-day / open-set tracks reported separately",
           "license": "unstated in repo docs",
-          "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closedset-strat-tx-8010-seed42-v1); grouped cross_receiver / cross_day and held-out-tx open_set tracks"
+          "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closedset-strat-tx-8010-seed42-v1); grouped cross_receiver / cross_day and held-out-tx open_set tracks",
+          "band": "WiFi ISM 2.4 GHz band (2,400\u20132,483.5 MHz); exact channel/center not published (Hanna et al. 2022, \"over the 2.4 GHz band\")",
+          "band_low_mhz": "2400",
+          "band_high_mhz": "2483.5"
         },
         {
           "name": "ORACLE (16-tx)",
@@ -93,7 +99,10 @@
           "real_or_synthetic": "real (over-the-air, bit-similar frames from 16 identical radios)",
           "conditions": "closed_set only (single receiver -> no cross-receiver / cross-day track)",
           "license": "unstated in repo docs",
-          "split": "single-location (8ft) closed-set, 80/10/10 stratified by tx, seed 42 (sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1) -- adopts the ORACLE-paper same-location protocol so the paper's 98.60% is a from_paper comparison"
+          "split": "single-location (8ft) closed-set, 80/10/10 stratified by tx, seed 42 (sei-oracle-closedset-8ft-strat-tx-8010-seed42-v1) -- adopts the ORACLE-paper same-location protocol so the paper's 98.60% is a from_paper comparison",
+          "band": "WiFi ISM 2.4 GHz; measured center 2.450 GHz, 5 MS/s occupied bandwidth (read directly from the dataset's own SigMF-meta capture files, KRI-16Devices-RawData)",
+          "band_low_mhz": "2447.5",
+          "band_high_mhz": "2452.5"
         }
       ],
       "primary_metric": {
@@ -193,7 +202,8 @@
         "real_or_synthetic": "real (OTA 802.11 a/g + LTE-M in-the-wild)",
         "conditions": "OTA WiFi/LTE-M; occupancy under target pfa",
         "license": "unstated in repo docs",
-        "split": "DeepSense official split if provided, else 80/10/10 seed 42 (sensing-deepsense-<split>-v1)"
+        "split": "DeepSense official split if provided, else 80/10/10 seed 42 (sensing-deepsense-<split>-v1)",
+        "band": "Real OTA WiFi ISM (802.11 a/g, 20 MHz relative bandwidth) + simulated LTE-M cellular sub-band (10 MHz relative bandwidth); the dataset repo documents relative bandwidths but no absolute center/carrier frequency (Uvaydov et al., INFOCOM 2021)"
       },
       "primary_metric": {
         "name": "f1",
@@ -267,7 +277,10 @@
         "real_or_synthetic": "real (over-the-air)",
         "conditions": "OTA capture at 20 MHz; no SNR grid",
         "license": "unconfirmed / unstated on landing page (DRS collection openly downloadable; only split indices + checksums shipped)",
-        "split": "80/10/10 stratified by protocol class, seed 42 (proto-tprime-wifi4-8010-seed42-v1); repo ships no official split"
+        "split": "80/10/10 stratified by protocol class, seed 42 (proto-tprime-wifi4-8010-seed42-v1); repo ships no official split",
+        "band": "WiFi ISM 2.4 GHz, channel 7; Tx center 2.442 GHz, 20 MHz occupied bandwidth (read directly from the dataset's own capture readme, tprime_wifi4/RM_572C_1)",
+        "band_low_mhz": "2432",
+        "band_high_mhz": "2452"
       },
       "primary_metric": {
         "name": "accuracy_overall",

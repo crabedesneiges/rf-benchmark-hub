@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — site : section "Spectrum coverage" sur la page d'accueil
+
+Nouvelle section homepage (`leaderboard/site/generate.py::_render_spectrum_coverage`) montrant, en
+SVG inline, quelles bandes RF réelles couvrent les datasets `terrestrial_iq` du board :
+- Barres tracées **uniquement** pour les bandes vérifiées contre une source primaire : WiSig (ISM
+  2,4 GHz, 2 400–2 483,5 MHz, paper Hanna et al. 2022), ORACLE (2 447,5–2 452,5 MHz, mesuré depuis
+  les propres fichiers SigMF-meta du dataset sur le cluster), T-PRIME/protocol_tech_id (2 432–2 452 MHz,
+  lu dans le readme de capture du dataset). Toutes tombent dans la bande ISM 2,4 GHz (fond ombré de
+  référence sur le graphe).
+- Aucune fréquence devinée : DeepSense (bande relative documentée, porteuse absolue non publiée) et
+  les datasets synthétiques/baseband (RadioML 2016/2018, snr_estimation, RadDet, interf_gnss6) sont
+  listés à part sous le graphe plutôt que dropés silencieusement ou approximés.
+- `tasks.json` gagne des champs optionnels `band` (texte, affiché dans la carte dataset existante) +
+  `band_low_mhz`/`band_high_mhz` (numériques, consommés uniquement par le chart) sur les datasets
+  concernés ; `DeclaredTask` gagne un champ `datasets` (tuple, parse le tableau `datasets` déjà
+  présent dans le manifest pour les tâches multi-datasets — jusqu'ici informationnel/ignoré par le
+  générateur).
+
+### Fixed — hygiène pré-ouverture publique/collaborateurs
+
+- Lien `[Unreleased]` du CHANGELOG pointait encore vers l'ancienne org `rf-benchmark-hub/rf-benchmark-hub`
+  (404) ; corrigé vers `crabedesneiges/rf-benchmark-hub`.
+- Retiré `docs/NEXT_STEPS.md` (notes de travail internes, français, jargon multi-agents) — non destiné
+  au public, pas lié depuis README/CONTRIBUTING.
+- Ajouté `.github/dependabot.yml` (écosystèmes `pip` + `github-actions`, hebdomadaire) — requis pour un
+  repo public, sinon GitHub le signale dans l'onglet Security.
+
 ### Added — littérature (axe 1) : 4 lignes `from_paper` sourcées + audit datasets sans littérature
 
 Recherche fan-out (2022-2026) par dataset, audit adversarial contre la doctrine des tiers et les
@@ -1656,4 +1683,4 @@ CI skeleton.
   requires an explicit review and a version bump.
 - Scope is terrestrial RF only (D1); satellite RF is a separate repository.
 
-[Unreleased]: https://github.com/rf-benchmark-hub/rf-benchmark-hub/commits/main
+[Unreleased]: https://github.com/crabedesneiges/rf-benchmark-hub/commits/main

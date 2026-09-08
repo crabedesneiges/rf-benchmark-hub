@@ -17,7 +17,8 @@
         "real_or_synthetic": "synthetic-but-standard",
         "conditions": "full SNR range -20..+18 dB (no cherry-picking)",
         "license": "unstated in repo docs (standard community AMC benchmark)",
-        "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split)"
+        "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split)",
+        "band": "N/A — no frequency AND no bandwidth number exists, not just \"unpublished\": generated with a normalized samples-per-symbol parameter (4 sps, O'Shea & West, GNU Radio Conf. 2016), never assigned a real Hz sample rate; confirmed no frequency metadata in the released RML2016.10a_dict.pkl either (inspected on-cluster: keys are plain (modulation, SNR) tuples, no header/attrs)"
       },
       "datasets": [
         {
@@ -28,7 +29,8 @@
           "real_or_synthetic": "synthetic-but-standard",
           "conditions": "full SNR range -20..+18 dB (no cherry-picking)",
           "license": "unstated in repo docs (standard community AMC benchmark)",
-          "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split); split id amc-radioml2016-strat-snr-8010-seed42-v1"
+          "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split); split id amc-radioml2016-strat-snr-8010-seed42-v1",
+          "band": "N/A — no frequency AND no bandwidth number exists (normalized 4 samples/symbol, no real Hz sample rate ever assigned, O'Shea & West 2016); confirmed no frequency metadata in the released .pkl either (inspected on-cluster)"
         },
         {
           "name": "RadioML 2018.01a",
@@ -38,7 +40,8 @@
           "real_or_synthetic": "synthetic-but-standard",
           "conditions": "full SNR range -20..+30 dB (no cherry-picking)",
           "license": "unstated in repo docs (standard community AMC benchmark)",
-          "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split); split id amc-radioml2018-strat-snr-8010-seed42-v1"
+          "split": "80/10/10 stratified by (modulation x SNR), seed 42 (no canonical literature split); split id amc-radioml2018-strat-snr-8010-seed42-v1",
+          "band": "N/A — the released GOLD_XYZ_OSC HDF5 (inspected on-cluster: X/Y/Z datasets, empty attrs) is DeepSig's simulated-channel pipeline (Fig. 2 of arXiv:1712.04578: modulator -> shaping -> fading -> AWGN, no absolute Hz), not the SAME PAPER's separate 900 MHz-ISM over-the-air capture (a different, much smaller 1.44M-example set, not the file this board uses)"
         }
       ],
       "primary_metric": {
@@ -73,9 +76,9 @@
         "conditions": "closed-set / cross-receiver / cross-day / open-set tracks reported separately",
         "license": "unstated in repo docs",
         "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closedset-strat-tx-8010-seed42-v1), plus cross_receiver / cross_day (grouped) and open_set (held-out tx) tracks",
-        "band": "WiFi ISM 2.4 GHz band (2,400\u20132,483.5 MHz); the WiSig paper states captures occur \"over the 2.4 GHz band\" but does not publish the exact channel/center frequency (Hanna, Karunaratne, Cabric, IEEE Access 2022)",
-        "band_low_mhz": "2400",
-        "band_high_mhz": "2483.5"
+        "band": "WiFi ISM 2.4 GHz, channel 11; AP + Rx center 2.462 GHz, 25 MS/s capture (read directly from the WiSig authors' own capture scripts, github.com/WiSig-dataset/wisig-capture-commands: `rxFreq=2462e6` in USRP Rx/Readme.txt, `wifi.channel=11` in WiFi AP/WiFi AP Configuration commands.txt)",
+        "band_low_mhz": "2451",
+        "band_high_mhz": "2473"
       },
       "datasets": [
         {
@@ -87,9 +90,9 @@
           "conditions": "closed-set / cross-receiver / cross-day / open-set tracks reported separately",
           "license": "unstated in repo docs",
           "split": "80/10/10 stratified by tx, seed 42 (sei-wisig-closedset-strat-tx-8010-seed42-v1); grouped cross_receiver / cross_day and held-out-tx open_set tracks",
-          "band": "WiFi ISM 2.4 GHz band (2,400\u20132,483.5 MHz); exact channel/center not published (Hanna et al. 2022, \"over the 2.4 GHz band\")",
-          "band_low_mhz": "2400",
-          "band_high_mhz": "2483.5"
+          "band": "WiFi ISM 2.4 GHz, channel 11; AP + Rx center 2.462 GHz, 25 MS/s capture (read directly from the WiSig authors' own capture scripts, github.com/WiSig-dataset/wisig-capture-commands: `rxFreq=2462e6`, `wifi.channel=11`)",
+          "band_low_mhz": "2451",
+          "band_high_mhz": "2473"
         },
         {
           "name": "ORACLE (16-tx)",
@@ -136,7 +139,8 @@
         "real_or_synthetic": "synthetic-but-standard",
         "conditions": "full SNR range -20..+18 dB (no cherry-picking); target = per-window snr_db field",
         "license": "unstated in repo docs (standard community AMC benchmark)",
-        "split": "byte-identical indices to the AMC split amc-radioml2016-strat-snr-8010-seed42-v1 (derived from it, own id snr-radioml2016-strat-snr-8010-seed42-v1) so the SNR and AMC boards score the exact same held-out signals"
+        "split": "byte-identical indices to the AMC split amc-radioml2016-strat-snr-8010-seed42-v1 (derived from it, own id snr-radioml2016-strat-snr-8010-seed42-v1) so the SNR and AMC boards score the exact same held-out signals",
+        "band": "N/A — same RadioML 2016.10a file as the amc track; synthetic baseband IQ, no frequency/carrier metadata"
       },
       "primary_metric": {
         "name": "rmse_db",
@@ -165,7 +169,9 @@
         "real_or_synthetic": "synthetic, published/downloadable (11-class RadDet-1T/9T radar spectrograms are the board dataset; NIST-CBRS in the paper is a separate 5-class synthetic comparison set, not part of this board)",
         "conditions": "6 SNR settings, SNR-averaged; detection vs recognition tracks",
         "license": "CC BY-NC-SA 4.0",
-        "split": "RadDet's own published train/val/test partition adopted verbatim (variant RadDet-9T @512px), detect-raddet-detection-official-v1"
+        "split": "RadDet's own published train/val/test partition adopted verbatim (variant RadDet-9T @512px), detect-raddet-detection-official-v1",
+        "band": "Not an absolute RF carrier — simulated IF/baseband. Per-signal metadata shipped with the dataset (inspected on-cluster, metadata/*.json) records a fixed `SamplingFrequency: 500e6` for every example, with each radar pulse's `RadarSignalCenterFreq` placed anywhere within that ±250 MHz window around an arbitrary 0 Hz IF reference — never an absolute over-the-air frequency, so shown below as an occupied-bandwidth extent, not a spectrum position",
+        "bandwidth_mhz": "500"
       },
       "primary_metric": {
         "name": "mAP",
@@ -203,7 +209,8 @@
         "conditions": "OTA WiFi/LTE-M; occupancy under target pfa",
         "license": "unstated in repo docs",
         "split": "DeepSense official split if provided, else 80/10/10 seed 42 (sensing-deepsense-<split>-v1)",
-        "band": "Real OTA WiFi ISM (802.11 a/g, 20 MHz relative bandwidth) + simulated LTE-M cellular sub-band (10 MHz relative bandwidth); the dataset repo documents relative bandwidths but no absolute center/carrier frequency (Uvaydov et al., INFOCOM 2021)"
+        "band": "Not an absolute RF carrier — the dataset repo (Uvaydov et al., INFOCOM 2021) documents relative bandwidths only, no absolute center/carrier frequency: 20 MHz for the real OTA WiFi ISM capture (802.11 a/g), 10 MHz for the simulated LTE-M sub-band. The larger 20 MHz WiFi figure is shown below as the occupied-bandwidth extent (the LTE-M 10 MHz component isn't a separate board row)",
+        "bandwidth_mhz": "20"
       },
       "primary_metric": {
         "name": "f1",
@@ -248,7 +255,10 @@
         "real_or_synthetic": "synthetic (MATLAB-generated) but distributed as a ready-to-download raw-IQ archive, treated as public-download",
         "conditions": "no SNR grid",
         "license": "CC-BY-4.0",
-        "split": "80/10/10 stratified by class, seed 42 (interf-gnss6-8010-seed42-v1)"
+        "split": "80/10/10 stratified by class, seed 42 (interf-gnss6-8010-seed42-v1)",
+        "band": "UNCONFIRMED — plotted as GPS L1 C/A (1,575.42 MHz ± 10 MHz) by analogy only. The .mat files ship a single `GNSS_plus_Jammer_awgn` array with no embedded sample-rate/frequency metadata (inspected on-cluster). The 1,575.42 MHz / 20 MHz BW / 25 MSps figure is documented for the SAME AUTHORS' related JamDetect work, not for this exact Zenodo record (10.5281/zenodo.4629685) — treat this bar like a from_paper_uncertain board row: same research group and problem framing, dataset identity not byte-confirmed",
+        "band_low_mhz": "1565.42",
+        "band_high_mhz": "1585.42"
       },
       "primary_metric": {
         "name": "accuracy_overall",

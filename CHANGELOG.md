@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed/Added — site : Spectrum coverage, deux panneaux + inspection exhaustive des datasets
+
+Suite retours après premier déploiement : labels de dataset tronqués (marge gauche fixe trop
+étroite pour "tprime-wifi4 (T-PRIME)") et graduations de l'axe X illisibles une fois interf_gnss6
+ajouté (span passé à ~900 MHz avec un pas resté fixé à 20 MHz → ~46 ticks collés). Root-caused et
+corrigés + inspection directe (fichiers réels sur le cluster, pas seulement les papiers) de
+**chaque** dataset `terrestrial_iq` du board pour repartir sur des bases sourcées :
+- **Marge gauche dynamique** : dimensionnée sur le label le plus long au lieu d'une valeur fixe.
+- **Pas de graduation adaptatif** (`_nice_tick_step`, paliers 5→2000 MHz) au lieu d'un pas fixe.
+- **WiSig re-précisé** : j'avais mis toute la bande ISM 2,4 GHz par défaut faute de mieux ; les
+  vrais scripts de capture (`github.com/WiSig-dataset/wisig-capture-commands`) donnent
+  `rxFreq=2462e6` + `wifi.channel=11` → bande resserrée à 2 451–2 473 MHz (canal WiFi 11 exact).
+- **RadDet inspecté** : métadonnées réelles par échantillon (`SamplingFrequency: 500e6`) mais
+  `RadarSignalCenterFreq` placé en IF relatif (±250 MHz autour d'une réf. arbitraire), jamais une
+  fréquence RF absolue — confirmé synthétique, pas une position spectrale.
+- **RadioML 2016/2018 inspectés** : aucune métadonnée de fréquence dans les `.pkl`/`.hdf5` eux-mêmes,
+  et le paper de génération (O'Shea & West, GNU Radio Conf. 2016 ; arXiv:1712.04578 pour 2018.01a)
+  confirme un format normalisé (4 samples/symbole) — **aucun** nombre Hz n'existe, même relatif
+  (2018.01a a une variante OTA 900 MHz séparée dans le paper, mais ce n'est pas le fichier utilisé
+  par le board).
+- **interf_gnss6** : ajouté comme barre avec caveat explicite (GPS L1 1 575,42 MHz ± 10 MHz par
+  analogie avec le dataset "JamDetect" des mêmes auteurs — identité exacte non confirmée, traité
+  comme un tier `from_paper_uncertain`).
+- **Design en deux panneaux** au lieu d'un mélange bande-absolue/pas-de-données : panneau "bande RF
+  absolue" (WiSig/ORACLE/T-PRIME/interf_gnss6) vs panneau "largeur occupée sans porteuse absolue"
+  (RadDet 500 MHz, DeepSense 20 MHz WiFi) + lignes pointillées "no data" pour RadioML/snr_estimation
+  — jamais les deux grandeurs physiques sur le même axe (une bande absolue ≠ une largeur relative).
+- `tasks.json` gagne `bandwidth_mhz` (largeur réelle sourcée, sans position) en plus de
+  `band`/`band_low_mhz`/`band_high_mhz`.
+
 ### Added — site : section "Spectrum coverage" sur la page d'accueil
 
 Nouvelle section homepage (`leaderboard/site/generate.py::_render_spectrum_coverage`) montrant, en

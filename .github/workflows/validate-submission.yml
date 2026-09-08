@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (with PR history for a diff)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Need the merge base to diff the PR against its target branch.
           fetch-depth: 0

@@ -2923,12 +2923,9 @@ def _render_filter_bar() -> str:
 
 
 def _dataset_band(ds: dict[str, str]) -> tuple[float, float] | None:
-    """Parse a manifest dataset's ``band_low_mhz``/``band_high_mhz`` pair into floats.
-
-    Returns ``None`` when either field is absent or not a valid number (e.g. every synthetic
-    dataset, which carries no ``band_*`` fields at all) -- the spectrum-coverage chart then
-    lists that dataset in a caption note instead of drawing a bar for it, rather than guessing
-    a frequency.
+    """Parse a manifest dataset's ``band_low_mhz``/``band_high_mhz`` pair into floats: an
+    ABSOLUTE position in real spectrum (e.g. "2,432-2,452 MHz"). Returns ``None`` when either
+    field is absent or not a valid number, rather than guessing a frequency.
     """
     low, high = ds.get("band_low_mhz"), ds.get("band_high_mhz")
     if not low or not high:
@@ -2939,103 +2936,180 @@ def _dataset_band(ds: dict[str, str]) -> tuple[float, float] | None:
         return None
 
 
-def _render_spectrum_coverage(declared: dict[str, DeclaredTask], ordered_tasks: list[str]) -> str:
-    """Render the homepage's "spectrum coverage" chart: one bar per board dataset with a
-    documented, sourced absolute RF band.
-
-    Only datasets carrying ``band_low_mhz``/``band_high_mhz`` in the manifest draw a bar --
-    those numbers are hand-verified against a primary source (the dataset's own SigMF/capture
-    metadata or its paper), never guessed. Real captures whose band is real but undocumented
-    (e.g. DeepSense: relative bandwidth published, no absolute carrier) and datasets with no
-    fixed RF carrier at all (synthetic baseband, e.g. RadioML) are NOT silently dropped --
-    they render as two caption lists below the chart, so the section never implies more
-    coverage than the board can actually source. Returns ``""`` when the manifest has no
-    dataset info at all (defensive; the board always ships at least one banded dataset).
+def _dataset_bandwidth_mhz(ds: dict[str, str]) -> float | None:
+    """Parse a manifest dataset's ``bandwidth_mhz`` -- a real, sourced occupied-bandwidth
+    WIDTH (e.g. RadDet's 500 MHz simulated IF window, DeepSense's 20 MHz WiFi capture) for a
+    dataset that has no absolute RF carrier. Distinct from :func:`_dataset_band`: a width,
+    never a position in real spectrum. Returns ``None`` when absent/invalid.
     """
-    bars: list[tuple[str, str, float, float, str]] = []  # (task, dataset, low, high, note)
-    undocumented: list[str] = []  # real capture, absolute band not published
-    no_band: list[str] = []  # synthetic / no fixed RF carrier
+    value = ds.get("bandwidth_mhz")
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+#: "Nice" MHz tick steps for the spectrum chart, smallest first. A fixed step reads fine for a
+#: narrow span but produces dozens of overlapping labels once two clusters far apart (e.g. GPS
+#: L1 ~1.5 GHz and WiFi ISM ~2.4 GHz) share one axis -- so the step is chosen per render.
+_SPECTRUM_TICK_STEPS_MHZ: tuple[float, ...] = (
+    5.0,
+    10.0,
+    20.0,
+    25.0,
+    50.0,
+    100.0,
+    200.0,
+    250.0,
+    500.0,
+    1000.0,
+    2000.0,
+)
+
+
+def _nice_tick_step(span: float, target_ticks: int = 6) -> float:
+    """Pick the smallest :data:`_SPECTRUM_TICK_STEPS_MHZ` step that yields roughly
+    ``target_ticks`` ticks across ``span`` MHz, so the axis stays readable regardless of how
+    wide the plotted span is.
+    """
+    if span <= 0:
+        return _SPECTRUM_TICK_STEPS_MHZ[0]
+    raw = span / target_ticks
+    for step in _SPECTRUM_TICK_STEPS_MHZ:
+        if step >= raw:
+            return step
+    return _SPECTRUM_TICK_STEPS_MHZ[-1]
+
+
+def _render_spectrum_coverage(declared: dict[str, DeclaredTask], ordered_tasks: list[str]) -> str:
+    """Render the homepage's "spectrum coverage" chart as TWO panels sharing one row/label
+    convention, so every terrestrial_iq board dataset gets exactly one row without ever
+    conflating two different physical quantities on a single axis:
+
+    * Panel A -- absolute RF band (real over-the-air captures): bars positioned by actual
+      MHz, from ``band_low_mhz``/``band_high_mhz``, hand-verified against a primary source
+      (the dataset's own capture metadata or its paper).
+    * Panel B -- occupied bandwidth (no absolute carrier): datasets with a real, sourced
+      bandwidth number (``bandwidth_mhz``, e.g. RadDet's simulated IF window, DeepSense's
+      WiFi capture) get a bar positioned FROM ZERO -- a width, never implied as a spectrum
+      position. Datasets with no numeric frequency/bandwidth information at all (confirmed
+      absent, e.g. RadioML's normalized samples-per-symbol format has no real Hz value to
+      report) render as a dashed "no data" row instead of being dropped.
+
+    Mixing an absolute carrier (a position in real spectrum) with a relative bandwidth (just a
+    width) on one axis would misleadingly imply synthetic basebands sit "near 0 Hz" -- they
+    don't claim to sit anywhere until up/down-converted to a real carrier, so they get their
+    own panel and axis. Returns ``""`` when the manifest has no dataset info at all
+    (defensive; the board always ships at least one dataset).
+    """
+    band_bars: list[tuple[str, str, float, float, str]] = []  # (task, name, low, high, note)
+    bw_bars: list[tuple[str, str, float, str]] = []  # (task, name, bandwidth_mhz, note)
+    no_data: list[tuple[str, str]] = []  # (dataset label, tooltip note)
     seen: set[tuple[str, str]] = set()
 
     for task_id in ordered_tasks:
         entry = declared.get(task_id)
         # CSI/channel-domain tasks (scope "csi_sensing") aren't raw-IQ RF captures in the
-        # sense this chart cares about -- skip them so the caption isn't cluttered with
+        # sense this chart cares about -- skip them so the chart isn't cluttered with
         # DeepMIMO/CSI placeholders that were never candidates for a spectrum bar anyway.
         if entry is None or entry.scope != "terrestrial_iq":
             continue
         datasets = entry.datasets or ((entry.dataset,) if entry.dataset else ())
         for ds in datasets:
             name = ds.get("name")
-            if not name:
+            # "TBD"/"proposed" names are planning placeholders, not an actual chosen dataset
+            # -- skip rather than list a not-yet-real dataset alongside genuine ones.
+            if not name or "TBD" in name:
                 continue
             key = (task_id, name)
             if key in seen:
                 continue
             seen.add(key)
+            note = ds.get("band", "")
             band = _dataset_band(ds)
             if band is not None:
-                bars.append((entry.title, name, band[0], band[1], ds.get("band", "")))
+                band_bars.append((entry.title, name, band[0], band[1], note))
                 continue
-            real = ds.get("real_or_synthetic", "")
-            label = f"{name} ({entry.title})"
-            if real.startswith("real"):
-                undocumented.append(label)
-            elif real:
-                no_band.append(label)
+            bw = _dataset_bandwidth_mhz(ds)
+            if bw is not None:
+                bw_bars.append((entry.title, name, bw, note))
+                continue
+            no_data.append(
+                (f"{name} ({entry.title})", note or "No frequency or bandwidth number available.")
+            )
 
-    if not bars and not undocumented and not no_band:
+    if not band_bars and not bw_bars and not no_data:
         return ""
 
-    figure = ""
-    if bars:
-        margin = 5.0
-        xmin = min(low for _task, _name, low, _high, _note in bars) - margin
-        xmax = max(high for _task, _name, _low, high, _note in bars) + margin
+    row_h, pad_t, pad_b, pad_r, axis_gap = 34, 14, 30, 8, 30
+    width = 720
+    # Left margin sized to the longest dataset label so it never clips past the SVG's left
+    # edge (11px font-mono, ~6.6px/char is a safe upper-bound width estimate).
+    all_labels = (
+        [name for _t, name, *_r in band_bars]
+        + [name for _t, name, *_r in bw_bars]
+        + [label for label, _n in no_data]
+    )
+    longest_label = max((len(lbl) for lbl in all_labels), default=0)
+    plot_l = min(260, max(100, int(longest_label * 6.6) + 24))
+    plot_r = width - pad_r
+    plot_w = plot_r - plot_l
+
+    parts: list[str] = []
+    y = pad_t
+
+    def sx(value: float, lo: float, span: float) -> float:
+        return plot_l + (value - lo) / span * plot_w
+
+    def render_axis_rows(
+        rows: list[tuple[str, str, float, float, str]],
+        *,
+        show_ism_ref: bool,
+        xmin_floor: float | None,
+    ) -> None:
+        nonlocal y
+        if not rows:
+            return
+        lo_val = min(low for _t, _n, low, _h, _no in rows)
+        hi_val = max(high for _t, _n, _l, high, _no in rows)
+        margin = max(5.0, (hi_val - lo_val) * 0.05)
+        xmin = lo_val - margin
+        if xmin_floor is not None:
+            xmin = max(xmin, xmin_floor)
+        xmax = hi_val + margin
         span = xmax - xmin or 1.0
-        row_h, pad_t, pad_b, pad_r = 34, 14, 34, 8
-        width = 720
-        plot_l, plot_r = 118, width - pad_r
-        height = pad_t + row_h * len(bars) + pad_b
-        plot_w = plot_r - plot_l
-
-        def sx(mhz: float) -> float:
-            return plot_l + (mhz - xmin) / span * plot_w
-
-        parts = [
-            f'<svg class="plot spectrum-plot" viewBox="0 0 {width} {height}" role="group" '
-            'aria-label="Spectrum coverage across board datasets" '
-            'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
-        ]
-        # ISM 2.4 GHz reference band (every current bar sits in it; still computed from the
-        # actual bar extents above rather than hardcoded, so a future non-ISM dataset just works).
-        ism_lo, ism_hi = max(xmin, 2400.0), min(xmax, 2483.5)
-        if ism_hi > ism_lo:
-            parts.append(
-                f'<rect class="spectrum-band-ref" x="{sx(ism_lo):.1f}" y="{pad_t:.1f}" '
-                f'width="{sx(ism_hi) - sx(ism_lo):.1f}" height="{row_h * len(bars):.1f}">'
-                "<title>WiFi ISM 2.4 GHz band (2,400–2,483.5 MHz)</title></rect>"
-            )
-        # X-axis ticks every 20 MHz across the plotted span.
-        tick_start = math.ceil(xmin / 20.0) * 20.0
-        tick = tick_start
+        rows_h = row_h * len(rows)
+        top = y
+        if show_ism_ref:
+            ism_lo, ism_hi = max(xmin, 2400.0), min(xmax, 2483.5)
+            if ism_hi > ism_lo:
+                parts.append(
+                    f'<rect class="spectrum-band-ref" x="{sx(ism_lo, xmin, span):.1f}" '
+                    f'y="{top:.1f}" width="{sx(ism_hi, xmin, span) - sx(ism_lo, xmin, span):.1f}" '  # noqa: E501
+                    f'height="{rows_h:.1f}"><title>WiFi ISM 2.4 GHz band '
+                    "(2,400–2,483.5 MHz)</title></rect>"
+                )
+        step = _nice_tick_step(span)
+        tick = math.ceil(xmin / step) * step
         while tick <= xmax:
-            x = sx(tick)
-            parts.append(_svg_line("grid", x, pad_t, x, pad_t + row_h * len(bars)))
+            x = sx(tick, xmin, span)
+            parts.append(_svg_line("grid", x, top, x, top + rows_h))
             parts.append(
-                f'<text class="tick" x="{x:.1f}" y="{height - pad_b + 16:.1f}" '
+                f'<text class="tick" x="{x:.1f}" y="{top + rows_h + 16:.1f}" '
                 f'text-anchor="middle">{tick:,.0f}</text>'
             )
-            tick += 20.0
+            tick += step
         parts.append(
-            f'<text class="axis-title" x="{plot_l + plot_w / 2:.1f}" y="{height - 4:.1f}" '
-            'text-anchor="middle">frequency (MHz)</text>'
+            f'<text class="axis-title" x="{plot_l + plot_w / 2:.1f}" '
+            f'y="{top + rows_h + axis_gap:.1f}" text-anchor="middle">frequency (MHz)</text>'
         )
-        for i, (_task_title, name, low, high, note) in enumerate(bars):
-            y = pad_t + i * row_h
-            bar_y = y + row_h * 0.28
+        for i, (_task_title, name, low, high, note) in enumerate(rows):
+            ry = top + i * row_h
+            bar_y = ry + row_h * 0.28
             bar_h = row_h * 0.44
-            x1, x2 = sx(low), sx(high)
+            x1, x2 = sx(low, xmin, span), sx(high, xmin, span)
             fill = _model_hue(name)
             tooltip = f"{name} — {note}" if note else name
             parts.append(
@@ -3045,30 +3119,64 @@ def _render_spectrum_coverage(declared: dict[str, DeclaredTask], ordered_tasks: 
             )
             parts.append(
                 f'<text class="spectrum-row-label" x="{plot_l - 8:.1f}" '
-                f'y="{y + row_h / 2 + 4:.1f}" text-anchor="end">{_esc(name)}</text>'
+                f'y="{ry + row_h / 2 + 4:.1f}" text-anchor="end">{_esc(name)}</text>'
             )
-        parts.append("</svg>")
-        figure = (
-            '<figure class="plot-figure spectrum-figure">'
-            f'{"".join(parts)}'
-            '<figcaption class="plot-note">Shaded band = WiFi ISM 2.4–GHz reference '
-            "range. Each bar is a documented, sourced RF band for a real over-the-air "
-            "board dataset (hover for the source note).</figcaption>"
-            "</figure>"
-        )
+        y = top + rows_h + axis_gap + 4
 
-    caption_parts: list[str] = []
-    if undocumented:
-        caption_parts.append(
-            '<p class="note spectrum-caption">Real captures with a <strong>documented '
-            "relative bandwidth but no published absolute carrier frequency</strong>, "
-            f"so not plotted above: {_esc(', '.join(undocumented))}.</p>"
+    def render_panel_title(text: str) -> None:
+        nonlocal y
+        parts.append(
+            f'<text class="spectrum-panel-title" x="{plot_l:.1f}" y="{y + 10:.1f}">'
+            f"{_esc(text)}</text>"
         )
-    if no_band:
-        caption_parts.append(
-            '<p class="note spectrum-caption">Datasets with <strong>no fixed RF carrier</strong> '
-            f"(synthetic baseband, not anchored to an absolute frequency): {_esc(', '.join(no_band))}.</p>"  # noqa: E501
+        y += 22
+
+    if band_bars:
+        render_panel_title("Absolute RF band — real over-the-air captures")
+        render_axis_rows(band_bars, show_ism_ref=True, xmin_floor=None)
+    if bw_bars or no_data:
+        if band_bars:
+            y += 8
+        render_panel_title("Occupied bandwidth — no absolute carrier (relative width only)")
+        render_axis_rows(
+            [(t, n, 0.0, bw, note) for t, n, bw, note in bw_bars],
+            show_ism_ref=False,
+            xmin_floor=0.0,
         )
+        for label, note in no_data:
+            bar_y = y + row_h * 0.28
+            bar_h = row_h * 0.44
+            parts.append(
+                f'<rect class="spectrum-bar-none" x="{plot_l:.1f}" y="{bar_y:.1f}" '
+                f'width="{plot_w:.1f}" height="{bar_h:.1f}" rx="3">'
+                f"<title>{_esc(f'{label} — {note}')}</title></rect>"
+            )
+            parts.append(
+                f'<text class="spectrum-bar-none-label" x="{plot_l + plot_w / 2:.1f}" '
+                f'y="{y + row_h / 2 + 4:.1f}" text-anchor="middle">no data</text>'
+            )
+            parts.append(
+                f'<text class="spectrum-row-label" x="{plot_l - 8:.1f}" '
+                f'y="{y + row_h / 2 + 4:.1f}" text-anchor="end">{_esc(label)}</text>'
+            )
+            y += row_h
+
+    height = y + pad_b
+    svg_open = (
+        f'<svg class="plot spectrum-plot" viewBox="0 0 {width} {height}" role="group" '
+        'aria-label="Spectrum coverage across board datasets" '
+        'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
+    )
+    figure = (
+        '<figure class="plot-figure spectrum-figure">'
+        f"{svg_open}{''.join(parts)}</svg>"
+        '<figcaption class="plot-note">Top panel: real over-the-air captures positioned by '
+        "their actual, sourced RF band. Bottom panel: datasets with no absolute carrier — a "
+        "coloured bar is a real, sourced occupied-bandwidth WIDTH (not a spectrum position); "
+        '"no data" means no frequency or bandwidth number exists for that dataset at all. '
+        "Hover any row for its source note.</figcaption>"
+        "</figure>"
+    )
 
     return (
         '<section class="spectrum-section" id="spectrum-coverage">'
@@ -3077,7 +3185,6 @@ def _render_spectrum_coverage(declared: dict[str, DeclaredTask], ordered_tasks: 
         "sit in — built only from bands verified against a primary source (a "
         "dataset's own capture metadata or its paper), never estimated.</p>"
         f"{figure}"
-        f'{"".join(caption_parts)}'
         "</section>"
     )
 
@@ -4995,10 +5102,19 @@ html[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
 .spectrum-figure { margin: 0 0 0.5rem; }
 .spectrum-plot .spectrum-band-ref { fill: var(--surface-2); }
 .spectrum-plot .spectrum-bar { opacity: 0.92; }
+.spectrum-plot .spectrum-bar-none {
+  fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 4 3;
+}
+.spectrum-plot .spectrum-bar-none-label {
+  fill: var(--muted); font-size: 10px; font-style: italic; font-family: var(--font-mono);
+}
 .spectrum-plot .spectrum-row-label {
   fill: var(--fg); font-size: 11px; font-family: var(--font-mono);
 }
-.spectrum-caption { max-width: 74ch; }
+.spectrum-plot .spectrum-panel-title {
+  fill: var(--muted); font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; font-family: var(--font-heading);
+}
 
 /* Guide page. */
 .guide-section { margin: 1.5rem 0; }
